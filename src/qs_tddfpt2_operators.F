@@ -7,6 +7,7 @@
 
 MODULE qs_tddfpt2_operators
    USE admm_types,                      ONLY: admm_type
+   USE cp_control_types,                ONLY: tddfpt2_control_type
    USE cp_dbcsr_operations,             ONLY: copy_fm_to_dbcsr,&
                                               cp_dbcsr_sm_fm_multiply
    USE cp_fm_basic_linalg,              ONLY: cp_fm_column_scale,&
@@ -25,6 +26,7 @@ MODULE qs_tddfpt2_operators
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type
+   USE input_constants,                 ONLY: no_sf_tddfpt
    USE kinds,                           ONLY: dp
    USE parallel_gemm_api,               ONLY: parallel_gemm
    USE pw_env_types,                    ONLY: pw_env_get,&
@@ -87,16 +89,17 @@ CONTAINS
 !> \note Based on the subroutine p_op_l1() which was originally created by
 !>       Thomas Chassaing on 08.2002.
 ! **************************************************************************************************
-   SUBROUTINE tddfpt_apply_energy_diff(Aop_evects, evects, S_evects, gs_mos, matrix_ks)
+   SUBROUTINE tddfpt_apply_energy_diff(Aop_evects, evects, S_evects, gs_mos, matrix_ks, tddfpt_control)
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(in)      :: Aop_evects, evects, S_evects
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          INTENT(in)                                      :: gs_mos
+      TYPE(tddfpt2_control_type), POINTER, INTENT(in)    :: tddfpt_control
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(in)       :: matrix_ks
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_apply_energy_diff'
 
       INTEGER                                            :: handle, ispin, ivect, nactive, nao, &
-                                                            nspins, nvects
+                                                            nspins, nvects, spin2
       TYPE(cp_fm_struct_type), POINTER                   :: matrix_struct
       TYPE(cp_fm_type)                                   :: hevec
 
@@ -105,13 +108,19 @@ CONTAINS
       nspins = SIZE(evects, 1)
       nvects = SIZE(evects, 2)
 
-      DO ispin = 1, nspins
+      DO ispin = 1, SIZE(evects, 1)
          CALL cp_fm_get_info(matrix=evects(ispin, 1), matrix_struct=matrix_struct, &
                              nrow_global=nao, ncol_global=nactive)
          CALL cp_fm_create(hevec, matrix_struct)
 
+         IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+            spin2 = ispin
+         ELSE
+            spin2 = 2
+         END IF
+
          DO ivect = 1, nvects
-            CALL cp_dbcsr_sm_fm_multiply(matrix_ks(ispin)%matrix, evects(ispin, ivect), &
+            CALL cp_dbcsr_sm_fm_multiply(matrix_ks(spin2)%matrix, evects(ispin, ivect), &
                                          Aop_evects(ispin, ivect), ncol=nactive, &
                                          alpha=1.0_dp, beta=1.0_dp)
 
