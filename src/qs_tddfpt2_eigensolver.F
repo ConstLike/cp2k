@@ -29,7 +29,8 @@ MODULE qs_tddfpt2_eigensolver
                                               dbcsr_type
    USE input_constants,                 ONLY: tddfpt_kernel_full,&
                                               tddfpt_kernel_none,&
-                                              tddfpt_kernel_stda
+                                              tddfpt_kernel_stda,&
+                                              no_sf_tddfpt
    USE input_section_types,             ONLY: section_vals_type
    USE kinds,                           ONLY: dp,&
                                               int_8
@@ -323,7 +324,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      nspins = SIZE(evects, 1)
+      nspins = SIZE(gs_mos, 1)
       nvects = SIZE(evects, 2)
       do_hfx = tddfpt_control%do_hfx
       do_admm = tddfpt_control%do_admm
@@ -337,9 +338,14 @@ CONTAINS
 
       IF (debug_this_module) THEN
          CPASSERT(nspins > 0)
-         CPASSERT(SIZE(Aop_evects, 1) == nspins)
+         IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+            CPASSERT(SIZE(Aop_evects, 1) == nspins)
+            CPASSERT(SIZE(S_evects, 1) == nspins)
+         ELSE
+            CPASSERT(SIZE(Aop_evects, 1) == 2*nspins)
+            CPASSERT(SIZE(S_evects, 1) == 2*nspins)
+         END IF
          CPASSERT(SIZE(Aop_evects, 2) == nvects)
-         CPASSERT(SIZE(S_evects, 1) == nspins)
          CPASSERT(SIZE(S_evects, 2) == nvects)
          CPASSERT(SIZE(gs_mos) == nspins)
       END IF
@@ -352,19 +358,19 @@ CONTAINS
          CALL cp_fm_get_info(evects(1, 1), para_env=para_env)
          IF (ALLOCATED(work_matrices%evects_sub)) THEN
             DO ivect = 1, nvects
-               DO ispin = 1, nspins
+               DO ispin = 1, SIZE(evects,1)
                   ASSOCIATE (evect => evects(ispin, ivect), work_matrix => work_matrices%evects_sub(ispin, ivect))
-                  IF (ASSOCIATED(evect%matrix_struct)) THEN
-                  IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
-                     CALL cp_fm_copy_general(evect, work_matrix, para_env)
-                  ELSE
-                     CALL cp_fm_copy_general(evect, fm_dummy, para_env)
-                  END IF
-                  ELSE IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
-                  CALL cp_fm_copy_general(fm_dummy, work_matrix, para_env)
-                  ELSE
-                  CALL cp_fm_copy_general(fm_dummy, fm_dummy, para_env)
-                  END IF
+                     IF (ASSOCIATED(evect%matrix_struct)) THEN
+                        IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
+                           CALL cp_fm_copy_general(evect, work_matrix, para_env)
+                        ELSE
+                           CALL cp_fm_copy_general(evect, fm_dummy, para_env)
+                        END IF
+                     ELSE IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
+                        CALL cp_fm_copy_general(fm_dummy, work_matrix, para_env)
+                     ELSE
+                        CALL cp_fm_copy_general(fm_dummy, fm_dummy, para_env)
+                     END IF
                   END ASSOCIATE
                END DO
             END DO
@@ -383,7 +389,7 @@ CONTAINS
          ELSE IF (tddfpt_control%kernel == tddfpt_kernel_none) THEN
             ! No kernel
             DO ivect = 1, nvects
-               DO ispin = 1, nspins
+               DO ispin = 1, SIZE(evects,1)
                   CALL cp_fm_set_all(Aop_evects(ispin, ivect), 0.0_dp)
                END DO
             END DO
@@ -393,20 +399,20 @@ CONTAINS
 
          IF (ALLOCATED(work_matrices%evects_sub)) THEN
             DO ivect = 1, nvects
-               DO ispin = 1, nspins
+               DO ispin = 1, SIZE(evects,1)
                   ASSOCIATE (Aop_evect => Aop_evects(ispin, ivect), &
                              work_matrix => work_matrices%Aop_evects_sub(ispin, ivect))
-                  IF (ASSOCIATED(Aop_evect%matrix_struct)) THEN
-                  IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
-                     CALL cp_fm_copy_general(work_matrix, Aop_evect, para_env)
-                  ELSE
-                     CALL cp_fm_copy_general(fm_dummy, Aop_evect, para_env)
-                  END IF
-                  ELSE IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
-                  CALL cp_fm_copy_general(work_matrix, fm_dummy, para_env)
-                  ELSE
-                  CALL cp_fm_copy_general(fm_dummy, fm_dummy, para_env)
-                  END IF
+                     IF (ASSOCIATED(Aop_evect%matrix_struct)) THEN
+                        IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
+                           CALL cp_fm_copy_general(work_matrix, Aop_evect, para_env)
+                        ELSE
+                           CALL cp_fm_copy_general(fm_dummy, Aop_evect, para_env)
+                        END IF
+                     ELSE IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
+                        CALL cp_fm_copy_general(work_matrix, fm_dummy, para_env)
+                     ELSE
+                        CALL cp_fm_copy_general(fm_dummy, fm_dummy, para_env)
+                     END IF
                   END ASSOCIATE
                END DO
             END DO
@@ -414,7 +420,7 @@ CONTAINS
 
          ! orbital energy difference term
          CALL tddfpt_apply_energy_diff(Aop_evects=Aop_evects, evects=evects, S_evects=S_evects, &
-                                       gs_mos=gs_mos, matrix_ks=matrix_ks)
+                                       gs_mos=gs_mos, matrix_ks=matrix_ks, tddfpt_control=tddfpt_control)
 
          IF (do_hfx) THEN
             IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
@@ -449,7 +455,7 @@ CONTAINS
 !> \param evals            Ritz eigenvalues (initialised on exit)
 !> \param krylov_vects     Krylov's vectors
 !> \param Aop_krylov       action of TDDFPT operator on Krylov's vectors
-!> \param Atilde ...
+!> \param Atilde           TDDFPT matrix projected into the Krylov's vectors subspace
 !> \param nkvo ...
 !> \param nkvn ...
 !> \par History
@@ -707,9 +713,9 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      nspins = SIZE(gs_mos)
+      nspins = SIZE(evects,1)
       nstates = tddfpt_control%nstates
-      nstates_total = tddfpt_total_number_of_states(gs_mos)
+      nstates_total = tddfpt_total_number_of_states(tddfpt_control, gs_mos)
       do_hfx = tddfpt_control%do_hfx
 
       IF (debug_this_module) THEN
@@ -721,9 +727,7 @@ CONTAINS
       CALL get_qs_env(qs_env, matrix_s=matrix_s)
 
       ! adjust the number of Krylov vectors
-      max_krylov_vects = tddfpt_control%nkvs
-      IF (max_krylov_vects < nstates) max_krylov_vects = nstates
-      IF (INT(max_krylov_vects, kind=int_8) > nstates_total) max_krylov_vects = INT(nstates_total)
+      max_krylov_vects = MIN(MAX(tddfpt_control%nkvs,nstates),INT(nstates_total))
 
       ALLOCATE (Aop_ritz(nspins, nstates))
       DO istate = 1, nstates
@@ -844,7 +848,9 @@ CONTAINS
          ! nvects_new == 0 if iter >= tddfpt_control%niters
          IF (nvects_new == 0 .OR. is_nonortho) THEN
             ! restart Davidson iterations
-            CALL tddfpt_orthogonalize_psi1_psi0(evects, work_matrices%S_C0_C0T)
+            IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+               CALL tddfpt_orthogonalize_psi1_psi0(evects, work_matrices%S_C0_C0T)
+            END IF
             CALL tddfpt_orthonormalize_psi1_psi1(evects, nstates, S_evects, matrix_s(1)%matrix)
 
             EXIT

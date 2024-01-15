@@ -39,7 +39,10 @@ MODULE qs_tddfpt2_methods
    USE input_constants,                 ONLY: tddfpt_dipole_velocity,&
                                               tddfpt_kernel_full,&
                                               tddfpt_kernel_none,&
-                                              tddfpt_kernel_stda
+                                              tddfpt_kernel_stda,&
+                                              no_sf_tddfpt,&
+                                              tddfpt_sf_col,&
+                                              tddfpt_sf_noncol
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type,&
@@ -264,9 +267,9 @@ CONTAINS
 
          ! allocate pools and work matrices
          nstates = tddfpt_control%nstates
-        !! Too many states cal lead to Problems
-        !! You should be warned if there are mor states
-        !! then occ-virt Combinations!!
+        !! Too many states can lead to Problems
+        !! You should be warned if there are more states
+        !! than occ-virt Combinations!!
          CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=nocc)
          CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=nvirt)
          nstate_max = nocc*nvirt
@@ -318,12 +321,17 @@ CONTAINS
          NULLIFY (kernel_env%stda_kernel)
       END IF
 
-      ALLOCATE (evects(nspins, nstates))
+      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+         ALLOCATE (evects(nspins, nstates))
+      ELSE
+      ! only alpha -> beta excitations are considered in spin-flip TDDFT
+         ALLOCATE (evects(1, nstates))
+      END IF
       ALLOCATE (evals(nstates))
+      ALLOCATE (S_evects(SIZE(evects,1), nstates))
 
-      ALLOCATE (S_evects(nspins, nstates))
       DO istate = 1, nstates
-         DO ispin = 1, nspins
+         DO ispin = 1, SIZE(evects,1)
             CALL fm_pool_create_fm( &
                work_matrices%fm_pool_ao_mo_occ(ispin)%pool, &
                S_evects(ispin, istate))
@@ -332,7 +340,7 @@ CONTAINS
 
       IF (.NOT. do_soc) THEN
          ! compute tddfpt excitation energies of multiplicity mult
-         CALL tddfpt_energies(qs_env, nstates, work_matrices, &
+         CALL tddfpt_energies(qs_env, nstates, nspins, work_matrices, &
                               tddfpt_control, logger, tddfpt_print_section, evects, evals, &
                               gs_mos, tddfpt_section, S_evects, matrix_s, kernel_env, matrix_ks, &
                               sub_env, ostrength, dipole_op_mos_occ, mult, xc_section, full_kernel_env, &
@@ -491,6 +499,9 @@ CONTAINS
       NULLIFY (dft_control, input)
       CALL get_qs_env(qs_env, dft_control=dft_control, input=input)
       tddfpt_control => dft_control%tddfpt2_control
+
+      ! If collinear spin-flip TDDFT is used turn off xc kernel
+      IF (tddfpt_control%spinflip == tddfpt_sf_col) tddfpt_control%kernel = tddfpt_kernel_none
 
       ! no k-points
       CPASSERT(dft_control%nimages <= 1)
@@ -711,7 +722,16 @@ CONTAINS
          IF (tddfpt_control%rks_triplets) THEN
             WRITE (log_unit, "(T2,A,T74,A7)") "KERNEL| Spin symmetry of excitations", "Triplet"
          ELSE IF (lsd) THEN
-            WRITE (log_unit, "(T2,A,T69,A12)") "KERNEL| Spin symmetry of excitations", "Unrestricted"
+            ! Spin-conserving excitations where requested
+            IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+               WRITE (log_unit, "(T2,A,T69,A12)") "KERNEL| Spin symmetry of excitations", "Unrestricted"
+            ! Spin-flip excitations with collinear exchange-correlation kernel requested
+            ELSE IF (tddfpt_control%spinflip == tddfpt_sf_col) THEN
+               WRITE (log_unit, "(T2,A,T72,A9)") "KERNEL| Spin flip", "Collinear"
+            ! Spin-flip excitations with noncollinear exchange-correlation kernel requested
+            ELSE IF (tddfpt_control%spinflip == tddfpt_sf_noncol) THEN
+               WRITE (log_unit, "(T2,A,T69,A12)") "KERNEL| Spin flip", "Noncollinear"
+            END IF
          ELSE
             WRITE (log_unit, "(T2,A,T74,A7)") "KERNEL| Spin symmetry of excitations", "Singlet"
          END IF
@@ -747,7 +767,7 @@ CONTAINS
 !> \param full_kernel_env ...
 !> \param kernel_env_admm_aux ...
 ! **************************************************************************************************
-   SUBROUTINE tddfpt_energies(qs_env, nstates, work_matrices, &
+   SUBROUTINE tddfpt_energies(qs_env, nstates, nspins, work_matrices, &
                               tddfpt_control, logger, tddfpt_print_section, evects, evals, &
                               gs_mos, tddfpt_section, S_evects, matrix_s, kernel_env, matrix_ks, &
                               sub_env, ostrength, dipole_op_mos_occ, mult, xc_section, full_kernel_env, &
@@ -755,6 +775,7 @@ CONTAINS
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       INTEGER                                            :: nstates
+      INTEGER                                            :: nspins
       TYPE(tddfpt_work_matrices)                         :: work_matrices
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -865,9 +886,9 @@ CONTAINS
                                tddfpt_print_section)
       END IF
 
-      !! Too many states cal lead to Problems
-      !! You should be warned if there are mor states
-      !! then occ-virt Combinations!!
+      !! Too many states can lead to Problems
+      !! You should be warned if there are more states
+      !! than occ-virt Combinations!!
       CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=nocc)
       CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=nvirt)
       nstate_max = nocc*nvirt
@@ -903,12 +924,15 @@ CONTAINS
       ! according to their excitation energies
       log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, &
                                       "GUESS_VECTORS", extension=".tddfptLog")
-      CALL tddfpt_guess_vectors(evects=evects, evals=evals, &
+      CALL tddfpt_guess_vectors(tddfpt_control, nspins, evects=evects, evals=evals, &
                                 gs_mos=gs_mos, log_unit=log_unit)
       CALL cp_print_key_finished_output(log_unit, logger, &
                                         tddfpt_print_section, "GUESS_VECTORS")
 
-      CALL tddfpt_orthogonalize_psi1_psi0(evects, work_matrices%S_C0_C0T)
+      ! Don't orthogonalize with respect to gs mos if spin-flip excitations are calculated
+      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+        CALL tddfpt_orthogonalize_psi1_psi0(evects, work_matrices%S_C0_C0T)
+      END IF
       CALL tddfpt_orthonormalize_psi1_psi1(evects, &
                                            nstates, &
                                            S_evects, &
@@ -1047,6 +1071,7 @@ CONTAINS
          evals, &
          gs_mos, &
          matrix_s(1)%matrix, &
+         tddfpt_control%spinflip, &
          min_amplitude=tddfpt_control%min_excitation_amplitude)
       CALL tddfpt_print_nto_analysis(qs_env, &
                                      evects, evals, &
@@ -1158,7 +1183,7 @@ CONTAINS
          mult = 3
       END IF
 
-      CALL tddfpt_energies(qs_env, nstates, work_matrices, tddfpt_control, logger, &
+      CALL tddfpt_energies(qs_env, nspins, nstates, work_matrices, tddfpt_control, logger, &
                            tddfpt_print_section, evects_mult, evals_mult, &
                            gs_mos, tddfpt_section, S_evects, matrix_s, &
                            kernel_env, matrix_ks, sub_env, ostrength_mult, &
@@ -1213,7 +1238,7 @@ CONTAINS
          mult = 1
       END IF
 
-      CALL tddfpt_energies(qs_env, nstates, work_matrices, tddfpt_control, logger, &
+      CALL tddfpt_energies(qs_env, nspins, nstates, work_matrices, tddfpt_control, logger, &
                            tddfpt_print_section, evects, evals, &
                            gs_mos, tddfpt_section, S_evects, matrix_s, &
                            kernel_env, matrix_ks, sub_env, ostrength, &
