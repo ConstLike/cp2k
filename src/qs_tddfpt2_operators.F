@@ -26,7 +26,8 @@ MODULE qs_tddfpt2_operators
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type
-   USE input_constants,                 ONLY: no_sf_tddfpt
+   USE input_constants,                 ONLY: no_sf_tddfpt, &
+                                              tddfpt_sf_noncol
    USE kinds,                           ONLY: dp
    USE parallel_gemm_api,               ONLY: parallel_gemm
    USE pw_env_types,                    ONLY: pw_env_get,&
@@ -241,7 +242,7 @@ CONTAINS
 !> \param work_v_xc_tau ...
 ! **************************************************************************************************
    SUBROUTINE tddfpt_apply_xc(A_ia_rspace, kernel_env, rho_ia_struct, is_rks_triplets, &
-                              pw_env, work_v_xc, work_v_xc_tau)
+                              pw_env, work_v_xc, work_v_xc_tau, spinflip)
 
       TYPE(pw_type), DIMENSION(:), INTENT(INOUT)         :: A_ia_rspace
       TYPE(full_kernel_env_type), INTENT(IN)             :: kernel_env
@@ -249,14 +250,15 @@ CONTAINS
       LOGICAL, INTENT(in)                                :: is_rks_triplets
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_type), DIMENSION(:), POINTER               :: work_v_xc, work_v_xc_tau
+      INTEGER, INTENT(in)                                :: spinflip
 
       INTEGER                                            :: ispin, nspins
 
       nspins = SIZE(A_ia_rspace)
 
       IF (kernel_env%deriv2_analytic) THEN
-         CALL tddfpt_apply_xc_analytic(kernel_env, rho_ia_struct, is_rks_triplets, nspins, &
-                                       pw_env, work_v_xc, work_v_xc_tau)
+         CALL tddfpt_apply_xc_analytic(kernel_env, rho_ia_struct, is_rks_triplets, spinflip, &
+                                       nspins, pw_env, work_v_xc, work_v_xc_tau)
       ELSE
          CALL tddfpt_apply_xc_fd(kernel_env, rho_ia_struct, is_rks_triplets, nspins, &
                                  pw_env, work_v_xc, work_v_xc_tau)
@@ -329,11 +331,12 @@ CONTAINS
 !> \note Based on the subroutine kpp1_calc_k_p_p1() which was originally created by
 !>       Mohamed Fawzi on 10.2002.
 ! **************************************************************************************************
-   SUBROUTINE tddfpt_apply_xc_analytic(kernel_env, rho_ia_struct, is_rks_triplets, nspins, &
-                                       pw_env, work_v_xc, work_v_xc_tau)
+   SUBROUTINE tddfpt_apply_xc_analytic(kernel_env, rho_ia_struct, is_rks_triplets, spinflip, &
+                                       nspins, pw_env, work_v_xc, work_v_xc_tau)
       TYPE(full_kernel_env_type), INTENT(in)             :: kernel_env
       TYPE(qs_rho_type), POINTER                         :: rho_ia_struct
       LOGICAL, INTENT(in)                                :: is_rks_triplets
+      INTEGER, INTENT(in)                                :: spinflip
       INTEGER, INTENT(in)                                :: nspins
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_type), DIMENSION(:), POINTER               :: work_v_xc, work_v_xc_tau
@@ -344,6 +347,7 @@ CONTAINS
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_type), DIMENSION(:), POINTER               :: rho_ia_g, rho_ia_g2, rho_ia_r, &
                                                             rho_ia_r2, tau_ia_r, tau_ia_r2
+      LOGICAL                                               do_spinflip
 
       CALL timeset(routineN, handle)
 
@@ -355,6 +359,13 @@ CONTAINS
          CPASSERT(SIZE(rho_ia_r) == nspins)
          CPASSERT((.NOT. ASSOCIATED(tau_ia_r)) .OR. SIZE(tau_ia_r) == nspins)
          CPASSERT((.NOT. is_rks_triplets) .OR. nspins == 1)
+         CPASSERT((spinflip.NE.no_sf_tddfpt).EQV.(nspins == 2))
+      END IF
+
+      IF (spinflip == tddfpt_sf_noncol) THEN
+         do_spinflip = .TRUE.
+      ELSE
+         do_spinflip = .FALSE.
       END IF
 
       NULLIFY (tau_ia_r2)
@@ -390,7 +401,8 @@ CONTAINS
       CALL xc_calc_2nd_deriv_analytical(v_xc=work_v_xc, v_xc_tau=work_v_xc_tau, deriv_set=kernel_env%xc_deriv_set, &
                                         rho_set=kernel_env%xc_rho_set, &
                                         rho1_set=kernel_env%xc_rho1_set, pw_pool=auxbas_pw_pool, &
-                                        xc_section=kernel_env%xc_section, gapw=.FALSE., tddfpt_fac=kernel_env%beta)
+                                        xc_section=kernel_env%xc_section, gapw=.FALSE., tddfpt_fac=kernel_env%beta, &
+                                        spinflip=do_spinflip)
 
       IF (is_rks_triplets) THEN
          DEALLOCATE (rho_ia_r2)
@@ -524,7 +536,7 @@ CONTAINS
          nspins = SIZE(evects, 1)
          nvects = SIZE(evects, 2)
 
-         IF (nspins > 1) THEN
+         IF (SIZE(gs_mos) > 1) THEN
             alpha = 1.0_dp
          ELSE
             alpha = 2.0_dp

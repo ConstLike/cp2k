@@ -2637,7 +2637,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE xc_calc_2nd_deriv_analytical(v_xc, v_xc_tau, deriv_set, rho_set, rho1_set, &
                                            pw_pool, xc_section, gapw, vxg, tddfpt_fac, &
-                                           compute_virial, virial_xc)
+                                           compute_virial, virial_xc,spinflip)
 
       TYPE(pw_type), DIMENSION(:), POINTER             :: v_xc, v_xc_tau
       TYPE(xc_derivative_set_type)                       :: deriv_set
@@ -2651,6 +2651,7 @@ CONTAINS
       LOGICAL, INTENT(IN), OPTIONAL                      :: compute_virial
       REAL(KIND=dp), DIMENSION(3, 3), INTENT(INOUT), &
          OPTIONAL                                        :: virial_xc
+      LOGICAL, INTENT(in), OPTIONAL                      :: spinflip
 
       CHARACTER(len=*), PARAMETER :: routineN = 'xc_calc_2nd_deriv_analytical'
 
@@ -2658,10 +2659,10 @@ CONTAINS
                                                             k, nspins, xc_deriv_method_id
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: gradient_f, lsd, my_compute_virial, &
-                                                            my_gapw, tau_f, laplace_f, rho_f
+                                                            my_gapw, tau_f, laplace_f, rho_f, do_spinflip
       REAL(KIND=dp)                                      :: fac, gradient_cut, tmp, factor2
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: dr1dr, dra1dra, drb1drb
-      REAL(kind=dp), DIMENSION(:, :, :), POINTER         :: deriv_data, e_drhoa, e_drhob, &
+      REAL(kind=dp), DIMENSION(:, :, :), POINTER         :: deriv_data, deriv_data2, e_drhoa, e_drhob, &
                                                             e_drho, norm_drho, norm_drhoa, &
                                                             norm_drhob, rho1, rho1a, rho1b, &
                                                             tau1, tau1a, tau1b, laplace1, laplace1a, laplace1b, &
@@ -2700,6 +2701,11 @@ CONTAINS
       factor2 = 1.0_dp
       IF (PRESENT(tddfpt_fac)) fac = tddfpt_fac
       IF (PRESENT(tddfpt_fac)) factor2 = tddfpt_fac
+      IF (PRESENT(spinflip)) THEN
+         do_spinflip = spinflip
+      ELSE
+         do_spinflip = .FALSE.
+      END IF
 
       bo = rho_set%local_bounds
 
@@ -2753,6 +2759,7 @@ CONTAINS
          !-------------------!
 
          CALL xc_rho_set_get(rho1_set, rhoa=rho1a, rhob=rho1b)
+         IF (do_spinflip) CALL xc_rho_set_get(rho_set, rhoa=rhoa, rhob=rhob)
 
          IF (gradient_f) THEN
             CALL xc_rho_set_get(rho_set, drhoa=drhoa, drhob=drhob, &
@@ -2796,13 +2803,44 @@ CONTAINS
 
          IF (nspins /= 1) THEN
 
-            $:add_2nd_derivative_terms(arguments_openshell)
+            IF (.NOT.do_spinflip) THEN
+               ! Compute \sum_{\tau}fxc^{\sigma\tau}*\rho^{\tau}(1) over the grid points
+               $:add_2nd_derivative_terms(arguments_openshell)
+
+            ELSE
+
+               ! Compute (vxc^{\alpha}-vxc^{\beta})*\rho(1)/(rhoa-rhob) over the grid points
+               deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhoa])
+               IF (ASSOCIATED(deriv_att)) THEN
+                  CALL xc_derivative_get(deriv_att, deriv_data = deriv_data)
+                  deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhob])
+                  IF (ASSOCIATED(deriv_att)) THEN
+                     CALL xc_derivative_get(deriv_att, deriv_data = deriv_data2)
+!$OMP       PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
+!$OMP       SHARED(bo,v_xc,deriv_data,deriv_data2,rho1a,rhoa,rhob) COLLAPSE(3)
+                     DO k = bo(1, 3), bo(2, 3)
+                        DO j = bo(1, 2), bo(2, 2)
+                           DO i = bo(1, 1), bo(2, 1)
+                              v_xc(1)%cr3d(i,j,k) = v_xc(1)%cr3d(i,j,k) + &
+                              (deriv_data(i,j,k) - deriv_data2(i,j,k))*rho1a(i,j,k) &
+                              /(rhoa(i,j,k) - rhob(i,j,k))
+                           END DO
+                        END DO
+                     END DO
+                  END IF
+               END IF
+
+            END IF
 
          ELSE
 
+            ! Compute (fxc^{\alpha\alpha}+-fxc^{\beta\beta})*\rho(1) over the grid points
             $:add_2nd_derivative_terms(arguments_triplet_outer, arguments_triplet_inner)
 
          END IF
+
+         ! Skip further contributions to spin-flip xcKernel
+         IF (do_spinflip) GO TO 10
 
          IF (gradient_f) THEN
 
@@ -2935,6 +2973,8 @@ CONTAINS
             virial_pw%cr3d(:, :, :) = -rhob(:, :, :)
             CALL virial_laplace(virial_pw, pw_pool, virial_xc, v_laplace(2)%cr3d)
          END IF
+         
+         10 CONTINUE
 
       ELSE
 

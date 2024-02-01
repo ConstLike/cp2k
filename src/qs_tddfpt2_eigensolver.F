@@ -138,17 +138,18 @@ CONTAINS
 !>    * 07.2016 created [Sergey Chulkov]
 !>    * 05.2019 use temporary work matrices [JHU]
 ! **************************************************************************************************
-   FUNCTION tddfpt_is_nonorthogonal_psi1_psi0(evects, S_C0, max_norm) &
+   FUNCTION tddfpt_is_nonorthogonal_psi1_psi0(evects, S_C0, max_norm, spinflip) &
       RESULT(is_nonortho)
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(in)      :: evects
       TYPE(cp_fm_type), DIMENSION(:), INTENT(in)         :: S_C0
       REAL(kind=dp), INTENT(in)                          :: max_norm
+      INTEGER, INTENT(in)                                :: spinflip
       LOGICAL                                            :: is_nonortho
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_is_nonorthogonal_psi1_psi0'
 
       INTEGER                                            :: handle, ispin, ivect, nactive, nao, &
-                                                            nocc, nspins, nvects
+                                                            nocc, nspins, nvects, spin
       REAL(kind=dp)                                      :: maxabs_val
       TYPE(cp_fm_struct_type), POINTER                   :: matrix_struct, matrix_struct_tmp
       TYPE(cp_fm_type)                                   :: aortho
@@ -161,7 +162,14 @@ CONTAINS
       is_nonortho = .FALSE.
 
       loop: DO ispin = 1, nspins
-         CALL cp_fm_get_info(matrix=S_C0(ispin), ncol_global=nocc)
+
+         IF (spinflip == no_sf_tddfpt) THEN
+            spin = ispin
+         ELSE
+            spin = 2
+         END IF
+
+         CALL cp_fm_get_info(matrix=S_C0(spin), ncol_global=nocc)
          CALL cp_fm_get_info(matrix=evects(ispin, 1), matrix_struct=matrix_struct, &
                              nrow_global=nao, ncol_global=nactive)
          CALL cp_fm_struct_create(matrix_struct_tmp, nrow_global=nocc, &
@@ -169,8 +177,8 @@ CONTAINS
          CALL cp_fm_create(aortho, matrix_struct_tmp)
          CALL cp_fm_struct_release(matrix_struct_tmp)
          DO ivect = 1, nvects
-            ! aortho = S_0^T * S * C_1
-            CALL parallel_gemm('T', 'N', nocc, nactive, nao, 1.0_dp, S_C0(ispin), &
+            ! aortho = S_C0^T * S * C_1
+            CALL parallel_gemm('T', 'N', nocc, nactive, nao, 1.0_dp, S_C0(spin), &
                                evects(ispin, ivect), 0.0_dp, aortho)
             CALL cp_fm_maxabsval(aortho, maxabs_val)
             is_nonortho = maxabs_val > max_norm
@@ -251,7 +259,7 @@ CONTAINS
       END DO
 
       DO jvect = nvects_old + 1, nvects_total
-         ! <psi1_i | psi1_j>
+         ! Orthogonalization <psi1_i | psi1_j>
          DO ivect = 1, jvect - 1
             CALL cp_fm_trace(evects(:, jvect), S_evects(:, ivect), weights(1:nspins), accurate=.FALSE.)
             norm = SUM(weights(1:nspins))
@@ -261,7 +269,7 @@ CONTAINS
             END DO
          END DO
 
-         ! <psi1_j | psi1_j>
+         ! Normalization <psi1_j | psi1_j> = 1
          DO ispin = 1, nspins
             CALL cp_dbcsr_sm_fm_multiply(matrix_s, evects(ispin, jvect), S_evects(ispin, jvect), &
                                          ncol=nactive(ispin), alpha=1.0_dp, beta=0.0_dp)
@@ -566,20 +574,21 @@ CONTAINS
 !>    * 03.2017 refactored to achieve significant performance gain [Sergey Chulkov]
 ! **************************************************************************************************
    SUBROUTINE tddfpt_compute_residual_vects(residual_vects, evals, ritz_vects, Aop_ritz, gs_mos, &
-                                            matrix_s)
+                                            matrix_s, tddfpt_control)
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(in)      :: residual_vects
       REAL(kind=dp), DIMENSION(:), INTENT(in)            :: evals
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(in)      :: ritz_vects, Aop_ritz
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          INTENT(in)                                      :: gs_mos
       TYPE(dbcsr_type), POINTER                          :: matrix_s
+      TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_compute_residual_vects'
       REAL(kind=dp), PARAMETER :: eref_scale = 0.99_dp, threshold = 16.0_dp*EPSILON(1.0_dp)
 
       INTEGER                                            :: handle, icol_local, irow_local, irv, &
                                                             ispin, nao, ncols_local, nrows_local, &
-                                                            nrvs, nspins
+                                                            nrvs, nspins, spin2, spinflip
       INTEGER, DIMENSION(:), POINTER                     :: col_indices_local, row_indices_local
       INTEGER, DIMENSION(maxspins)                       :: nactive, nmo_virt
       REAL(kind=dp)                                      :: e_occ_plus_lambda, eref, lambda
@@ -592,18 +601,24 @@ CONTAINS
 
       nspins = SIZE(residual_vects, 1)
       nrvs = SIZE(residual_vects, 2)
+      spinflip = tddfpt_control%spinflip
 
       IF (nrvs > 0) THEN
          CALL dbcsr_get_info(matrix_s, nfullrows_total=nao)
          ALLOCATE (awork(nspins), vomat(nspins))
          DO ispin = 1, nspins
-            nmo_virt(ispin) = SIZE(gs_mos(ispin)%evals_virt)
+            IF (spinflip == no_sf_tddfpt) THEN
+               spin2 = ispin
+            ELSE
+               spin2 = 2
+            END IF
+            nmo_virt(spin2) = SIZE(gs_mos(spin2)%evals_virt)
             !
             CALL cp_fm_get_info(matrix=ritz_vects(ispin, 1), matrix_struct=ao_mo_struct, &
                                 ncol_global=nactive(ispin))
             CALL cp_fm_create(awork(ispin), ao_mo_struct)
             !
-            CALL cp_fm_struct_create(virt_mo_struct, nrow_global=nmo_virt(ispin), &
+            CALL cp_fm_struct_create(virt_mo_struct, nrow_global=nmo_virt(spin2), &
                                      ncol_global=nactive(ispin), template_fmstruct=ao_mo_struct)
             CALL cp_fm_create(vomat(ispin), virt_mo_struct)
             CALL cp_fm_struct_release(virt_mo_struct)
@@ -614,6 +629,11 @@ CONTAINS
             lambda = evals(irv)
 
             DO ispin = 1, nspins
+               IF (spinflip == no_sf_tddfpt) THEN
+                  spin2 = ispin
+               ELSE
+                  spin2 = 2
+               END IF
                CALL cp_fm_get_info(vomat(ispin), nrow_local=nrows_local, &
                                    ncol_local=ncols_local, row_indices=row_indices_local, &
                                    col_indices=col_indices_local, local_data=weights_ldata)
@@ -623,14 +643,15 @@ CONTAINS
                                             ncol=nactive(ispin), alpha=-lambda, beta=0.0_dp)
                CALL cp_fm_scale_and_add(1.0_dp, awork(ispin), 1.0_dp, Aop_ritz(ispin, irv))
                !
-               CALL parallel_gemm('T', 'N', nmo_virt(ispin), nactive(ispin), nao, 1.0_dp, gs_mos(ispin)%mos_virt, &
+               CALL parallel_gemm('T', 'N', nmo_virt(spin2), nactive(ispin), nao, 1.0_dp, gs_mos(spin2)%mos_virt, &
                                   awork(ispin), 0.0_dp, vomat(ispin))
 
+               ! Apply Davidson preconditioner to the residue vectors vomat to obtain new directions
                DO icol_local = 1, ncols_local
                   e_occ_plus_lambda = gs_mos(ispin)%evals_occ(col_indices_local(icol_local)) + lambda
 
                   DO irow_local = 1, nrows_local
-                     eref = gs_mos(ispin)%evals_virt(row_indices_local(irow_local)) - e_occ_plus_lambda
+                     eref = gs_mos(spin2)%evals_virt(row_indices_local(irow_local)) - e_occ_plus_lambda
 
                      ! eref = e_virt - e_occ - lambda = e_virt - e_occ - (eref_scale*lambda + (1-eref_scale)*lambda);
                      ! eref_new = e_virt - e_occ - eref_scale*lambda = eref + (1 - eref_scale)*lambda
@@ -641,7 +662,7 @@ CONTAINS
                   END DO
                END DO
 
-               CALL parallel_gemm('N', 'N', nao, nactive(ispin), nmo_virt(ispin), 1.0_dp, gs_mos(ispin)%mos_virt, &
+               CALL parallel_gemm('N', 'N', nao, nactive(ispin), nmo_virt(spin2), 1.0_dp, gs_mos(spin2)%mos_virt, &
                                   vomat(ispin), 0.0_dp, residual_vects(ispin, irv))
             END DO
          END DO
@@ -804,16 +825,19 @@ CONTAINS
             CALL tddfpt_compute_residual_vects(residual_vects=krylov_vects(:, nvects_exist + 1:nvects_exist + nvects_new), &
                                                evals=evals_last(1:nvects_new), &
                                                ritz_vects=evects(:, 1:nvects_new), Aop_ritz=Aop_ritz(:, 1:nvects_new), &
-                                               gs_mos=gs_mos, matrix_s=matrix_s(1)%matrix)
+                                               gs_mos=gs_mos, matrix_s=matrix_s(1)%matrix, tddfpt_control=tddfpt_control)
 
-            CALL tddfpt_orthogonalize_psi1_psi0(krylov_vects(:, nvects_exist + 1:nvects_exist + nvects_new), &
-                                                work_matrices%S_C0_C0T)
+            IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+              CALL tddfpt_orthogonalize_psi1_psi0(krylov_vects(:, nvects_exist + 1:nvects_exist + nvects_new), &
+                                                  work_matrices%S_C0_C0T)
+            END IF
 
             CALL tddfpt_orthonormalize_psi1_psi1(krylov_vects(:, 1:nvects_exist + nvects_new), nvects_new, &
                                                  S_krylov(:, 1:nvects_exist + nvects_new), matrix_s(1)%matrix)
 
             is_nonortho = tddfpt_is_nonorthogonal_psi1_psi0(krylov_vects(:, nvects_exist + 1:nvects_exist + nvects_new), &
-                                                            work_matrices%S_C0, tddfpt_control%orthogonal_eps)
+                                                            work_matrices%S_C0, tddfpt_control%orthogonal_eps, &
+                                                            tddfpt_control%spinflip)
          ELSE
             ! convergence or the maximum number of Krylov vectors have been achieved
             nvects_new = 0
