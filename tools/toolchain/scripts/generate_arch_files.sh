@@ -35,7 +35,7 @@ LD_arch="IF_MPI(${MPIFC}|${FC})"
 # we always want good line information and backtraces
 if [ "${with_intel}" != "__DONTUSE__" ]; then
   if [ "${TARGET_CPU}" = "native" ]; then
-    BASEFLAGS="-fPIC -fp-model=precise -g -qopenmp -traceback -xHost"
+    BASEFLAGS="-fPIC -fp-model=precise -g -qopenmp -traceback"
   elif [ "${TARGET_CPU}" = "generic" ]; then
     BASEFLAGS="-fPIC -fp-model=precise -g -mtune=${TARGET_CPU} -qopenmp -traceback"
   else

@@ -24,7 +24,7 @@ done
 if [ "${with_intel}" != "__DONTUSE__" ]; then
   CFLAGS="-O2 -fPIC -fp-model=precise -funroll-loops -g -qopenmp -qopenmp-simd -traceback"
   if [ "${TARGET_CPU}" = "native" ]; then
-    CFLAGS="${CFLAGS} -xHost"
+    CFLAGS="${CFLAGS}"
   elif [ "${TARGET_CPU}" = "generic" ]; then
     CFLAGS="${CFLAGS} -mtune=${TARGET_CPU}"
   else
