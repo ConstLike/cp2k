@@ -500,9 +500,6 @@ CONTAINS
       CALL get_qs_env(qs_env, dft_control=dft_control, input=input)
       tddfpt_control => dft_control%tddfpt2_control
 
-      ! If collinear spin-flip TDDFT is used turn off xc kernel
-      IF (tddfpt_control%spinflip == tddfpt_sf_col) tddfpt_control%kernel = tddfpt_kernel_none
-
       ! no k-points
       CPASSERT(dft_control%nimages <= 1)
 
