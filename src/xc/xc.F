@@ -2660,7 +2660,7 @@ CONTAINS
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: gradient_f, lsd, my_compute_virial, &
                                                             my_gapw, tau_f, laplace_f, rho_f, do_spinflip
-      REAL(KIND=dp)                                      :: fac, gradient_cut, tmp, factor2
+      REAL(KIND=dp)                                      :: fac, gradient_cut, tmp, factor2, s
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: dr1dr, dra1dra, drb1drb
       REAL(kind=dp), DIMENSION(:, :, :), POINTER         :: deriv_data, deriv_data2, e_drhoa, e_drhob, &
                                                             e_drho, norm_drho, norm_drhoa, &
@@ -2816,14 +2816,18 @@ CONTAINS
                   deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhob])
                   IF (ASSOCIATED(deriv_att)) THEN
                      CALL xc_derivative_get(deriv_att, deriv_data = deriv_data2)
-!$OMP       PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
+!$OMP       PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
 !$OMP       SHARED(bo,v_xc,deriv_data,deriv_data2,rho1a,rhoa,rhob) COLLAPSE(3)
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
-                              v_xc(1)%cr3d(i,j,k) = v_xc(1)%cr3d(i,j,k) + &
-                              (deriv_data(i,j,k) - deriv_data2(i,j,k))*rho1a(i,j,k) &
-                              /(rhoa(i,j,k) - rhob(i,j,k))
+                              s = rhoa(i,j,k) - rhob(i,j,k)
+                              IF (ABS(s).GT.1.E-4) THEN
+                                v_xc(1)%cr3d(i,j,k) = v_xc(1)%cr3d(i,j,k) + &
+                                (deriv_data(i,j,k) - deriv_data2(i,j,k))*rho1a(i,j,k)/s
+                              ELSE
+                                v_xc(1)%cr3d(i,j,k) = 0.0
+                              END IF
                            END DO
                         END DO
                      END DO
