@@ -90,14 +90,15 @@ CONTAINS
 !>        new Krylov's vectors seem to be random and should be orthogonalised even with respect to
 !>        the occupied MOs.
 ! **************************************************************************************************
-   SUBROUTINE tddfpt_orthogonalize_psi1_psi0(evects, S_C0_C0T)
+   SUBROUTINE tddfpt_orthogonalize_psi1_psi0(evects, S_C0_C0T,spinflip)
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(in)      :: evects
       TYPE(cp_fm_type), DIMENSION(:), INTENT(in)         :: S_C0_C0T
+      INTEGER, INTENT(in)                                :: spinflip
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_orthogonalize_psi1_psi0'
 
       INTEGER                                            :: handle, ispin, ivect, nactive, nao, &
-                                                            nspins, nvects
+                                                               nspins, nvects, spin
       TYPE(cp_fm_struct_type), POINTER                   :: matrix_struct
       TYPE(cp_fm_type)                                   :: evortho
 
@@ -108,12 +109,19 @@ CONTAINS
 
       IF (nvects > 0) THEN
          DO ispin = 1, nspins
+
+            IF (spinflip == no_sf_tddfpt) THEN
+               spin = ispin
+            ELSE
+               spin = 2
+            END IF
+
             CALL cp_fm_get_info(matrix=evects(ispin, 1), matrix_struct=matrix_struct, &
                                 nrow_global=nao, ncol_global=nactive)
             CALL cp_fm_create(evortho, matrix_struct)
             DO ivect = 1, nvects
                ! evortho: C0 * C0^T * S * C1 == (S * C0 * C0^T)^T * C1
-               CALL parallel_gemm('T', 'N', nao, nactive, nao, 1.0_dp, S_C0_C0T(ispin), &
+               CALL parallel_gemm('T', 'N', nao, nactive, nao, 1.0_dp, S_C0_C0T(spin), &
                                   evects(ispin, ivect), 0.0_dp, evortho)
                CALL cp_fm_scale_and_add(1.0_dp, evects(ispin, ivect), -1.0_dp, evortho)
             END DO
@@ -346,13 +354,8 @@ CONTAINS
 
       IF (debug_this_module) THEN
          CPASSERT(nspins > 0)
-         IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
-            CPASSERT(SIZE(Aop_evects, 1) == nspins)
-            CPASSERT(SIZE(S_evects, 1) == nspins)
-         ELSE
-            CPASSERT(SIZE(Aop_evects, 1) == 2*nspins)
-            CPASSERT(SIZE(S_evects, 1) == 2*nspins)
-         END IF
+         CPASSERT(SIZE(Aop_evects, 1) == nspins)
+         CPASSERT(SIZE(S_evects, 1) == nspins)
          CPASSERT(SIZE(Aop_evects, 2) == nvects)
          CPASSERT(SIZE(S_evects, 2) == nvects)
          CPASSERT(SIZE(gs_mos) == nspins)
@@ -827,10 +830,8 @@ CONTAINS
                                                ritz_vects=evects(:, 1:nvects_new), Aop_ritz=Aop_ritz(:, 1:nvects_new), &
                                                gs_mos=gs_mos, matrix_s=matrix_s(1)%matrix, tddfpt_control=tddfpt_control)
 
-            IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
-              CALL tddfpt_orthogonalize_psi1_psi0(krylov_vects(:, nvects_exist + 1:nvects_exist + nvects_new), &
-                                                  work_matrices%S_C0_C0T)
-            END IF
+            CALL tddfpt_orthogonalize_psi1_psi0(krylov_vects(:, nvects_exist + 1:nvects_exist + nvects_new), &
+                                                work_matrices%S_C0_C0T,tddfpt_control%spinflip)
 
             CALL tddfpt_orthonormalize_psi1_psi1(krylov_vects(:, 1:nvects_exist + nvects_new), nvects_new, &
                                                  S_krylov(:, 1:nvects_exist + nvects_new), matrix_s(1)%matrix)
@@ -872,9 +873,7 @@ CONTAINS
          ! nvects_new == 0 if iter >= tddfpt_control%niters
          IF (nvects_new == 0 .OR. is_nonortho) THEN
             ! restart Davidson iterations
-            IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
-               CALL tddfpt_orthogonalize_psi1_psi0(evects, work_matrices%S_C0_C0T)
-            END IF
+            CALL tddfpt_orthogonalize_psi1_psi0(evects, work_matrices%S_C0_C0T,tddfpt_control%spinflip)
             CALL tddfpt_orthonormalize_psi1_psi1(evects, nstates, S_evects, matrix_s(1)%matrix)
 
             EXIT
