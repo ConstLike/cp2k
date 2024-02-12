@@ -2816,8 +2816,8 @@ CONTAINS
                   deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhob])
                   IF (ASSOCIATED(deriv_att)) THEN
                      CALL xc_derivative_get(deriv_att, deriv_data = deriv_data2)
-!$OMP       PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP       SHARED(bo,v_xc,deriv_data,deriv_data2,rho1a,rhoa,rhob) COLLAPSE(3)
+!$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
+!$OMP                SHARED(bo,v_xc,deriv_data,deriv_data2,rho1a,rhoa,rhob) COLLAPSE(3)
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
@@ -2831,6 +2831,7 @@ CONTAINS
                            END DO
                         END DO
                      END DO
+!$OMP                END PARALLEL DO
                   END IF
                END IF
 
