@@ -271,7 +271,11 @@ CONTAINS
         !! You should be warned if there are more states
         !! than occ-virt Combinations!!
          CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=nocc)
-         CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=nvirt)
+         IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+           CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=nvirt)
+         ELSE
+           CALL cp_fm_get_info(gs_mos(2)%mos_virt, ncol_global=nvirt)
+         END IF
          nstate_max = nocc*nvirt
          IF (nstates > nstate_max) THEN
             CPWARN("NUMBER OF EXCITED STATES COULD LEAD TO PROBLEMS!")
@@ -927,9 +931,7 @@ CONTAINS
                                         tddfpt_print_section, "GUESS_VECTORS")
 
       ! Don't orthogonalize with respect to gs mos if spin-flip excitations are calculated
-      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
-        CALL tddfpt_orthogonalize_psi1_psi0(evects, work_matrices%S_C0_C0T)
-      END IF
+      CALL tddfpt_orthogonalize_psi1_psi0(evects, work_matrices%S_C0_C0T,tddfpt_control%spinflip)
       CALL tddfpt_orthonormalize_psi1_psi1(evects, &
                                            nstates, &
                                            S_evects, &
