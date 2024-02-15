@@ -1072,6 +1072,7 @@ CONTAINS
                   spin_label1 = '(alp)'
                   spin_label2 = '(alp)'
                ELSE
+                  ind = ind - nstates_occ_virt_alpha
                   spin1 = 2
                   spin2 = 2
                   spin_label1 = '(bet)'
