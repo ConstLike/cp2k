@@ -119,7 +119,8 @@ MODULE qs_tddfpt2_methods
 CONTAINS
 
 ! **************************************************************************************************
-!> \brief Perform TDDFPT calculation.
+!> \brief Perform TDDFPT calculation. If calc_forces then it also builds the response vector for the
+!>        Z-vector method and calculates some contributions to the force
 !> \param qs_env  Quickstep environment
 !> \param calc_forces ...
 !> \par History
@@ -403,8 +404,8 @@ CONTAINS
          ex_env%evalue = evals(my_state)
          ! excitation vector
          CALL cp_fm_release(ex_env%evect)
-         ALLOCATE (ex_env%evect(nspins))
-         DO ispin = 1, nspins
+         ALLOCATE (ex_env%evect(SIZE(evects,1)))
+         DO ispin = 1, SIZE(evects,1)
             CALL cp_fm_get_info(matrix=evects(ispin, 1), &
                                 matrix_struct=matrix_struct)
             CALL cp_fm_create(ex_env%evect(ispin), matrix_struct)
@@ -427,6 +428,7 @@ CONTAINS
                my_state, "      with excitation energy ", ex_env%evalue*evolt, " eV"
          END IF
 
+         ! Calculate response vector
          IF (calc_forces) THEN
             CALL tddfpt_forces_main(qs_env, gs_mos, ex_env, kernel_env, &
                                     sub_env, work_matrices)
@@ -891,7 +893,11 @@ CONTAINS
       !! You should be warned if there are more states
       !! than occ-virt Combinations!!
       CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=nocc)
-      CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=nvirt)
+      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+        CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=nvirt)
+      ELSE
+        CALL cp_fm_get_info(gs_mos(2)%mos_virt, ncol_global=nvirt)
+      END IF
       nstate_max = nocc*nvirt
       IF (nstates > nstate_max) THEN
          CPWARN("NUMBER OF EXCITED STATES COULD LEAD TO PROBLEMS!")
@@ -930,8 +936,9 @@ CONTAINS
       CALL cp_print_key_finished_output(log_unit, logger, &
                                         tddfpt_print_section, "GUESS_VECTORS")
 
-      ! Don't orthogonalize with respect to gs mos if spin-flip excitations are calculated
+      ! Orthogonalize with respect to gs mos
       CALL tddfpt_orthogonalize_psi1_psi0(evects, work_matrices%S_C0_C0T,tddfpt_control%spinflip)
+      ! Orthogonalize with respect to each other
       CALL tddfpt_orthonormalize_psi1_psi1(evects, &
                                            nstates, &
                                            S_evects, &

@@ -863,12 +863,18 @@ CONTAINS
 
                WRITE (log_unit, '(T7,I8,F10.5,A)') istate, evals(istate)*evolt, " eV"
 
+               ! This reinitialization is needed to prevent the intel fortran compiler from introduce
+               ! a bug when using optimization level 3 flag
+               state_spin = 1
+               state_spin2 = 1
+               IF (spinflip .NE. no_sf_tddfpt) THEN
+                  state_spin = 1
+                  state_spin2 = 2
+               END IF
                DO iexc = 1, nexcs
                   ind = inds_recv(inds(iexc)) - 1
                   IF ((nspins > 1) .AND. (spinflip == no_sf_tddfpt)) THEN
                      IF (ind < nmo_virt_occ_alpha) THEN
-                        state_spin = 1
-                        state_spin2 = 1
                         spin_label = '(alp)'
                         spin_label2 = '(alp)'
                      ELSE
@@ -879,7 +885,6 @@ CONTAINS
                         spin_label2 = '(bet)'
                      END IF
                   END IF
-
                   imo_occ = ind/nmo_virt8(state_spin2) + 1
                   imo_virt = MOD(ind, nmo_virt8(state_spin2)) + 1
 

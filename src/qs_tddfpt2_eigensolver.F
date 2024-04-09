@@ -787,6 +787,7 @@ CONTAINS
          ! davidson iteration
          CALL cp_iterate(logger%iter_info, iter_nr_out=iter)
 
+         ! Matrix-vector operations
          CALL tddfpt_compute_Aop_evects(Aop_evects=Aop_krylov(:, nvects_exist + 1:nvects_exist + nvects_new), &
                                         evects=krylov_vects(:, nvects_exist + 1:nvects_exist + nvects_new), &
                                         S_evects=S_krylov(:, nvects_exist + 1:nvects_exist + nvects_new), &
