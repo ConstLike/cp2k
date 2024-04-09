@@ -18,7 +18,7 @@
    this_file=${BASH_SOURCE##*/}; \
    cd tools/toolchain; \
    [[ -z "${target_cpu}" ]] && target_cpu="native"; \
-   ./install_cp2k_toolchain.sh -j${maxtasks} --mpi-mode=no --no-arch-files --target-cpu=${target_cpu} --with-gcc; \
+   ./install_cp2k_toolchain.sh -j${maxtasks} --mpi-mode=no --no-arch-files --target-cpu=${target_cpu} --with-gcc=system; \
    source ./install/setup; \
    cd ../..; \
    echo; \
