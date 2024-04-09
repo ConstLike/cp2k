@@ -63,6 +63,7 @@ MODULE qs_fxc
    PRIVATE
 
    ! *** Public subroutines ***
+   !PUBLIC :: qs_fxc_fdiff, qs_fxc_analytic, qs_fgxc_gdiff, qs_gxc_analytic, qs_fgxc_create, qs_fgxc_release
    PUBLIC :: qs_fxc_fdiff, qs_fxc_analytic, qs_fgxc_gdiff, qs_fgxc_create, qs_fgxc_release
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_fxc'
