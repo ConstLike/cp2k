@@ -260,12 +260,11 @@ CONTAINS
       my_geo_change = geometry_did_change
       IF (ispin == 2) my_geo_change = .FALSE.
 
-      CALL get_qs_env(qs_env, dft_control=dft_control)
-
+      ! This initialization is needed to prevent a segmentation fault. The correct assigment is done below
       IF (PRESENT(nspins)) THEN
         my_nspins = nspins
       ELSE
-        my_nspins = dft_control%nspins
+        my_nspins = 0
       END IF
 
       logger => cp_get_default_logger()
@@ -371,7 +370,6 @@ CONTAINS
 !$OMP                                  radii_pgf,&
 !$OMP                                  nkind,&
 !$OMP                                  ispin,&
-!$OMP                                  my_nspins,&
 !$OMP                                  is_anti_symmetric,&
 !$OMP                                  shm_atomic_block_offset,&
 !$OMP                                  shm_set_offset,&
@@ -392,7 +390,7 @@ CONTAINS
 !$OMP         compression_factor_disk,nprim_ints,neris_tmp,max_val_memory,max_am,do_p_screening,&
 !$OMP         max_set,particle_set,atomic_kind_set,natom,kind_of,ncos_max,nsgf_max,ikind,&
 !$OMP         nseta,npgfa,la_max,nsgfa,primitive_integrals,pbd_buf,pbc_buf,pad_buf,pac_buf,kbd_buf,kbc_buf,&
-!$OMP         kad_buf,kac_buf,ee_work,ee_work2,ee_buffer1,ee_buffer2,ee_primitives_tmp,max_contraction,&
+!$OMP         kad_buf,kac_buf,ee_work,ee_work2,ee_buffer1,ee_buffer2,ee_primitives_tmp,my_nspins,max_contraction,&
 !$OMP         max_pgf,jkind,lb_max,nsetb,npgfb,first_sgfb,sphi_b,nsgfb,ncob,sgfb,nneighbors,pgf_list_ij,pgf_list_kl,&
 !$OMP         pgf_product_list,nimages,ks_fully_occ,subtr_size_mb,use_disk_storage,counter,do_disk_storage,&
 !$OMP         maxval_container_disk,maxval_cache_disk,integral_containers_disk,integral_caches_disk,eps_schwarz,&
@@ -471,7 +469,8 @@ CONTAINS
 
       CALL get_qs_env(qs_env=qs_env, &
                       atomic_kind_set=atomic_kind_set, &
-                      particle_set=particle_set)
+                      particle_set=particle_set, &
+                      dft_control=dft_control)
       IF (dft_control%do_admm) CALL get_admm_env(qs_env%admm_env, matrix_ks_aux_fit_hfx=matrix_ks_aux_fit_hfx)
 
       do_p_screening = screening_parameter%do_initial_p_screening
@@ -525,6 +524,8 @@ CONTAINS
       ALLOCATE (ee_buffer1(ncos_max**4))
       ALLOCATE (ee_buffer2(ncos_max**4))
       ALLOCATE (ee_primitives_tmp(nsgf_max**4))
+
+      IF (my_nspins .EQ. 0) my_nspins = dft_control%nspins
 
       ALLOCATE (max_contraction(max_set, natom))
 
