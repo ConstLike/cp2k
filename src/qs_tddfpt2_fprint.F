@@ -233,7 +233,7 @@ CONTAINS
                   CALL response_force(qs_env=qs_env, vh_rspace=ex_env%vh_rspace, &
                                       vxc_rspace=ex_env%vxc_rspace, vtau_rspace=ex_env%vtau_rspace, &
                                       vadmm_rspace=ex_env%vadmm_rspace, matrix_hz=ex_env%matrix_hz, &
-                                      matrix_pz=ex_env%matrix_px1, matrix_pz_admm=p_env%p1_admm, &
+                                      matrix_pz=p_env%p1, matrix_pz_admm=p_env%p1_admm, &
                                       matrix_wz=p_env%w1, p_env=p_env, ex_env=ex_env, debug=debug_forces)
                END IF
                CALL p_env_release(p_env)
