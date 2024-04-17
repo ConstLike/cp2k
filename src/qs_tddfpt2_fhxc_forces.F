@@ -67,7 +67,7 @@ MODULE qs_tddfpt2_fhxc_forces
                                               xc_kernel_method_best,&
                                               xc_kernel_method_numeric,&
                                               xc_none,&
-                                              no_sf_tddfpt, tddfpt_sf_noncol
+                                              no_sf_tddfpt, tddfpt_sf_col
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type,&
@@ -511,7 +511,7 @@ CONTAINS
       xc_section => full_kernel%xc_section
       CALL section_vals_val_get(xc_section, "XC_FUNCTIONAL%_SECTION_PARAMETERS_", &
                                 i_val=myfun)
-      IF (.NOT. ((myfun == xc_none).OR.(tddfpt_control%spinflip == tddfpt_sf_noncol))) THEN
+      IF (.NOT. ((myfun == xc_none).OR.(tddfpt_control%spinflip == tddfpt_sf_col))) THEN
          SELECT CASE (ex_env%xc_kernel_method)
          CASE (xc_kernel_method_best)
             do_analytic = .TRUE.
@@ -1304,7 +1304,7 @@ CONTAINS
       END IF
       IF (ASSOCIATED(ex_env%matrix_wx1)) CALL dbcsr_deallocate_matrix_set(ex_env%matrix_wx1)
       ex_env%matrix_wx1 => matrix_wx1
-      IF (.NOT. ((myfun == xc_none).OR.(tddfpt_control%spinflip /= tddfpt_sf_noncol))) THEN
+      IF (.NOT. ((myfun == xc_none).OR.(tddfpt_control%spinflip == tddfpt_sf_col))) THEN
          CALL dbcsr_deallocate_matrix_set(matrix_fx)
          CALL dbcsr_deallocate_matrix_set(matrix_gx)
       END IF

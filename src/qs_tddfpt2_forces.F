@@ -484,14 +484,14 @@ CONTAINS
          IF (.NOT.(do_sf.AND.(ispin==1))) THEN
             CALL cp_fm_get_info(gs_mos(spin)%mos_occ, ncol_global=norb)
             CALL cp_dbcsr_plus_fm_fm_t(matrix_wz(ispin)%matrix, matrix_v=evect(spin), ncol=norb)
-            evalue = ex_env%evalue
-            IF (tddfpt_control%oe_corr == oe_shift) THEN
-               evalue = ex_env%evalue - tddfpt_control%ev_shift
-            END IF
          END IF
          ! For spin-flip excitations only the alpha component of the Lambda matrix
          ! contains the occupied MO energy term
          IF (.NOT.(do_sf.AND.(ispin==2))) THEN
+            evalue = ex_env%evalue
+            IF (tddfpt_control%oe_corr == oe_shift) THEN
+               evalue = ex_env%evalue - tddfpt_control%ev_shift
+            END IF
             CALL dbcsr_scale(matrix_wz(ispin)%matrix, evalue)
             CALL calculate_wx_matrix(gs_mos(ispin)%mos_occ, evect(spin), matrix_ks(ispin)%matrix, &
                                      matrix_wz(ispin)%matrix)
