@@ -464,10 +464,11 @@ CONTAINS
       CALL tddfpt_kernel_force(qs_env, ex_env, gs_mos, kernel_env, sub_env, work_matrices, debug_forces)
 
       ! Overlap matrix, build the Lambda matrix, Eq. 51.
+      NULLIFY (matrix_wx1,matrix_wz)
+      CALL dbcsr_allocate_matrix_set(matrix_wx1, nspins)
+      CALL dbcsr_allocate_matrix_set(matrix_wz, nspins)
       matrix_wx1 => ex_env%matrix_wx1
       CALL get_qs_env(qs_env=qs_env, matrix_s=matrix_s, matrix_ks=matrix_ks)
-      NULLIFY (matrix_wz)
-      CALL dbcsr_allocate_matrix_set(matrix_wz, nspins)
       DO ispin = 1, nspins
          IF (do_sf) THEN
             spin = 1
@@ -484,15 +485,15 @@ CONTAINS
          IF (.NOT.(do_sf.AND.(ispin==1))) THEN
             CALL cp_fm_get_info(gs_mos(spin)%mos_occ, ncol_global=norb)
             CALL cp_dbcsr_plus_fm_fm_t(matrix_wz(ispin)%matrix, matrix_v=evect(spin), ncol=norb)
-         END IF
-         ! For spin-flip excitations only the alpha component of the Lambda matrix
-         ! contains the occupied MO energy term
-         IF (.NOT.(do_sf.AND.(ispin==2))) THEN
             evalue = ex_env%evalue
             IF (tddfpt_control%oe_corr == oe_shift) THEN
                evalue = ex_env%evalue - tddfpt_control%ev_shift
             END IF
             CALL dbcsr_scale(matrix_wz(ispin)%matrix, evalue)
+         END IF
+         ! For spin-flip excitations only the alpha component of the Lambda matrix
+         ! contains the occupied MO energy term
+         IF (.NOT.(do_sf.AND.(ispin==2))) THEN
             CALL calculate_wx_matrix(gs_mos(ispin)%mos_occ, evect(spin), matrix_ks(ispin)%matrix, &
                                      matrix_wz(ispin)%matrix)
          END IF
@@ -583,7 +584,7 @@ CONTAINS
          IF (debug_forces) THEN
             fodeb(1:3) = force(1)%overlap(1:3, 1) - fodeb(1:3)
             CALL para_env%sum(fodeb)
-            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: WK*dS ", fodeb
+            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: D^XKP*dS ", fodeb
          END IF
       END IF
 

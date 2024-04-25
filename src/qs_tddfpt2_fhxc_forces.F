@@ -474,7 +474,7 @@ CONTAINS
          IF (debug_forces) THEN
             fodeb(1:3) = force(1)%rho_elec(1:3, 1) - fodeb(1:3)
             CALL para_env%sum(fodeb)
-            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Px*dKh[X]   ", fodeb
+            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dKh[Dx]  ", fodeb
          END IF
          IF (gapw) THEN
             IF (debug_forces) fodeb(1:3) = force(1)%g0s_Vh_elec(1:3, 1)
@@ -490,7 +490,7 @@ CONTAINS
             IF (debug_forces) THEN
                fodeb(1:3) = force(1)%g0s_Vh_elec(1:3, 1) - fodeb(1:3)
                CALL para_env%sum(fodeb)
-               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Px*dKh[X]PAWg0", fodeb
+               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dKh[Dx]PAWg0", fodeb
             END IF
             IF (debug_forces) fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1)
             CALL update_ks_atom(qs_env, matrix_hx, matrix_px1, forces=.TRUE., &
@@ -498,7 +498,7 @@ CONTAINS
             IF (debug_forces) THEN
                fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1) - fodeb(1:3)
                CALL para_env%sum(fodeb)
-               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Px*dKh[X]PAW ", fodeb
+               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dKh[Dx]PAW", fodeb
             END IF
          END IF
       END IF
@@ -614,7 +614,7 @@ CONTAINS
          IF (debug_forces) THEN
             fodeb(1:3) = force(1)%rho_elec(1:3, 1) - fodeb(1:3)
             CALL para_env%sum(fodeb)
-            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Px*dKf[X]   ", fodeb
+            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dfxc[Dx] ", fodeb
          END IF
 
          IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
@@ -637,7 +637,7 @@ CONTAINS
          IF (debug_forces) THEN
             fodeb(1:3) = force(1)%rho_elec(1:3, 1) - fodeb(1:3)
             CALL para_env%sum(fodeb)
-            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: P*dKg[X]   ", fodeb
+            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dgxc[Dx]", fodeb
          END IF
          CALL qs_fgxc_release(ks_env, fxc_rho, fxc_tau, gxc_rho, gxc_tau)
 
@@ -649,7 +649,7 @@ CONTAINS
             IF (debug_forces) THEN
                fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1) - fodeb(1:3)
                CALL para_env%sum(fodeb)
-               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Px*dKf[X]PAW ", fodeb
+               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dfxc[Dx]PAW ", fodeb
             END IF
             IF (debug_forces) fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1)
             IF (nspins == 1) THEN
@@ -664,7 +664,7 @@ CONTAINS
             IF (debug_forces) THEN
                fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1) - fodeb(1:3)
                CALL para_env%sum(fodeb)
-               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Px*dKg[X]PAW ", fodeb
+               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dgxc[Dx]PAW ", fodeb
             END IF
          END IF
       END IF
@@ -767,7 +767,7 @@ CONTAINS
             IF (debug_forces) THEN
                fodeb(1:3) = force(1)%rho_elec(1:3, 1) - fodeb(1:3)
                CALL para_env%sum(fodeb)
-               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Px*dKf[X]ADMM", fodeb
+               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dfxc[Dx]ADMM", fodeb
             END IF
 
             IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
@@ -786,7 +786,7 @@ CONTAINS
             IF (debug_forces) THEN
                fodeb(1:3) = force(1)%rho_elec(1:3, 1) - fodeb(1:3)
                CALL para_env%sum(fodeb)
-               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: P*dKg[X]ADMM", fodeb
+               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dgxc[Dx]ADMM", fodeb
             END IF
             CALL qs_fgxc_release(ks_env, fxc_rho, fxc_tau, gxc_rho, gxc_tau)
             !
@@ -831,7 +831,7 @@ CONTAINS
                IF (debug_forces) THEN
                   fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1) - fodeb(1:3)
                   CALL para_env%sum(fodeb)
-                  IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Px*dKf[X]ADMM-PAW ", fodeb
+                  IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dfxc[Dx]ADMM-PAW ", fodeb
                END IF
                IF (debug_forces) fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1)
                IF (nspins == 1) THEN
@@ -850,7 +850,7 @@ CONTAINS
                IF (debug_forces) THEN
                   fodeb(1:3) = force(1)%Vhxc_atom(1:3, 1) - fodeb(1:3)
                   CALL para_env%sum(fodeb)
-                  IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: P*dKg[X]ADMM-PAW ", fodeb
+                  IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dgxc[Dx]ADMM-PAW ", fodeb
                END IF
             END IF
             !
@@ -1083,7 +1083,7 @@ CONTAINS
             IF (debug_forces) THEN
                fodeb(1:3) = force(1)%fock_4c(1:3, 1) - fodeb(1:3)
                CALL para_env%sum(fodeb)
-               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Px*hfx'*Px ", fodeb
+               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dhfx'*Dx ", fodeb
             END IF
             !
             DEALLOCATE (mpe, mhe)
@@ -1133,6 +1133,7 @@ CONTAINS
             use_virial = .FALSE.
             NULLIFY (mdum)
             fval = 2.0_dp*REAL(nspins, KIND=dp)*0.5_dp !extra 0.5 factor because of symmetry/antisymemtry
+            IF (do_sf) fval = fval*2.0_dp
             IF (debug_forces) fodeb(1:3) = force(1)%fock_4c(1:3, 1)
             DO ispin = 1, SIZE(evect,1)
                mpe(ispin, 1)%matrix => matrix_px1(ispin)%matrix
@@ -1161,12 +1162,13 @@ CONTAINS
             IF (debug_forces) THEN
                fodeb(1:3) = force(1)%fock_4c(1:3, 1) - fodeb(1:3)
                CALL para_env%sum(fodeb)
-               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*hfx'*Dx ", fodeb
+               IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Dx*dhfx*Dx ", fodeb
             END IF
             !
             DEALLOCATE (mpe, mhe)
          END IF
          fval = 2.0_dp*REAL(nspins, KIND=dp)*0.5_dp !extra 0.5 because of symm/antisymm
+         IF (do_sf) fval = fval*2.0_dp
          DO ispin = 1, SIZE(evect,1)
             CALL dbcsr_scale(matrix_hfx(ispin)%matrix, fval)
             CALL dbcsr_scale(matrix_hfx_asymm(ispin)%matrix, fval)
@@ -1280,15 +1282,15 @@ CONTAINS
 
             ! For spin-flip excitations this is the only contribution to the beta response vector
             IF (.NOT.(do_sf.AND.(ispin.EQ.1))) THEN
-               CALL cp_dbcsr_sm_fm_multiply(matrix_hfx(spin)%matrix, mos, vcvec, norb, alpha=1.0_dp, beta=0.0_dp)
-               CALL cp_dbcsr_sm_fm_multiply(matrix_hfx_asymm(spin)%matrix, mos, vcvec, norb, alpha=1.0_dp, beta=1.0_dp)
-               CALL parallel_gemm("T", "N", norb2, norb, nao, 1.0_dp, mos2, vcvec, 0.0_dp, cvcmat)
+               CALL cp_dbcsr_sm_fm_multiply(matrix_hfx(spin)%matrix, mos2, vcvec, norb, alpha=1.0_dp, beta=0.0_dp)
+               CALL cp_dbcsr_sm_fm_multiply(matrix_hfx_asymm(spin)%matrix, mos2, vcvec, norb, alpha=1.0_dp, beta=1.0_dp)
+               CALL parallel_gemm("T", "N", norb2, norb, nao, 1.0_dp, mos, vcvec, 0.0_dp, cvcmat)
                CALL parallel_gemm("N", "N", nao, norb, norb2, 1.0_dp, evect(spin), cvcmat, 0.0_dp, vcvec)
                CALL cp_dbcsr_sm_fm_multiply(matrix_s(1)%matrix, vcvec, cpmos(ispin), &
                                             norb, alpha=-focc, beta=1.0_dp)
                ! Add contributions to the \Lambda_munu for the perturbed overlab matrix term, third term of Eq. 51
                !BUGFIX changed order of matrix_v and matrix_g arguments and changed symmetry_mode to no symmetry
-               CALL cp_dbcsr_plus_fm_fm_t(matrix_wx1(ispin)%matrix, matrix_v=vcvec, matrix_g=mos, &
+               CALL cp_dbcsr_plus_fm_fm_t(matrix_wx1(ispin)%matrix, matrix_v=vcvec, matrix_g=mos2, &
                                           ncol=norb, alpha=2.0_dp, symmetry_mode=1)
             END IF
          END IF
