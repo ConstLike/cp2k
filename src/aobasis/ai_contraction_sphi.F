@@ -14,7 +14,7 @@
 ! **************************************************************************************************
 MODULE ai_contraction_sphi
 
-   USE kinds, ONLY: dp
+   USE kinds, ONLY: dp, int_8
 #if defined(__LIBXSMM)
    USE libxsmm, ONLY: LIBXSMM_PREFETCH_NONE, &
                       libxsmm_blasint_kind, &
@@ -56,24 +56,28 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'ab_contract'
 
-      INTEGER                                            :: handle, m1, m2, msphia, msphib, nn
+      INTEGER                                            :: handle
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: cpp
 
       CALL timeset(routineN, handle)
 
-      msphia = SIZE(sphi_a, 1)
-      msphib = SIZE(sphi_b, 1)
+      CPASSERT(ncob <= SIZE(sab, 2))
 
-      m1 = SIZE(sab, 1)
-      m2 = SIZE(sab, 2)
-
-      nn = SIZE(abint, 1)
-
-      ALLOCATE (cpp(nsgfa, m2))
-
-      CALL dgemm("T", "N", nsgfa, m2, ncoa, 1._dp, sphi_a, msphia, sab, m1, 0.0_dp, cpp, nsgfa)
-      CALL dgemm("N", "N", nsgfa, nsgfb, ncob, 1._dp, cpp, nsgfa, sphi_b, msphib, 0.0_dp, &
-                 abint, nn)
+      IF ((nsgfa*ncob*(ncoa + nsgfb)) <= (nsgfb*ncoa*(ncob + nsgfa))) THEN ! (sphi_a x sab) x sphi_b
+         ALLOCATE (cpp(nsgfa, ncob))
+         ! [nsgfa,ncoa] x [ncoa,ncob] -> [nsgfa,ncob]
+         CALL dgemm("T", "N", nsgfa, ncob, ncoa, 1._dp, sphi_a, SIZE(sphi_a, 1), sab, SIZE(sab, 1), 0.0_dp, cpp, nsgfa)
+         ! [nsgfa,ncob] x [ncob,nsgfb] -> [nsgfa,nsgfb]
+         CALL dgemm("N", "N", nsgfa, nsgfb, ncob, 1._dp, cpp, nsgfa, sphi_b, SIZE(sphi_b, 1), 0.0_dp, &
+                    abint, SIZE(abint, 1))
+      ELSE ! sphi_a x (sab x sphi_b)
+         ALLOCATE (cpp(ncoa, nsgfb))
+         ! [ncoa,ncob] x [ncob,nsgfb] -> [ncoa,nsgfb]
+         CALL dgemm("N", "N", ncoa, nsgfb, ncob, 1._dp, sab, SIZE(sab, 1), sphi_b, SIZE(sphi_b, 1), 0.0_dp, cpp, ncoa)
+         ! [nsgfa,ncoa] x [ncoa,nsgfb] -> [nsgfa,nsgfb]
+         CALL dgemm("T", "N", nsgfa, nsgfb, ncoa, 1._dp, sphi_a, SIZE(sphi_a, 1), cpp, ncoa, 0.0_dp, &
+                    abint, SIZE(abint, 1))
+      END IF
 
       DEALLOCATE (cpp)
 
@@ -226,9 +230,10 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief 3-center contraction routine from primitive cartesian Gaussians to spherical Gaussian
-!>        functions. Exploits LIBXSMM for performance, falls back to BLAS if LIBXSMM is not available.
-!>        Requires pre-allocation of work buffers and pre-transposition of the sphi_a array. Requires
-!>        the LIBXSMM library to be initialized somewhere before this routine is called.
+!>        functions; can use LIBXSMM (falls back to BLAS otherwise).
+!>        Requires pre-transposition of the sphi_a array. The call-side shall DEALLOCATE buffers
+!>        end of scope or after last use. This function ALLOCATEs or grows the work buffers
+!>        as necessary. LIBXSMM may be initialized upfront (elsewhere).
 !> \param abcint contracted integrals
 !> \param sabc uncontracted integrals
 !> \param sphi_a assumed to have dimensions nsgfa x ncoa
@@ -240,44 +245,63 @@ CONTAINS
 !> \param nsgfa ...
 !> \param nsgfb ...
 !> \param nsgfc ...
-!> \param cpp_buffer Temporary buffer used for intermediate results.
-!> \param ccp_buffer Temporary buffer used for intermediate results.
+!> \param cpp_buffer Buffer used for intermediate results (automatically allocated).
+!> \param ccp_buffer Buffer used for intermediate results (automatically allocated).
 !> \param prefac Prefactor which is finally multiplied into abcint.
 !> \note tested from version 1.9.0 of libxsmm
 ! **************************************************************************************************
    SUBROUTINE abc_contract_xsmm(abcint, sabc, sphi_a, sphi_b, sphi_c, ncoa, ncob, ncoc, &
                                 nsgfa, nsgfb, nsgfc, cpp_buffer, ccp_buffer, prefac)
 
-      REAL(KIND=dp), DIMENSION(*)                             :: abcint
-      REAL(KIND=dp), DIMENSION(*), INTENT(IN)                 :: sabc
-      REAL(KIND=dp), DIMENSION(:, :), INTENT(IN)              :: sphi_a, sphi_b, sphi_c
-      INTEGER, INTENT(IN)                                     :: ncoa, ncob, ncoc, nsgfa, nsgfb, nsgfc
-      REAL(KIND=dp), DIMENSION(nsgfa*ncob), INTENT(OUT)       :: cpp_buffer
-      REAL(KIND=dp), DIMENSION(nsgfa*nsgfb*ncoc), INTENT(OUT) :: ccp_buffer
-      REAL(KIND=dp), INTENT(IN), OPTIONAL                     :: prefac
+      REAL(KIND=dp), DIMENSION(*)                 :: abcint
+      REAL(KIND=dp), DIMENSION(*), INTENT(IN)     :: sabc
+      REAL(KIND=dp), DIMENSION(:, :), INTENT(IN)  :: sphi_a, sphi_b, sphi_c
+      INTEGER, INTENT(IN)                         :: ncoa, ncob, ncoc, nsgfa, nsgfb, nsgfc
+      REAL(KIND=dp), DIMENSION(:), ALLOCATABLE    :: cpp_buffer, ccp_buffer
+      REAL(KIND=dp), INTENT(IN), OPTIONAL         :: prefac
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'abc_contract_xsmm'
 
       REAL(KIND=dp)                                           :: alpha
+      INTEGER(KIND=int_8)                                     :: cpp_size, ccp_size
       INTEGER                                                 :: handle, i
-      LOGICAL                                                 :: ab
+      LOGICAL                                                 :: ab_first
 #if defined(__LIBXSMM)
       TYPE(libxsmm_dmmfunction)                               :: xmm1, xmm2
 #endif
-
-      ! M*N*K FLOPS can be used to decide if contracting (AB)C vs A(BC)
-      ! ab = (nsgfa*ncob*(ncoa + nsgfb)) <= (ncoa*nsgfb*(ncob + nsgfa))
-      ! however, current interface dictates size of cpp_buffer
-      ab = (nsgfa*ncob) < (ncoa*nsgfb) .OR. (ncoa + nsgfb) <= (ncob + nsgfa)
 
       CALL timeset(routineN, handle)
 
       alpha = 1.0_dp
       IF (PRESENT(prefac)) alpha = prefac
 
+      ! M*N*K FLOPS are used to decide if contracting (AB)C vs A(BC)
+      IF ((nsgfa*ncob*(ncoa + nsgfb)) <= (ncoa*nsgfb*(ncob + nsgfa))) THEN
+         cpp_size = nsgfa*ncob
+         ab_first = .TRUE.
+      ELSE
+         cpp_size = ncoa*nsgfb
+         ab_first = .FALSE.
+      END IF
+      ccp_size = nsgfa*nsgfb*ncoc
+
+      IF (.NOT. ALLOCATED(ccp_buffer)) THEN
+         ALLOCATE (ccp_buffer(ccp_size))
+      ELSE IF (SIZE(ccp_buffer) < ccp_size) THEN
+         DEALLOCATE (ccp_buffer)
+         ALLOCATE (ccp_buffer(ccp_size))
+      END IF
+
+      IF (.NOT. ALLOCATED(cpp_buffer)) THEN
+         ALLOCATE (cpp_buffer(cpp_size))
+      ELSE IF (SIZE(cpp_buffer) < cpp_size) THEN
+         DEALLOCATE (cpp_buffer)
+         ALLOCATE (cpp_buffer(cpp_size))
+      END IF
+
       ! loop over the last index of the matrix and call LIBXSMM/BLAS to contract over a and b
 #if defined(__LIBXSMM)
-      IF (ab) THEN ! (AB)C: dispatch kernels
+      IF (ab_first) THEN ! (AB)C: dispatch kernels
          CALL libxsmm_dispatch(xmm1, nsgfa, ncob, ncoa, beta=0.0_dp, prefetch=LIBXSMM_PREFETCH_NONE)
          CALL libxsmm_dispatch(xmm2, nsgfa, nsgfb, ncob, beta=0.0_dp, prefetch=LIBXSMM_PREFETCH_NONE)
       ELSE ! A(BC): dispatch kernels
@@ -286,7 +310,7 @@ CONTAINS
       END IF
 
       IF (libxsmm_available(xmm1) .AND. libxsmm_available(xmm2)) THEN
-         IF (ab) THEN ! (AB)C
+         IF (ab_first) THEN ! (AB)C
             DO i = 1, ncoc ! contractions over a and b
                ! [nsgfa,ncoa] x [ncoa,ncob] -> [nsgfa,ncob]
                CALL libxsmm_dmmcall(xmm1, sphi_a, sabc((i - 1)*ncoa*ncob + 1), cpp_buffer)
@@ -303,7 +327,7 @@ CONTAINS
          END IF
       ELSE
 #endif
-         IF (ab) THEN ! (AB)C
+         IF (ab_first) THEN ! (AB)C
             DO i = 1, ncoc ! contractions over a and b
                CALL dgemm("N", "N", nsgfa, ncob, ncoa, 1.0_dp, sphi_a, nsgfa, sabc((i - 1)*ncoa*ncob + 1), &
                           ncoa, 0.0_dp, cpp_buffer, nsgfa)
