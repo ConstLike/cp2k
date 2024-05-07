@@ -110,7 +110,7 @@ CONTAINS
                                                             my_adiabatic_rescale_factor, tau_cut
       REAL(dp), DIMENSION(1, 1, 1)                       :: tau_d
       REAL(dp), DIMENSION(1, 1, 1, 1)                    :: rho_d
-      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight
+      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight, work
       REAL(dp), DIMENSION(:, :, :), POINTER              :: rho_h, rho_s, tau_h, tau_s, vtau_h, &
                                                             vtau_s, vxc_h, vxc_s
       REAL(dp), DIMENSION(:, :, :, :), POINTER           :: drho_h, drho_s, vxg_h, vxg_s
@@ -210,7 +210,7 @@ CONTAINS
          exc1 = 0.0_dp
 
          ! Nullify some pointers for work-arrays
-         NULLIFY (rho_h, drho_h, rho_s, drho_s, weight)
+         NULLIFY (rho_h, drho_h, rho_s, drho_s, weight, work)
          NULLIFY (vxc_h, vxc_s, vxg_h, vxg_s)
          NULLIFY (tau_h, tau_s)
          NULLIFY (vtau_h, vtau_s)
@@ -260,6 +260,7 @@ CONTAINS
                CALL reallocate(drho_s, 1, 4, 1, na, 1, nr, 1, nspins)
                CALL reallocate(vxg_h, 1, 3, 1, na, 1, nr, 1, nspins)
                CALL reallocate(vxg_s, 1, 3, 1, na, 1, nr, 1, nspins)
+               CALL reallocate(work, 1, na, 1, harmonics%max_iso_not0)
             END IF
 
             IF (tau_f) THEN
@@ -311,10 +312,10 @@ CONTAINS
                   tau_d = 0.0_dp
                END IF
 
+               CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_f, &
+                                     r_h, r_s, rho_h, rho_s, dr_h, dr_s, &
+                                     r_h_d, r_s_d, drho_h, drho_s, work)
                DO ir = 1, nr
-                  CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_f, &
-                                        ir, r_h, r_s, rho_h, rho_s, dr_h, dr_s, &
-                                        r_h_d, r_s_d, drho_h, drho_s)
                   IF (donlcc) THEN
                      CALL calc_rho_nlcc(grid_atom, nspins, gradient_f, &
                                         ir, rho_nlcc(:, 1), rho_h, rho_s, rho_nlcc(:, 2), drho_h, drho_s)
@@ -413,6 +414,7 @@ CONTAINS
             IF (ASSOCIATED(drho_s)) DEALLOCATE (drho_s)
             IF (ASSOCIATED(vxg_h)) DEALLOCATE (vxg_h)
             IF (ASSOCIATED(vxg_s)) DEALLOCATE (vxg_s)
+            IF (ASSOCIATED(work)) DEALLOCATE (work)
          END IF
 
          IF (tau_f) THEN
@@ -466,7 +468,7 @@ CONTAINS
          POINTER                                         :: vxc_h, vxc_s
       REAL(KIND=dp), DIMENSION(1, 1, 1)                  :: rtau
       REAL(KIND=dp), DIMENSION(1, 1, 1, 1)               :: rrho
-      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: weight
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: weight, work
       REAL(KIND=dp), DIMENSION(:, :, :), POINTER         :: rho1_h, rho1_s, rho_h, rho_s, tau1_h, &
                                                             tau1_s, tau_h, tau_s
       REAL(KIND=dp), DIMENSION(:, :, :, :), POINTER      :: drho1_h, drho1_s, drho_h, drho_s, vxg_h, &
@@ -491,7 +493,7 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       NULLIFY (qs_kind_set)
-      NULLIFY (rho_h, rho_s, drho_h, drho_s, weight)
+      NULLIFY (rho_h, rho_s, drho_h, drho_s, weight, work)
       NULLIFY (rho1_h, rho1_s, drho1_h, drho1_s)
       NULLIFY (vxc_h, vxc_s, vxg_h, vxg_s)
       NULLIFY (tau_h, tau_s, tau1_h, tau1_s)
@@ -613,7 +615,8 @@ CONTAINS
 
          IF (gradient_functional) THEN
             ALLOCATE (drho_h(1:4, 1:na, 1:nr, 1:nspins), drho1_h(1:4, 1:na, 1:nr, 1:nspins), &
-                      drho_s(1:4, 1:na, 1:nr, 1:nspins), drho1_s(1:4, 1:na, 1:nr, 1:nspins))
+                      drho_s(1:4, 1:na, 1:nr, 1:nspins), drho1_s(1:4, 1:na, 1:nr, 1:nspins), &
+                      work(na, harmonics%max_iso_not0))
             ALLOCATE (vxg_h(1:3, 1:na, 1:nr, 1:nspins), vxg_s(1:3, 1:na, 1:nr, 1:nspins))
          ELSE
             ALLOCATE (drho_h(1, 1, 1, 1), drho1_h(1, 1, 1, 1), &
@@ -663,14 +666,12 @@ CONTAINS
 
             rtot = 0.0_dp
 
-            DO ir = 1, nr
-               CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_functional, &
-                                     ir, r_h, r_s, rho_h, rho_s, dr_h, dr_s, r_h_d, r_s_d, &
-                                     drho_h, drho_s)
-               CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_functional, &
-                                     ir, r1_h, r1_s, rho1_h, rho1_s, dr1_h, dr1_s, r1_h_d, r1_s_d, &
-                                     drho1_h, drho1_s)
-            END DO
+            CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_functional, &
+                                  r_h, r_s, rho_h, rho_s, dr_h, dr_s, r_h_d, r_s_d, &
+                                  drho_h, drho_s, work)
+            CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_functional, &
+                                  r1_h, r1_s, rho1_h, rho1_s, dr1_h, dr1_s, r1_h_d, r1_s_d, &
+                                  drho1_h, drho1_s, work)
             IF (scale_rho) THEN
                rho_h = 2.0_dp*rho_h
                rho_s = 2.0_dp*rho_s
@@ -775,7 +776,7 @@ CONTAINS
                                                             gradient_cut, oeps1, oeps2, tau_cut
       REAL(dp), DIMENSION(1, 1, 1)                       :: tau_d
       REAL(dp), DIMENSION(1, 1, 1, 1)                    :: rho_d
-      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight
+      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight, work
       REAL(dp), DIMENSION(:, :, :), POINTER              :: rho0_h, rho0_s, rho1_h, rho1_s, rho_h, &
                                                             rho_s, tau0_h, tau0_s, tau1_h, tau1_s, &
                                                             tau_h, tau_s, vtau_h, vtau_s, vxc_h, &
@@ -891,7 +892,8 @@ CONTAINS
             IF (gradient_f) THEN
                ALLOCATE (drho_h(4, na, nr, mspins), drho_s(4, na, nr, mspins), &
                          drho0_h(4, na, nr, nspins), drho0_s(4, na, nr, nspins), &
-                         drho1_h(4, na, nr, nspins), drho1_s(4, na, nr, nspins))
+                         drho1_h(4, na, nr, nspins), drho1_s(4, na, nr, nspins), &
+                         work(1:na, 1:harmonics%max_iso_not0))
                ALLOCATE (vxg_h(3, na, nr, mspins), vxg_s(3, na, nr, mspins))
             END IF
             IF (tau_f) THEN
@@ -942,10 +944,10 @@ CONTAINS
                   CALL get_rho_atom(rho_atom=rho0_atom, rho_rad_h=r_h, rho_rad_s=r_s)
                   rho_d = 0.0_dp
                END IF
+               CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_f, &
+                                     r_h, r_s, rho0_h, rho0_s, dr_h, dr_s, &
+                                     r_h_d, r_s_d, drho0_h, drho0_s, work)
                DO ir = 1, nr
-                  CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_f, &
-                                        ir, r_h, r_s, rho0_h, rho0_s, dr_h, dr_s, &
-                                        r_h_d, r_s_d, drho0_h, drho0_s)
                   IF (donlcc) THEN
                      CALL calc_rho_nlcc(grid_atom, nspins, gradient_f, &
                                         ir, rho_nlcc(:, 1), rho0_h, rho0_s, rho_nlcc(:, 2), drho0_h, drho0_s)
@@ -971,11 +973,9 @@ CONTAINS
                   NULLIFY (r_h, r_s)
                   CALL get_rho_atom(rho_atom=rho1_atom, rho_rad_h=r_h, rho_rad_s=r_s)
                END IF
-               DO ir = 1, nr
-                  CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_f, &
-                                        ir, r_h, r_s, rho1_h, rho1_s, dr_h, dr_s, &
-                                        r_h_d, r_s_d, drho1_h, drho1_s)
-               END DO
+               CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_f, &
+                                     r_h, r_s, rho1_h, rho1_s, dr_h, dr_s, &
+                                     r_h_d, r_s_d, drho1_h, drho1_s, work)
                IF (tau_f) THEN
                   !compute tau on the grid all at once
                   CALL calc_tau_atom(tau1_h, tau1_s, rho1_atom, kind_set(ikind), nspins)
@@ -1176,7 +1176,7 @@ CONTAINS
       REAL(dp), CONTIGUOUS, DIMENSION(:, :, :), POINTER  :: vxc_h, vxc_s
       REAL(dp), DIMENSION(1, 1, 1)                       :: tau_d
       REAL(dp), DIMENSION(1, 1, 1, 1)                    :: rho_d
-      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight
+      REAL(dp), DIMENSION(:, :), POINTER                 :: rho_nlcc, weight, work
       REAL(dp), DIMENSION(:, :, :), POINTER              :: rho0_h, rho0_s, rho1_h, rho1_s, rho_h, &
                                                             rho_s, tau0_h, tau0_s, tau1_h, tau1_s, &
                                                             tau_h, tau_s, vtau_h, vtau_s
@@ -1200,6 +1200,7 @@ CONTAINS
                                                             rho_set_s
 
       CALL timeset(routineN, handle)
+
 
       ak = 0.0_dp
       SELECT CASE (accuracy)
@@ -1296,7 +1297,8 @@ CONTAINS
             IF (gradient_f) THEN
                ALLOCATE (drho_h(4, na, nr, nspins), drho_s(4, na, nr, nspins), &
                          drho0_h(4, na, nr, nspins), drho0_s(4, na, nr, nspins), &
-                         drho1_h(4, na, nr, nspins), drho1_s(4, na, nr, nspins))
+                         drho1_h(4, na, nr, nspins), drho1_s(4, na, nr, nspins), &
+                         work(na, harmonics%max_iso_not0))
                ALLOCATE (vxg_h(3, na, nr, nspins), vxg_s(3, na, nr, nspins))
             END IF
             IF (tau_f) THEN
@@ -1347,10 +1349,10 @@ CONTAINS
                   CALL get_rho_atom(rho_atom=rho0_atom, rho_rad_h=r_h, rho_rad_s=r_s)
                   rho_d = 0.0_dp
                END IF
+               CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_f, &
+                                     r_h, r_s, rho0_h, rho0_s, dr_h, dr_s, &
+                                     r_h_d, r_s_d, drho0_h, drho0_s, work)
                DO ir = 1, nr
-                  CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_f, &
-                                        ir, r_h, r_s, rho0_h, rho0_s, dr_h, dr_s, &
-                                        r_h_d, r_s_d, drho0_h, drho0_s)
                   IF (donlcc) THEN
                      CALL calc_rho_nlcc(grid_atom, nspins, gradient_f, &
                                         ir, rho_nlcc(:, 1), rho0_h, rho0_s, rho_nlcc(:, 2), drho0_h, drho0_s)
@@ -1376,11 +1378,9 @@ CONTAINS
                   NULLIFY (r_h, r_s)
                   CALL get_rho_atom(rho_atom=rho1_atom, rho_rad_h=r_h, rho_rad_s=r_s)
                END IF
-               DO ir = 1, nr
-                  CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_f, &
-                                        ir, r_h, r_s, rho1_h, rho1_s, dr_h, dr_s, &
-                                        r_h_d, r_s_d, drho1_h, drho1_s)
-               END DO
+               CALL calc_rho_angular(grid_atom, harmonics, nspins, gradient_f, &
+                                     r_h, r_s, rho1_h, rho1_s, dr_h, dr_s, &
+                                     r_h_d, r_s_d, drho1_h, drho1_s, work)
                IF (tau_f) THEN
                   !compute tau on the grid all at once
                   CALL calc_tau_atom(tau1_h, tau1_s, rho1_atom, kind_set(ikind), nspins)
@@ -1532,107 +1532,86 @@ CONTAINS
 !> \param drho_s ...
 ! **************************************************************************************************
    SUBROUTINE calc_rho_angular(grid_atom, harmonics, nspins, grad_func, &
-                               ir, r_h, r_s, rho_h, rho_s, &
-                               dr_h, dr_s, r_h_d, r_s_d, drho_h, drho_s)
+                               r_h, r_s, rho_h, rho_s, &
+                               dr_h, dr_s, r_h_d, r_s_d, drho_h, drho_s, &
+                               work)
 
       TYPE(grid_atom_type), POINTER                      :: grid_atom
       TYPE(harmonics_atom_type), POINTER                 :: harmonics
       INTEGER, INTENT(IN)                                :: nspins
       LOGICAL, INTENT(IN)                                :: grad_func
-      INTEGER, INTENT(IN)                                :: ir
       TYPE(rho_atom_coeff), DIMENSION(:), POINTER        :: r_h, r_s
       REAL(KIND=dp), DIMENSION(:, :, :), POINTER         :: rho_h, rho_s
       TYPE(rho_atom_coeff), DIMENSION(:), POINTER        :: dr_h, dr_s
       TYPE(rho_atom_coeff), DIMENSION(:, :), POINTER     :: r_h_d, r_s_d
       REAL(KIND=dp), DIMENSION(:, :, :, :), POINTER      :: drho_h, drho_s
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: work
 
-      INTEGER                                            :: ia, iso, ispin, na
+      INTEGER                                            :: ia, iso, ispin, na, ir, nr, nso, dir
       REAL(KIND=dp)                                      :: rad, urad
 
       CPASSERT(ASSOCIATED(r_h))
       CPASSERT(ASSOCIATED(r_s))
       CPASSERT(ASSOCIATED(rho_h))
       CPASSERT(ASSOCIATED(rho_s))
-      IF (grad_func) THEN
-         CPASSERT(ASSOCIATED(dr_h))
-         CPASSERT(ASSOCIATED(dr_s))
-         CPASSERT(ASSOCIATED(r_h_d))
-         CPASSERT(ASSOCIATED(r_s_d))
-         CPASSERT(ASSOCIATED(drho_h))
-         CPASSERT(ASSOCIATED(drho_s))
-      END IF
 
+      nr = grid_atom%nr
       na = grid_atom%ng_sphere
       rad = grid_atom%rad(ir)
       urad = grid_atom%oorad2l(ir, 1)
+      nso = harmonics%max_iso_not0
       DO ispin = 1, nspins
-         DO iso = 1, harmonics%max_iso_not0
-            DO ia = 1, na
-               rho_h(ia, ir, ispin) = rho_h(ia, ir, ispin) + &
-                                      r_h(ispin)%r_coef(ir, iso)*harmonics%slm(ia, iso)
-               rho_s(ia, ir, ispin) = rho_s(ia, ir, ispin) + &
-                                      r_s(ispin)%r_coef(ir, iso)*harmonics%slm(ia, iso)
-            END DO ! ia
-         END DO ! iso
+         CALL DGEMM('N', 'T', na, nr, nso, &
+                    1.0_dp, harmonics%slm, na, &
+                            r_h(ispin)%r_coef, nr, &
+                    1.0_dp, rho_h(:,:,ispin), na)
+         CALL DGEMM('N', 'T', na, nr, nso, &
+                    1.0_dp, harmonics%slm, na, &
+                            r_s(ispin)%r_coef, nr, &
+                    1.0_dp, rho_s(:,:,ispin), na)
       END DO ! ispin
 
-      IF (grad_func) THEN
-         DO ispin = 1, nspins
-            DO iso = 1, harmonics%max_iso_not0
-               DO ia = 1, na
+      IF (.NOT.grad_func) RETURN
 
-                  ! components of the gradient of rho1 hard
-                  drho_h(1, ia, ir, ispin) = drho_h(1, ia, ir, ispin) + &
-                                             dr_h(ispin)%r_coef(ir, iso)* &
-                                             harmonics%a(1, ia)*harmonics%slm(ia, iso) + &
-                                             r_h_d(1, ispin)%r_coef(ir, iso)* &
-                                             harmonics%slm(ia, iso)
+      CPASSERT(ASSOCIATED(dr_h))
+      CPASSERT(ASSOCIATED(dr_s))
+      CPASSERT(ASSOCIATED(r_h_d))
+      CPASSERT(ASSOCIATED(r_s_d))
+      CPASSERT(ASSOCIATED(drho_h))
+      CPASSERT(ASSOCIATED(drho_s))
+      CPASSERT(ASSOCIATED(work))
 
-                  drho_h(2, ia, ir, ispin) = drho_h(2, ia, ir, ispin) + &
-                                             dr_h(ispin)%r_coef(ir, iso)* &
-                                             harmonics%a(2, ia)*harmonics%slm(ia, iso) + &
-                                             r_h_d(2, ispin)%r_coef(ir, iso)* &
-                                             harmonics%slm(ia, iso)
-
-                  drho_h(3, ia, ir, ispin) = drho_h(3, ia, ir, ispin) + &
-                                             dr_h(ispin)%r_coef(ir, iso)* &
-                                             harmonics%a(3, ia)*harmonics%slm(ia, iso) + &
-                                             r_h_d(3, ispin)%r_coef(ir, iso)* &
-                                             harmonics%slm(ia, iso)
-
-                  ! components of the gradient of rho1 soft
-                  drho_s(1, ia, ir, ispin) = drho_s(1, ia, ir, ispin) + &
-                                             dr_s(ispin)%r_coef(ir, iso)* &
-                                             harmonics%a(1, ia)*harmonics%slm(ia, iso) + &
-                                             r_s_d(1, ispin)%r_coef(ir, iso)* &
-                                             harmonics%slm(ia, iso)
-
-                  drho_s(2, ia, ir, ispin) = drho_s(2, ia, ir, ispin) + &
-                                             dr_s(ispin)%r_coef(ir, iso)* &
-                                             harmonics%a(2, ia)*harmonics%slm(ia, iso) + &
-                                             r_s_d(2, ispin)%r_coef(ir, iso)* &
-                                             harmonics%slm(ia, iso)
-
-                  drho_s(3, ia, ir, ispin) = drho_s(3, ia, ir, ispin) + &
-                                             dr_s(ispin)%r_coef(ir, iso)* &
-                                             harmonics%a(3, ia)*harmonics%slm(ia, iso) + &
-                                             r_s_d(3, ispin)%r_coef(ir, iso)* &
-                                             harmonics%slm(ia, iso)
-
-                  drho_h(4, ia, ir, ispin) = SQRT( &
-                                             drho_h(1, ia, ir, ispin)*drho_h(1, ia, ir, ispin) + &
-                                             drho_h(2, ia, ir, ispin)*drho_h(2, ia, ir, ispin) + &
-                                             drho_h(3, ia, ir, ispin)*drho_h(3, ia, ir, ispin))
-
-                  drho_s(4, ia, ir, ispin) = SQRT( &
-                                             drho_s(1, ia, ir, ispin)*drho_s(1, ia, ir, ispin) + &
-                                             drho_s(2, ia, ir, ispin)*drho_s(2, ia, ir, ispin) + &
-                                             drho_s(3, ia, ir, ispin)*drho_s(3, ia, ir, ispin))
-
-               END DO ! ia
-            END DO ! iso
-         END DO ! ispin
-      END IF
+      do ispin = 1, nspins
+         do dir = 1, 3
+            do iso = 1, nso
+               work(:, iso) = harmonics%a(dir, :)*harmonics%slm(:, iso)
+            end do
+            call dgemm('n', 't', na, nr, nso, &
+                         1.0_dp, work, na, &
+                                 dr_h(ispin)%r_coef, nr, &
+                         1.0_dp, drho_h(dir,:,:,ispin), nr)
+            call dgemm('n', 't', na, nr, nso, &
+                         1.0_dp, harmonics%slm, na, &
+                                 r_h_d(dir, ispin)%r_coef, nr, &
+                         1.0_dp, drho_h(dir,:,:,ispin), nr)
+            call dgemm('n', 't', na, nr, nso, &
+                         1.0_dp, work, na, &
+                                 dr_s(ispin)%r_coef, nr, &
+                         1.0_dp, drho_s(dir,:,:,ispin), nr)
+            call dgemm('n', 't', na, nr, nso, &
+                         1.0_dp, harmonics%slm, na, &
+                                 r_s_d(dir, ispin)%r_coef, nr, &
+                         1.0_dp, drho_s(dir,:,:,ispin), nr)
+         end do ! dir
+      end do ! ispin
+      drho_h(4, :, :, :) = sqrt( &
+                               drho_h(1, :, :, :)*drho_h(1, :, :, :) + &
+                               drho_h(2, :, :, :)*drho_h(2, :, :, :) + &
+                               drho_h(3, :, :, :)*drho_h(3, :, :, :))
+      drho_s(4, :, :, :) = sqrt( &
+                               drho_s(1, :, :, :)*drho_s(1, :, :, :) + &
+                               drho_s(2, :, :, :)*drho_s(2, :, :, :) + &
+                               drho_s(3, :, :, :)*drho_s(3, :, :, :))
 
    END SUBROUTINE calc_rho_angular
 

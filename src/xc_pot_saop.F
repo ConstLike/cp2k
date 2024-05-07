@@ -499,7 +499,7 @@ CONTAINS
       REAL(KIND=dp)                                      :: density_cut, efac, exc, gradient_cut, &
                                                             tau_cut, we_GLLB, we_LB
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: coeff_col
-      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: weight
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: weight, work
       REAL(KIND=dp), DIMENSION(:, :, :), POINTER :: dummy, e_uniform, rho_h, rho_s, vtau, &
          vxc_GLLB_h, vxc_GLLB_s, vxc_LB_h, vxc_LB_s, vxc_SAOP_h, vxc_SAOP_s, vxc_tmp_h, vxc_tmp_s
       REAL(KIND=dp), DIMENSION(:, :, :, :), POINTER      :: drho_h, drho_s, vxg
@@ -541,7 +541,7 @@ CONTAINS
                harmonics, molecular_orbitals, rho_structure, r_h, r_s, dr_h, dr_s, &
                r_h_d, r_s_d, rho_atom_set, rho_atom, para_env, &
                mo_eigenvalues, local_rho_set, matrix_ks, &
-               orbital_density_matrix, vxc_SAOP_h, vxc_SAOP_s)
+               orbital_density_matrix, vxc_SAOP_h, vxc_SAOP_s, work)
 
       ! tau is needed for fill_rho_set, but should never be used
       NULLIFY (tau)
@@ -652,7 +652,7 @@ CONTAINS
          CALL xc_rho_set_atom_update(orb_rho_set_s, needs, nspins, bounds)
 
          ALLOCATE (rho_h(1:na, 1:nr, 1:nspins), rho_s(1:na, 1:nr, 1:nspins))
-         ALLOCATE (weight(1:na, 1:nr))
+         ALLOCATE (weight(1:na, 1:nr), work(na, harmonics%max_iso_not0))
          ALLOCATE (vxc_LB_h(1:na, 1:nr, 1:nspins), vxc_LB_s(1:na, 1:nr, 1:nspins))
          ALLOCATE (vxc_GLLB_h(1:na, 1:nr, 1:nspins), vxc_GLLB_s(1:na, 1:nr, 1:nspins))
          ALLOCATE (vxc_tmp_h(1:na, 1:nr, 1:nspins), vxc_tmp_s(1:na, 1:nr, 1:nspins))
@@ -675,11 +675,10 @@ CONTAINS
             rho_s = 0.0_dp
             drho_h = 0.0_dp
             drho_s = 0.0_dp
-            DO ir = 1, nr
-               CALL calc_rho_angular(atomic_grid, harmonics, nspins, .TRUE., &
-                                     ir, r_h, r_s, rho_h, rho_s, &
-                                     dr_h, dr_s, r_h_d, r_s_d, drho_h, drho_s)
-            END DO
+            CALL calc_rho_angular(atomic_grid, harmonics, nspins, .TRUE., &
+                                  r_h, r_s, rho_h, rho_s, &
+                                  dr_h, dr_s, r_h_d, r_s_d, &
+                                  drho_h, drho_s, work)
             DO ir = 1, nr
                CALL fill_rho_set(rho_set_h, lsd, nspins, needs, rho_h, drho_h, tau, na, ir)
                CALL fill_rho_set(rho_set_s, lsd, nspins, needs, rho_s, drho_s, tau, na, ir)
@@ -816,11 +815,10 @@ CONTAINS
                   rho_s = 0.0_dp
                   drho_h = 0.0_dp
                   drho_s = 0.0_dp
-                  DO ir = 1, nr
-                     CALL calc_rho_angular(atomic_grid, harmonics, nspins, .FALSE., &
-                                           ir, r_h, r_s, rho_h, rho_s, &
-                                           dr_h, dr_s, r_h_d, r_s_d, drho_h, drho_s)
-                  END DO
+                  CALL calc_rho_angular(atomic_grid, harmonics, nspins, .FALSE., &
+                                        r_h, r_s, rho_h, rho_s, &
+                                        dr_h, dr_s, r_h_d, r_s_d, &
+                                        drho_h, drho_s, work)
                   DO ir = 1, nr
                      CALL fill_rho_set(orb_rho_set_h, lsd, nspins, needs_orbs, rho_h, drho_h, tau, na, ir)
                      CALL fill_rho_set(orb_rho_set_s, lsd, nspins, needs_orbs, rho_s, drho_s, tau, na, ir)
@@ -923,11 +921,10 @@ CONTAINS
                   rho_s = 0.0_dp
                   drho_h = 0.0_dp
                   drho_s = 0.0_dp
-                  DO ir = 1, nr
-                     CALL calc_rho_angular(atomic_grid, harmonics, nspins, .FALSE., &
-                                           ir, r_h, r_s, rho_h, rho_s, &
-                                           dr_h, dr_s, r_h_d, r_s_d, drho_h, drho_s)
-                  END DO
+                  CALL calc_rho_angular(atomic_grid, harmonics, nspins, .FALSE., &
+                                        r_h, r_s, rho_h, rho_s, &
+                                        dr_h, dr_s, r_h_d, r_s_d, &
+                                        drho_h, drho_s, work)
                   DO ir = 1, nr
                      CALL fill_rho_set(orb_rho_set_h, lsd, nspins, needs_orbs, rho_h, drho_h, tau, na, ir)
                      CALL fill_rho_set(orb_rho_set_s, lsd, nspins, needs_orbs, rho_s, drho_s, tau, na, ir)
