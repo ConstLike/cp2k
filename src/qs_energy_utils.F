@@ -82,7 +82,8 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Refactoring of qs_energies_scf. Moves computation of properties
-!>        into separate subroutine
+!>        into separate subroutine. Calculates energy and if calc_forces then the responce vector
+!>        and some contributions to the force
 !> \param qs_env ...
 !> \param calc_forces ...
 !> \par History
@@ -148,7 +149,7 @@ CONTAINS
          atprop%atener(:) = atprop%atener(:) + ekts
       END IF
 
-      ! ET coupling - projection-operator approach
+      ! Electron Transfer (ET) coupling - projection-operator approach
       NULLIFY (proj_section)
       proj_section => &
          section_vals_get_subs_vals(input, "PROPERTIES%ET_COUPLING%PROJECTION")
@@ -157,7 +158,7 @@ CONTAINS
          CALL calc_et_coupling_proj(qs_env)
       END IF
 
-      ! **********  Calculate the electron transfer coupling elements********
+      ! **********  Calculate the  coupling elements********
       do_et = .FALSE.
       do_et = dft_control%qs_control%et_coupling_calc
       IF (do_et) THEN
@@ -188,10 +189,11 @@ CONTAINS
       END IF
 
       ! Compute Linear Response properties as post-scf
+      ! Initialize TDDFT calculation
       IF (.NOT. qs_env%linres_run) THEN
          CALL linres_calculation_low(qs_env)
       END IF
-
+      ! Calculation the energy, responce vector and some contributions to the force
       IF (dft_control%tddfpt2_control%enabled) THEN
          CALL tddfpt(qs_env, calc_forces)
       END IF

@@ -1013,11 +1013,15 @@ CONTAINS
 
       DO istate = 1, nstates
          IF (ASSOCIATED(evects(1, istate)%matrix_struct)) THEN
+            ! Initialize guess read from restart file
             IF (log_unit > 0) &
                WRITE (log_unit, '(T7,I8,T28,A19,T60,F14.5)') &
                istate, "***  restarted  ***", evals(istate)*evolt
          ELSE
+            ! New initial guess vector
+            ! Index of excited state - 1
             ind = inds(istate) - 1
+            ! Labels and spin component
             IF (nspins > 1) THEN
                IF (ind < nstates_occ_virt_alpha) THEN
                   ispin = 1
@@ -1029,8 +1033,11 @@ CONTAINS
                END IF
             END IF
 
+            ! Recover index of occupied MO (imo_occ) and unoccupied MO (imo_virt)
+            ! associated t othe excited state index (ind+1)
             imo_occ = nmo_occ_avail(ispin) - ind/nmo_virt_selected(ispin)
             imo_virt = MOD(ind, nmo_virt_selected(ispin)) + 1
+            ! Assign initial guess for the excitation energy
             evals(istate) = e_virt_minus_occ(istate)
 
             IF (log_unit > 0) &
@@ -1041,7 +1048,8 @@ CONTAINS
                ! .NOT. ASSOCIATED(evects(jspin, istate)%matrix_struct))
                CALL cp_fm_create(evects(jspin, istate), fm_struct_evects(jspin)%struct)
                CALL cp_fm_set_all(evects(jspin, istate), 0.0_dp)
-
+               ! Half transform excitation vector to ao space
+               ! evects_mi = C_ma*X_ai
                IF (jspin == ispin) &
                   CALL cp_fm_to_fm(gs_mos(ispin)%mos_virt, evects(ispin, istate), &
                                    ncol=1, source_start=imo_virt, target_start=imo_occ)
@@ -1050,7 +1058,7 @@ CONTAINS
       END DO
 
       IF (log_unit > 0) THEN
-         WRITE (log_unit, '(/,T7,A,T50,I24)') 'Number of active states:', tddfpt_total_number_of_states(gs_mos)
+         WRITE (log_unit, '(/,T7,A,T50,I24)') 'Total Number of active states:', tddfpt_total_number_of_states(gs_mos)
          WRITE (log_unit, "(1X,A)") &
             "-------------------------------------------------------------------------------"
       END IF

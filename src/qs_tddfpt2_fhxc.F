@@ -154,6 +154,7 @@ CONTAINS
       END IF
 
       DO ivect = 1, nvects
+         ! Transform TDDFT vectors to AO space and store them into rho_ai_oa
          IF (ALLOCATED(work_matrices%evects_sub)) THEN
             IF (ASSOCIATED(work_matrices%evects_sub(1, ivect)%matrix_struct)) THEN
                DO ispin = 1, nspins
@@ -168,6 +169,7 @@ CONTAINS
                CYCLE
             END IF
          ELSE
+            !kk: do Eq. 17 for each Xvec (see J. Chem. Theory Comput. 2022, 18, 4186−4202)
             DO ispin = 1, nspins
                CALL dbcsr_set(rho_ia_ao(ispin)%matrix, 0.0_dp)
                CALL cp_dbcsr_plus_fm_fm_t(rho_ia_ao(ispin)%matrix, &

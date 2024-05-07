@@ -572,6 +572,7 @@ CONTAINS
                END IF
             END DO
 
+            !kk: ERI contaction
             CALL tddft_hfx_matrix(work_hmat_symm, work_rho_ia_ao_symm, qs_env)
 
             IF (do_admm) THEN

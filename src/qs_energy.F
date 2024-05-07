@@ -93,6 +93,8 @@ CONTAINS
          CALL get_qs_env(qs_env=qs_env, dft_control=dft_control, energy=energy)
 
          ! *** check if only overlap matrix is needed for couplings
+         !kk: It is related to the computation of the overlap matrix
+         !kk: between two consecutive time steps
          loverlap_deltat = .FALSE.
          NULLIFY (excited_state_section)
          excited_state_section => section_vals_get_subs_vals(qs_env%input, "DFT%EXCITED_STATES")
@@ -137,8 +139,11 @@ CONTAINS
          END IF
 
          IF (.NOT. loverlap_deltat) THEN
+            !kk: It involves solving Casida's equations, AX = wX, in the case of tddft
             CALL qs_energies_properties(qs_env, calc_forces)
 
+            !kk: Simply print excited state energy for the target state
+            !kk: if it is tddfpt force calculation
             CALL excited_state_energy(qs_env, calculate_forces=.FALSE.)
          END IF
 

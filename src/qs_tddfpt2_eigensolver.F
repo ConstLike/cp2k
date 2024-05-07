@@ -170,7 +170,7 @@ CONTAINS
          CALL cp_fm_create(aortho, matrix_struct_tmp)
          CALL cp_fm_struct_release(matrix_struct_tmp)
          DO ivect = 1, nvects
-            ! aortho = S_0^T * S * C_1
+            ! aortho = S_C0^T * S * C_1
             CALL parallel_gemm('T', 'N', nocc, nactive, nao, 1.0_dp, S_C0(ispin), &
                                evects(ispin, ivect), 0.0_dp, aortho)
             CALL cp_fm_maxabsval(aortho, maxabs_val)
@@ -252,7 +252,7 @@ CONTAINS
       END DO
 
       DO jvect = nvects_old + 1, nvects_total
-         ! <psi1_i | psi1_j>
+         ! Orthogonalization <psi1_i | psi1_j>
          DO ivect = 1, jvect - 1
             CALL cp_fm_trace(evects(:, jvect), S_evects(:, ivect), weights(1:nspins), accurate=.FALSE.)
             norm = SUM(weights(1:nspins))
@@ -262,7 +262,7 @@ CONTAINS
             END DO
          END DO
 
-         ! <psi1_j | psi1_j>
+         ! Normolization <psi1_j | psi1_j> = 1
          DO ispin = 1, nspins
             CALL cp_dbcsr_sm_fm_multiply(matrix_s, evects(ispin, jvect), S_evects(ispin, jvect), &
                                          ncol=nactive(ispin), alpha=1.0_dp, beta=0.0_dp)
@@ -357,17 +357,17 @@ CONTAINS
             DO ivect = 1, nvects
                DO ispin = 1, nspins
                   ASSOCIATE (evect => evects(ispin, ivect), work_matrix => work_matrices%evects_sub(ispin, ivect))
-                  IF (ASSOCIATED(evect%matrix_struct)) THEN
-                  IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
-                     CALL cp_fm_copy_general(evect, work_matrix, para_env)
-                  ELSE
-                     CALL cp_fm_copy_general(evect, fm_dummy, para_env)
-                  END IF
-                  ELSE IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
-                  CALL cp_fm_copy_general(fm_dummy, work_matrix, para_env)
-                  ELSE
-                  CALL cp_fm_copy_general(fm_dummy, fm_dummy, para_env)
-                  END IF
+                     IF (ASSOCIATED(evect%matrix_struct)) THEN
+                        IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
+                           CALL cp_fm_copy_general(evect, work_matrix, para_env)
+                        ELSE
+                           CALL cp_fm_copy_general(evect, fm_dummy, para_env)
+                        END IF
+                     ELSE IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
+                        CALL cp_fm_copy_general(fm_dummy, work_matrix, para_env)
+                     ELSE
+                        CALL cp_fm_copy_general(fm_dummy, fm_dummy, para_env)
+                     END IF
                   END ASSOCIATE
                END DO
             END DO
@@ -375,6 +375,7 @@ CONTAINS
 
          IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
             ! full TDDFPT kernel
+            !kk: we use only symmetric matrix D^x
             CALL fhxc_kernel(Aop_evects, evects, is_rks_triplets, do_hfx, do_admm, qs_env, &
                              kernel_env%full_kernel, kernel_env_admm_aux, sub_env, work_matrices, &
                              tddfpt_control%admm_symm, tddfpt_control%admm_xc_correction, &
@@ -495,7 +496,7 @@ CONTAINS
 !> \param evals            Ritz eigenvalues (initialised on exit)
 !> \param krylov_vects     Krylov's vectors
 !> \param Aop_krylov       action of TDDFPT operator on Krylov's vectors
-!> \param Atilde ...
+!> \param Atilde           TDDFPT matrix projected into the Krylov's vectors subspace
 !> \param nkvo ...
 !> \param nkvn ...
 !> \par History
@@ -665,7 +666,7 @@ CONTAINS
                !
                CALL parallel_gemm('T', 'N', nmo_virt(ispin), nactive(ispin), nao, 1.0_dp, gs_mos(ispin)%mos_virt, &
                                   awork(ispin), 0.0_dp, vomat(ispin))
-
+               ! Apply Davidson preconditioner to the residue vectors vomat to obtain new directions
                DO icol_local = 1, ncols_local
                   e_occ_plus_lambda = gs_mos(ispin)%evals_occ(col_indices_local(icol_local)) + lambda
 
@@ -804,6 +805,7 @@ CONTAINS
          ! davidson iteration
          CALL cp_iterate(logger%iter_info, iter_nr_out=iter)
 
+         ! Matrix-vector operations, applying TDDFPT operator
          CALL tddfpt_compute_Aop_evects(Aop_evects=Aop_krylov(:, nvects_exist + 1:nvects_exist + nvects_new), &
                                         evects=krylov_vects(:, nvects_exist + 1:nvects_exist + nvects_new), &
                                         S_evects=S_krylov(:, nvects_exist + 1:nvects_exist + nvects_new), &

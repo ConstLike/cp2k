@@ -141,9 +141,12 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Perform TDDFPT gradient calculation.
+!>        This routine colculates the responce vector R of Eq. 49 in JCTC 2022, 18, 4186-4202
+!>        in ex_env%cpmos and a few contributions to the gradient
 !> \param qs_env  Quickstep environment
 !> \param gs_mos ...
-!> \param ex_env ...
+!> \param ex_env  Holds responce vector ex_env%cpmos = R; Difference density xc_env%matrix_pe = T;
+!                 Matrix ex_env%matrix_hz = H_{\mu\nu}[T]
 !> \param kernel_env ...
 !> \param sub_env ...
 !> \param work_matrices ...
@@ -182,6 +185,8 @@ CONTAINS
          DEALLOCATE (ex_env%cpmos)
       END IF
       ALLOCATE (ex_env%cpmos(nspins))
+      ! Create and initialize rectangular matrices of nao*occ dimension
+      ! for alpha and beta R vector for Z-vector Eq.: AZ=-R
       DO ispin = 1, nspins
          CALL cp_fm_get_info(matrix=ex_env%evect(ispin), matrix_struct=matrix_struct)
          CALL cp_fm_create(ex_env%cpmos(ispin), matrix_struct)
@@ -189,11 +194,14 @@ CONTAINS
       END DO
       CALL get_qs_env(qs_env=qs_env, matrix_s=matrix_s)
       NULLIFY (matrix_pe_asymm, matrix_pe_symm)
+      ! Allocate matrix for spin difference density
+      ! matrix_pe = X*X^T - 1/2*(C*X^T*S*X*C^T + (C*X^T*S*X*C^T)^T)
       CALL dbcsr_allocate_matrix_set(ex_env%matrix_pe, nspins)
       CALL dbcsr_allocate_matrix_set(matrix_pe_symm, nspins)
       CALL dbcsr_allocate_matrix_set(matrix_pe_asymm, nspins)
       DO ispin = 1, nspins
          ALLOCATE (ex_env%matrix_pe(ispin)%matrix)
+         ! Initialize matrix_pe as a sparse matrix with zeros
          CALL dbcsr_create(ex_env%matrix_pe(ispin)%matrix, template=matrix_s(1)%matrix)
          CALL dbcsr_copy(ex_env%matrix_pe(ispin)%matrix, matrix_s(1)%matrix)
          CALL dbcsr_set(ex_env%matrix_pe(ispin)%matrix, 0.0_dp)
@@ -206,7 +214,7 @@ CONTAINS
          CALL dbcsr_create(matrix_pe_asymm(ispin)%matrix, template=matrix_s(1)%matrix, &
                            matrix_type=dbcsr_type_antisymmetric)
          CALL dbcsr_complete_redistribute(ex_env%matrix_pe(ispin)%matrix, matrix_pe_asymm(ispin)%matrix)
-
+         ! Add spin difference density to matrix_pe
          CALL tddfpt_resvec1(ex_env%evect(ispin), gs_mos(ispin)%mos_occ, &
                              matrix_s(1)%matrix, ex_env%matrix_pe(ispin)%matrix)
       END DO
@@ -233,6 +241,7 @@ CONTAINS
          CALL dbcsr_copy(ex_env%matrix_hz(ispin)%matrix, matrix_s(1)%matrix)
          CALL dbcsr_set(ex_env%matrix_hz(ispin)%matrix, 0.0_dp)
       END DO
+      ! Calculate first term of R vector: H_{\mu i\sigma}[T]
       IF (dft_control%qs_control%xtb) THEN
          CALL tddfpt_resvec2_xtb(qs_env, ex_env%matrix_pe, gs_mos, ex_env%matrix_hz, ex_env%cpmos)
       ELSE
@@ -272,7 +281,7 @@ CONTAINS
                                              ex_env%matrix_px1_admm_asymm(ispin)%matrix)
          END DO
       END IF
-      ! TDA forces
+      ! TDA forces. Calcualte and adds all missing terms for the responce vector, Eq. 49.
       CALL tddfpt_forces(qs_env, ex_env, gs_mos, kernel_env, sub_env, work_matrices)
       ! Rotate res vector cpmos into original frame of occupied orbitals
       CALL tddfpt_resvec3(qs_env, ex_env%cpmos, work_matrices)
@@ -335,6 +344,8 @@ CONTAINS
       ELSE
          !
          CALL exstate_potential_release(ex_env)
+         ! Build the values of hartree-fock and echange-correlation potential
+         ! on the grid
          CALL ks_ref_potential(qs_env, ex_env%vh_rspace, ex_env%vxc_rspace, &
                                ex_env%vtau_rspace, ex_env%vadmm_rspace, ehartree, exc)
          CALL ks_ref_potential_atom(qs_env, ex_env%local_rho_set, ex_env%local_rho_set_admm, &
@@ -354,9 +365,13 @@ CONTAINS
    END SUBROUTINE tddfpt_forces
 
 ! **************************************************************************************************
-!> \brief Calculate direct tddft forces
+!> \brief Calculate direct tddft forces. See JCTC 2022 18, 4186-4102
 !> \param qs_env ...
-!> \param ex_env ...
+!> \param ex_env Holds on exit:
+!>        cpmos = R,                             Responce vector, Eq. 49
+!>        matrix_pe = T,                         Difference density, Eq. 44
+!>        matrix_wx1 = C*K[D^X]*X^T,             Trird term of Eq. 51
+!>        matrix_wz = C*X^T(\Omega*S - K)*X*C^T, Last term of Eq. 51
 !> \param gs_mos ...
 !> \param kernel_env ...
 !> \param sub_env ...
@@ -419,16 +434,18 @@ CONTAINS
          ALLOCATE (ftot1(3, natom))
          CALL total_qs_force(ftot1, force, atomic_kind_set)
       END IF
-
+      ! Build last terms of the responce vector, Eq. 49, and third term of \Lambda_{\mu\nu}, Eq. 51
+      ! the responce vector is in eq_env%cpmos; Lambda is in ex_env%matrix_wx1
       CALL tddfpt_kernel_force(qs_env, ex_env, gs_mos, kernel_env, sub_env, work_matrices, debug_forces)
 
-      ! Overlap matrix
+      ! Overlap matrix, build the Lambda matrix, Eq. 51
       matrix_wx1 => ex_env%matrix_wx1
       CALL get_qs_env(qs_env=qs_env, matrix_s=matrix_s, matrix_ks=matrix_ks)
       NULLIFY (matrix_wz)
       CALL dbcsr_allocate_matrix_set(matrix_wz, nspins)
       DO ispin = 1, nspins
          ALLOCATE (matrix_wz(ispin)%matrix)
+         ! Create and initiolize the Lambda matrix as a sparse matrix
          CALL dbcsr_create(matrix=matrix_wz(ispin)%matrix, template=matrix_s(1)%matrix)
          CALL cp_dbcsr_alloc_block_from_nbl(matrix_wz(ispin)%matrix, sab_orb)
          CALL dbcsr_set(matrix_wz(ispin)%matrix, 0.0_dp)
@@ -448,6 +465,8 @@ CONTAINS
       END IF
       NULLIFY (scrm)
       IF (debug_forces) fodeb(1:3) = force(1)%overlap(1:3, 1)
+      ! Calculate the force conribution of the matrix_xz into the force in ks_env.
+      ! force%overlap = Tr(dS*matrix_wz), last term of Eq. 51
       CALL build_overlap_matrix(ks_env, matrix_s=scrm, &
                                 matrix_name="OVERLAP MATRIX", &
                                 basis_type_a="ORB", basis_type_b="ORB", &
@@ -461,7 +480,8 @@ CONTAINS
          IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Wx*dS ", fodeb
       END IF
 
-      ! Overlap matrix
+      ! Overlap matrix. Build a part of the first term of Lambda, Eq. 51,
+      ! corresponding to the second term of Eq. 41. matrix_wz = C*X^T*(\Omega*S-K)*X*X^T
       CALL get_qs_env(qs_env=qs_env, matrix_s=matrix_s, matrix_ks=matrix_ks)
       NULLIFY (matrix_wz)
       CALL dbcsr_allocate_matrix_set(matrix_wz, nspins)
@@ -497,7 +517,8 @@ CONTAINS
          IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: xWx*dS ", fodeb
       END IF
 
-      ! Overlap matrix
+      ! Compute force contribution of the first term of Eq. 41 in the first term of Eq. 51
+      ! That was calculated in tddft_kernel_force, force%overlap = 0.5*H[T]*C^T
       IF (ASSOCIATED(matrix_wx1)) THEN
          IF (nspins == 2) THEN
             CALL dbcsr_add(matrix_wx1(1)%matrix, matrix_wx1(2)%matrix, &
@@ -514,7 +535,7 @@ CONTAINS
          IF (debug_forces) THEN
             fodeb(1:3) = force(1)%overlap(1:3, 1) - fodeb(1:3)
             CALL para_env%sum(fodeb)
-            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: WK*dS ", fodeb
+            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: DxKP*dS ", fodeb
          END IF
       END IF
 
@@ -532,7 +553,8 @@ CONTAINS
    END SUBROUTINE tddfpt_force_direct
 
 ! **************************************************************************************************
-!> \brief ...
+!> \brief Build the spin spindifference density,
+!>        matrix_pe += X*X^T - 0.5(C*X^T*S*X*C^T + (C*X^T*S*X*C^T)^T)
 !> \param evect ...
 !> \param mos_occ ...
 !> \param matrix_s ...
@@ -552,10 +574,10 @@ CONTAINS
       TYPE(cp_logger_type), POINTER                      :: logger
 
       CALL timeset(routineN, handle)
-      ! X*X^T
+      ! matrix_pe = X*X^T
       CALL cp_fm_get_info(mos_occ, nrow_global=nao, ncol_global=norb)
       CALL cp_dbcsr_plus_fm_fm_t(matrix_pe, matrix_v=evect, ncol=norb)
-      ! X^T*S*X
+      ! matrix_pe -= 0.5(C*X^T*S*X*C^T + (C*X^T*S*X*C^T)^T)
       CALL cp_fm_get_info(evect, matrix_struct=fmstruct)
       NULLIFY (fmstruct2)
       CALL cp_fm_struct_create(fmstruct=fmstruct2, template_fmstruct=fmstruct, &
@@ -563,11 +585,14 @@ CONTAINS
       CALL cp_fm_create(xxmat, matrix_struct=fmstruct2)
       CALL cp_fm_struct_release(fmstruct2)
       CALL cp_fm_create(cxmat, matrix_struct=fmstruct)
+      ! S*X
       CALL cp_dbcsr_sm_fm_multiply(matrix_s, evect, cxmat, norb, alpha=1.0_dp, beta=0.0_dp)
+      ! (S*X)^T*X
       CALL parallel_gemm('T', 'N', norb, norb, nao, 1.0_dp, cxmat, evect, 0.0_dp, xxmat)
+      ! C*X^T*S*X
       CALL parallel_gemm('N', 'N', nao, norb, norb, 1.0_dp, mos_occ, xxmat, 0.0_dp, cxmat)
       CALL cp_fm_release(xxmat)
-      ! C*C^T*XX
+      ! matrix_pe -= 0.5(C*X^T*S*X*C^T + (C*X^T*S*X*C^T)^T)
       CALL cp_dbcsr_plus_fm_fm_t(matrix_pe, matrix_v=mos_occ, matrix_g=cxmat, &
                                  ncol=norb, alpha=-1.0_dp, symmetry_mode=1)
       CALL cp_fm_release(cxmat)
@@ -628,12 +653,14 @@ CONTAINS
    END SUBROUTINE tddfpt_resvec1_admm
 
 ! **************************************************************************************************
-!> \brief ...
+!> \brief Calculates the action of the H operator as in the first term of Eq. 49 in
+!>        JCTC 2022, 18, 4186-4202
+!>        cpmos = H_{\mu i\sigma} [matrix_pe]
 !> \param qs_env ...
-!> \param matrix_pe ...
+!> \param matrix_pe Input square matrix with the size of the number of atomic orbitals
 !> \param matrix_pe_admm ...
 !> \param gs_mos ...
-!> \param matrix_hz ...
+!> \param matrix_hz Holds H_{\mu\nu\sigma}[matrix_pe] on exit
 !> \param cpmos ...
 ! **************************************************************************************************
    SUBROUTINE tddfpt_resvec2(qs_env, matrix_pe, matrix_pe_admm, gs_mos, matrix_hz, cpmos)

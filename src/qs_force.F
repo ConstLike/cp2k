@@ -366,6 +366,8 @@ CONTAINS
       END IF
 
       ! Excited state forces
+      ! Solve the response linear equation system for the Z-vector method
+      ! and calculate remaining terms of the force
       CALL excited_state_energy(qs_env, calculate_forces=.TRUE.)
 
       ! replicate forces (get current pointer)

@@ -128,13 +128,15 @@ MODULE qs_tddfpt2_methods
 CONTAINS
 
 ! **************************************************************************************************
-!> \brief Perform TDDFPT calculation.
+!> \brief Perform TDDFPT calculation. If calc_forces then it also builds the response
+!>        vector for Z-vector method and calculates some contributions to the force
 !> \param qs_env  Quickstep environment
-!> \param calc_forces ...
+!> \param calc_forces  Logical flag indicating whether to calculate forces
 !> \par History
 !>    * 05.2016 created [Sergey Chulkov]
 !>    * 06.2016 refactored to be used with Davidson eigensolver [Sergey Chulkov]
 !>    * 03.2017 cleaned and refactored [Sergey Chulkov]
+!>    * 05.2024 code documentation [Konstatnin Komarov (kk)]
 !> \note Based on the subroutines tddfpt_env_init(), and tddfpt_env_deallocate().
 ! **************************************************************************************************
    SUBROUTINE tddfpt(qs_env, calc_forces)
@@ -244,6 +246,7 @@ CONTAINS
       CALL tddfpt_init_mos(qs_env, gs_mos, log_unit)
 
       ! obtain corrected KS-matrix
+      !kk: incompatible with exact-exchange functionals
       CALL tddfpt_oecorr(qs_env, gs_mos, matrix_ks_oep)
 
       IF ((tddfpt_control%do_lrigpw) .AND. &
@@ -321,9 +324,9 @@ CONTAINS
 
          ! allocate pools and work matrices
          nstates = tddfpt_control%nstates
-         !! Too many states can lead to Problems
+         !! Too many states can lead to problems
          !! You should be warned if there are more states
-         !! then occ-virt Combinations!!
+         !! than occ-virt combinations
          CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=nocc)
          CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=nvirt)
          nstate_max = nocc*nvirt
@@ -971,9 +974,9 @@ CONTAINS
                                tddfpt_print_section)
       END IF
 
-      !! Too many states cal lead to Problems
-      !! You should be warned if there are mor states
-      !! then occ-virt Combinations!!
+      !! Too many states can lead to problems
+      !! You should be warned if there are more states
+      !! than occ-virt combinations
       CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=nocc)
       CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=nvirt)
       nstate_max = nocc*nvirt
@@ -1013,8 +1016,9 @@ CONTAINS
                                 gs_mos=gs_mos, log_unit=log_unit)
       CALL cp_print_key_finished_output(log_unit, logger, &
                                         tddfpt_print_section, "GUESS_VECTORS")
-
+      ! Orthogonalize with respect to GS MOs
       CALL tddfpt_orthogonalize_psi1_psi0(evects, work_matrices%S_C0_C0T)
+      ! Orthogonalize with respect to each other
       CALL tddfpt_orthonormalize_psi1_psi1(evects, &
                                            nstates, &
                                            S_evects, &
