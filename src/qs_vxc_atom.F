@@ -1547,8 +1547,7 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :, :, :), POINTER      :: drho_h, drho_s
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: work
 
-      INTEGER                                            :: ia, iso, ispin, na, ir, nr, nso, dir
-      REAL(KIND=dp)                                      :: rad, urad
+      INTEGER                                            :: iso, ispin, na, nr, nso, dir
 
       CPASSERT(ASSOCIATED(r_h))
       CPASSERT(ASSOCIATED(r_s))
@@ -1557,8 +1556,6 @@ CONTAINS
 
       nr = grid_atom%nr
       na = grid_atom%ng_sphere
-      rad = grid_atom%rad(ir)
-      urad = grid_atom%oorad2l(ir, 1)
       nso = harmonics%max_iso_not0
       DO ispin = 1, nspins
          CALL DGEMM('N', 'T', na, nr, nso, &

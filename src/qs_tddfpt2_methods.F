@@ -1070,8 +1070,7 @@ CONTAINS
 
             CALL cp_iterate(logger%iter_info, increment=0, iter_nr_out=iter)
             ! terminate the loop if either (a) or (b) is true ...
-            IF ((conv <= tddfpt_control%conv &
-                 .AND. is_restarted) .OR. iter >= niters) EXIT
+            IF (conv <= tddfpt_control%conv .OR. iter >= niters) EXIT
 
             ! ... otherwise restart Davidson iterations
             is_restarted = .TRUE.
