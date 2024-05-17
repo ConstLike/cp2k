@@ -2844,10 +2844,9 @@ CONTAINS
 
          END IF
 
-         ! Skip further contributions to spin-flip xcKernel
-         IF (do_spinflip) GO TO 10
-
          IF (gradient_f) THEN
+         ! Skip further contributions to spin-flip xcKernel
+         IF (.NOT.do_spinflip) THEN
 
             IF (my_compute_virial) THEN
                CALL virial_drho_drho(virial_pw, drhoa, v_drhoa(1), virial_xc)
@@ -2957,6 +2956,7 @@ CONTAINS
                END DO ! ispin
 
             END IF
+            END IF
 
             DO idir = 1, 3
                DEALLOCATE (drho(idir)%array)
@@ -2979,8 +2979,6 @@ CONTAINS
             CALL virial_laplace(virial_pw, pw_pool, virial_xc, v_laplace(2)%cr3d)
          END IF
          
-         10 CONTINUE
-
       ELSE
 
          !-----------------!
