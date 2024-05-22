@@ -341,20 +341,27 @@ CONTAINS
          keyword, __LOCATION__, &
          name="SCREEN_P_FORCES", &
          description="Screens the electronic repulsion integrals for the forces "// &
-         "using the density matrix. Will be disabled for the "// &
-         "response part of forces in MP2/RPA/TDDFT. "// &
-         "This results in a significant speedup for large systems, "// &
-         "but might require a somewhat tigher EPS_SCHWARZ_FORCES.", &
+         "using the density matrix. This feature will be disabled for the response "// &
+         "part of forces in MP2/RPA/TDDFT. There are two approaches to achieve speedup: "// &
+         "one is by using this screening and recalculating integrals (in MP2/RPA/TDDFT), "// &
+         "where the benefit comes from the screening itself, but may require a tighter "// &
+         "EPS_SCHWARZ_FORCES setting; the other is by using treat_forces_in_core "// &
+         "(FORCE_EVAL/DFT/XC/HF/MEMORY) with SCREEN_P_FORCES=False, which avoids "//&
+         "recalculating integrals. Both approaches can result in a significant "// &
+         "speedup for large systems.", &
          usage="SCREEN_P_FORCES TRUE", &
-         default_l_val=.TRUE.)
+         default_l_val=.FALSE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       NULLIFY (keyword)
-      CALL keyword_create(keyword, __LOCATION__, name="SCREEN_ON_INITIAL_P", &
-                          description="Screen on an initial density matrix. For the first MD step"// &
-                          " this matrix must be provided by a Restart File.", &
-                          usage="SCREEN_ON_INITIAL_P  TRUE", default_l_val=.FALSE.)
+      CALL keyword_create( &
+         keyword, __LOCATION__, &
+         name="SCREEN_ON_INITIAL_P", &
+         description="Screen on an initial density matrix. For the first MD step"// &
+         "this matrix must be provided by a Restart File.", &
+         usage="SCREEN_ON_INITIAL_P  TRUE", &
+         default_l_val=.FALSE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -460,11 +467,14 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="TREAT_FORCES_IN_CORE", &
-                          description="Determines whether the derivative ERI's should be stored to RAM or not. "// &
-                          "Only meaningful when performing Ehrenfest MD. "// &
-                          "Memory usage is defined via MAX_MEMORY, i.e. the memory is shared wit the energy ERI's.", &
-                          usage="TREAT_FORCES_IN_CORE TRUE", default_l_val=.FALSE.)
+      CALL keyword_create( &
+         keyword, __LOCATION__, &
+         name="TREAT_FORCES_IN_CORE", &
+         description="Determines whether the derivative ERI's should be stored to RAM or not. "// &
+         "Storing derivative ERIs can speed up calculations. "// &
+         "Memory usage is defined via MAX_MEMORY, i.e., the memory is shared with the energy ERI's.", &
+         usage="TREAT_FORCES_IN_CORE FALSE", &
+         default_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

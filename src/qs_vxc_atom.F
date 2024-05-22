@@ -1201,7 +1201,6 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-
       ak = 0.0_dp
       SELECT CASE (accuracy)
       CASE (:4)
@@ -1519,7 +1518,6 @@ CONTAINS
 !> \param harmonics ...
 !> \param nspins ...
 !> \param grad_func ...
-!> \param ir ...
 !> \param r_h ...
 !> \param r_s ...
 !> \param rho_h ...
@@ -1530,6 +1528,7 @@ CONTAINS
 !> \param r_s_d ...
 !> \param drho_h ...
 !> \param drho_s ...
+!> \param work ...
 ! **************************************************************************************************
    SUBROUTINE calc_rho_angular(grid_atom, harmonics, nspins, grad_func, &
                                r_h, r_s, rho_h, rho_s, &
@@ -1547,7 +1546,7 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :, :, :), POINTER      :: drho_h, drho_s
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: work
 
-      INTEGER                                            :: iso, ispin, na, nr, nso, dir
+      INTEGER                                            :: dir, iso, ispin, na, nr, nso
 
       CPASSERT(ASSOCIATED(r_h))
       CPASSERT(ASSOCIATED(r_s))
@@ -1560,15 +1559,15 @@ CONTAINS
       DO ispin = 1, nspins
          CALL DGEMM('N', 'T', na, nr, nso, &
                     1.0_dp, harmonics%slm, na, &
-                            r_h(ispin)%r_coef, nr, &
-                    1.0_dp, rho_h(:,:,ispin), na)
+                    r_h(ispin)%r_coef, nr, &
+                    1.0_dp, rho_h(:, :, ispin), na)
          CALL DGEMM('N', 'T', na, nr, nso, &
                     1.0_dp, harmonics%slm, na, &
-                            r_s(ispin)%r_coef, nr, &
-                    1.0_dp, rho_s(:,:,ispin), na)
+                    r_s(ispin)%r_coef, nr, &
+                    1.0_dp, rho_s(:, :, ispin), na)
       END DO ! ispin
 
-      IF (.NOT.grad_func) RETURN
+      IF (.NOT. grad_func) RETURN
 
       CPASSERT(ASSOCIATED(dr_h))
       CPASSERT(ASSOCIATED(dr_s))
@@ -1578,37 +1577,37 @@ CONTAINS
       CPASSERT(ASSOCIATED(drho_s))
       CPASSERT(ASSOCIATED(work))
 
-      do ispin = 1, nspins
-         do dir = 1, 3
-            do iso = 1, nso
+      DO ispin = 1, nspins
+         DO dir = 1, 3
+            DO iso = 1, nso
                work(:, iso) = harmonics%a(dir, :)*harmonics%slm(:, iso)
-            end do
-            call dgemm('n', 't', na, nr, nso, &
-                         1.0_dp, work, na, &
-                                 dr_h(ispin)%r_coef, nr, &
-                         1.0_dp, drho_h(dir,:,:,ispin), nr)
-            call dgemm('n', 't', na, nr, nso, &
-                         1.0_dp, harmonics%slm, na, &
-                                 r_h_d(dir, ispin)%r_coef, nr, &
-                         1.0_dp, drho_h(dir,:,:,ispin), nr)
-            call dgemm('n', 't', na, nr, nso, &
-                         1.0_dp, work, na, &
-                                 dr_s(ispin)%r_coef, nr, &
-                         1.0_dp, drho_s(dir,:,:,ispin), nr)
-            call dgemm('n', 't', na, nr, nso, &
-                         1.0_dp, harmonics%slm, na, &
-                                 r_s_d(dir, ispin)%r_coef, nr, &
-                         1.0_dp, drho_s(dir,:,:,ispin), nr)
-         end do ! dir
-      end do ! ispin
-      drho_h(4, :, :, :) = sqrt( &
-                               drho_h(1, :, :, :)*drho_h(1, :, :, :) + &
-                               drho_h(2, :, :, :)*drho_h(2, :, :, :) + &
-                               drho_h(3, :, :, :)*drho_h(3, :, :, :))
-      drho_s(4, :, :, :) = sqrt( &
-                               drho_s(1, :, :, :)*drho_s(1, :, :, :) + &
-                               drho_s(2, :, :, :)*drho_s(2, :, :, :) + &
-                               drho_s(3, :, :, :)*drho_s(3, :, :, :))
+            END DO
+            CALL dgemm('n', 't', na, nr, nso, &
+                       1.0_dp, work, na, &
+                       dr_h(ispin)%r_coef, nr, &
+                       1.0_dp, drho_h(dir, :, :, ispin), nr)
+            CALL dgemm('n', 't', na, nr, nso, &
+                       1.0_dp, harmonics%slm, na, &
+                       r_h_d(dir, ispin)%r_coef, nr, &
+                       1.0_dp, drho_h(dir, :, :, ispin), nr)
+            CALL dgemm('n', 't', na, nr, nso, &
+                       1.0_dp, work, na, &
+                       dr_s(ispin)%r_coef, nr, &
+                       1.0_dp, drho_s(dir, :, :, ispin), nr)
+            CALL dgemm('n', 't', na, nr, nso, &
+                       1.0_dp, harmonics%slm, na, &
+                       r_s_d(dir, ispin)%r_coef, nr, &
+                       1.0_dp, drho_s(dir, :, :, ispin), nr)
+         END DO ! dir
+      END DO ! ispin
+      drho_h(4, :, :, :) = SQRT( &
+                           drho_h(1, :, :, :)*drho_h(1, :, :, :) + &
+                           drho_h(2, :, :, :)*drho_h(2, :, :, :) + &
+                           drho_h(3, :, :, :)*drho_h(3, :, :, :))
+      drho_s(4, :, :, :) = SQRT( &
+                           drho_s(1, :, :, :)*drho_s(1, :, :, :) + &
+                           drho_s(2, :, :, :)*drho_s(2, :, :, :) + &
+                           drho_s(3, :, :, :)*drho_s(3, :, :, :))
 
    END SUBROUTINE calc_rho_angular
 
