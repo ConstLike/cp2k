@@ -425,6 +425,11 @@ CONTAINS
          log10_eps_schwarz = LOG10(eps_schwarz)
       END IF
       screen_pmat_forces = screening_parameter%do_p_screening_forces
+      ! if we treat_forces_in_core and do screen_pmat_forces, while with_resp_density is true,
+      ! we need to recompute integrals to avoid segmentation fault,
+      ! because screen_pmat_forces becomes .false.
+      IF (with_resp_density .and. treat_forces_in_core .and. screen_pmat_forces) &
+         memory_parameter%recalc_forces = .true.
       ! don't do density screening in case of response forces
       IF (with_resp_density) screen_pmat_forces = .FALSE.
 

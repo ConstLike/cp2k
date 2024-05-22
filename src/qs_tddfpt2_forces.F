@@ -544,7 +544,7 @@ CONTAINS
          CALL total_qs_force(ftot2, force, atomic_kind_set)
          fodeb(1:3) = ftot2(1:3, 1) - ftot1(1:3, 1)
          CALL para_env%sum(fodeb)
-         IF (iounit > 0) WRITE (iounit, "(T3,A,T30,3F16.8)") "DEBUG:: Excitation Force", fodeb
+         IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: Excitation Force", fodeb
          DEALLOCATE (ftot1, ftot2)
       END IF
 
