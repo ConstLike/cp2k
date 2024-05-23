@@ -354,8 +354,8 @@ CONTAINS
 
       IF (debug_this_module) THEN
          CPASSERT(nspins > 0)
-         CPASSERT(SIZE(Aop_evects, 1) == nspins)
-         CPASSERT(SIZE(S_evects, 1) == nspins)
+         CPASSERT(SIZE(Aop_evects, 1) == SIZE(evects,1))
+         CPASSERT(SIZE(S_evects, 1) == SIZE(evects,1))
          CPASSERT(SIZE(Aop_evects, 2) == nvects)
          CPASSERT(SIZE(S_evects, 2) == nvects)
          CPASSERT(SIZE(gs_mos) == nspins)
