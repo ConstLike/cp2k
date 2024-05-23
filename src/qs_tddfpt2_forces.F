@@ -206,7 +206,8 @@ CONTAINS
       CALL get_qs_env(qs_env=qs_env, matrix_s=matrix_s)
       NULLIFY (matrix_pe_asymm, matrix_pe_symm)
 
-      ! Allocate matrix for spin difference density matrix_pe = X*X^T - (C*X^T*S*X*C^T + (C*X^T*S*X*C^T)^T)/2
+      ! Build difference density matrix_pe = X*X^T - (C*X^T*S*X*C^T + (C*X^T*S*X*C^T)^T)/2
+      !
       CALL dbcsr_allocate_matrix_set(ex_env%matrix_pe, nspins)
       CALL dbcsr_allocate_matrix_set(matrix_pe_symm, nspins)
       CALL dbcsr_allocate_matrix_set(matrix_pe_asymm, nspins)
@@ -232,12 +233,12 @@ CONTAINS
          ELSE
             spin = ispin
          END IF
-         ! Add spin difference density to matrix_pe
+         ! Add difference density to matrix_pe
          CALL tddfpt_resvec1(ex_env%evect(spin), gs_mos(spin)%mos_occ, &
                              matrix_s(1)%matrix, ex_env%matrix_pe(ispin)%matrix, ispin, do_sf)
       END DO
       !
-      ! ground state ADMM!
+      ! Fit difference density
       IF (dft_control%do_admm) THEN
          CALL get_qs_env(qs_env, admm_env=admm_env)
          CALL get_admm_env(admm_env, matrix_s_aux_fit=matrix_s_aux_fit)
@@ -252,6 +253,7 @@ CONTAINS
          END DO
       END IF
       !
+
       CALL dbcsr_allocate_matrix_set(ex_env%matrix_hz, nspins)
       DO ispin = 1, nspins
          ALLOCATE (ex_env%matrix_hz(ispin)%matrix)
@@ -1015,9 +1017,7 @@ CONTAINS
          DEALLOCATE (v_xc_tau)
       END IF
       IF (dft_control%do_admm) THEN
-         IF (qs_env%admm_env%aux_exch_func == do_admm_aux_exch_func_none) THEN
-            ! nothing to do
-         ELSE
+         IF (qs_env%admm_env%aux_exch_func /= do_admm_aux_exch_func_none) THEN
             ! add ADMM xc_section_aux terms: f_x[rhoz_ADMM]
             CALL get_qs_env(qs_env, admm_env=admm_env)
             CALL get_admm_env(admm_env, rho_aux_fit=rho_aux_fit, matrix_s_aux_fit=msaux, &
