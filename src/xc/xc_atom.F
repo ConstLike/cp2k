@@ -341,7 +341,7 @@ CONTAINS
 !> \param do_triplet ...
 ! **************************************************************************************************
    SUBROUTINE xc_2nd_deriv_of_r(rho_set, rho1_set, xc_section, &
-                                deriv_set, w, vxc, vxg, do_triplet)
+                                deriv_set, w, vxc, vxg, do_triplet, do_sf)
 
 ! As input of this routine one gets rho and drho on a one dimensional grid.
 ! The grid is the angular grid corresponding to a given point ir on the radial grid.
@@ -356,12 +356,12 @@ CONTAINS
       REAL(dp), DIMENSION(:, :), POINTER                 :: w
       REAL(dp), CONTIGUOUS, DIMENSION(:, :, :), POINTER  :: vxc
       REAL(dp), DIMENSION(:, :, :, :), POINTER           :: vxg
-      LOGICAL, INTENT(IN), OPTIONAL                      :: do_triplet
+      LOGICAL, INTENT(IN), OPTIONAL                      :: do_triplet, do_sf
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'xc_2nd_deriv_of_r'
 
       INTEGER                                            :: handle, ispin, nspins
-      LOGICAL                                            :: lsd
+      LOGICAL                                            :: lsd, my_do_sf
       REAL(dp)                                           :: drho_cutoff, my_fac_triplet
       TYPE(cp_sll_xc_deriv_type), POINTER                :: pos
       TYPE(pw_pool_type), POINTER                        :: pw_pool
@@ -378,6 +378,9 @@ CONTAINS
       END IF
       my_fac_triplet = 1.0_dp
       IF ((PRESENT(do_triplet)) .AND. (do_triplet)) my_fac_triplet = -1.0_dp
+
+      my_do_sf = .FALSE.
+      IF (PRESENT(do_sf)) my_do_sf = do_sf
 
       CALL xc_rho_set_get(rho_set, drho_cutoff=drho_cutoff)
       xc_fun_section => section_vals_get_subs_vals(xc_section, &
@@ -407,7 +410,7 @@ CONTAINS
       NULLIFY (vxc_tau_pw)
 
       CALL xc_calc_2nd_deriv_analytical(vxc_pw, vxc_tau_pw, deriv_set, rho_set, rho1_set, pw_pool, &
-                                        xc_section, gapw=.TRUE., vxg=vxg, tddfpt_fac=my_fac_triplet)
+                                        xc_section, gapw=.TRUE., vxg=vxg, tddfpt_fac=my_fac_triplet, spinflip=do_sf)
 
       DEALLOCATE (vxc_pw)
 
