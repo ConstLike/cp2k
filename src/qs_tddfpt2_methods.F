@@ -121,7 +121,7 @@ MODULE qs_tddfpt2_methods
    INTEGER, PARAMETER, PRIVATE          :: nderivs = 3
    INTEGER, PARAMETER, PRIVATE          :: maxspins = 2
 
-   PUBLIC :: tddfpt, tddfpt_energies, tddfpt_input, kernel_info
+   PUBLIC :: tddfpt, tddfpt_energies, tddfpt_input
 
 ! **************************************************************************************************
 
