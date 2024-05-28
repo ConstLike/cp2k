@@ -427,6 +427,11 @@ CONTAINS
       screen_pmat_forces = screening_parameter%do_p_screening_forces
       ! don't do density screening in case of response forces
       IF (with_resp_density) screen_pmat_forces = .FALSE.
+      ! if we treat_forces_in_core and do screen_pmat_forces, while with_resp_density is true,
+      ! we need to recompute integrals to avoid segmentation fault,
+      ! because screen_pmat_forces becomes .false.
+      IF (with_resp_density .and. treat_forces_in_core .and. screen_pmat_forces) &
+         memory_parameter%recalc_forces = .true.
 
       eps_storage = eps_schwarz*memory_parameter%eps_storage_scaling
 
