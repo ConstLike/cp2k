@@ -620,6 +620,7 @@ list(
   qs_neighbor_lists.F
   qs_neighbor_list_types.F
   qs_nl_hash_table_types.F
+  qs_nonscf.F
   qs_o3c_methods.F
   qs_o3c_types.F
   qs_oce_methods.F
@@ -1568,7 +1569,7 @@ target_link_libraries(
     $<$<BOOL:${CP2K_USE_TORCH}>:${TORCH_LIBRARIES}>
     $<$<BOOL:${CP2K_USE_COSMA}>:cosma::cosma_prefixed_pxgemm>
     $<$<BOOL:${CP2K_USE_COSMA}>:cosma::cosma>
-    $<$<BOOL:${CP2K_USE_DLAF}>:DLAF::DLAF>
+    $<$<BOOL:${CP2K_USE_DLAF}>:DLAF::Fortran>
     DBCSR::dbcsr
     $<$<BOOL:${CP2K_USE_MPI}>:cp2k::SCALAPACK::scalapack>
     cp2k_linalg_libs
