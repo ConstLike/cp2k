@@ -18,7 +18,7 @@ eigenvectors $\mathbf{X}^p$ as an Hermitian eigenvalue problem
 
 $$
 \mathbf{A} \mathbf{X}^p &= \Omega^p \mathbf{S} \mathbf{X}^p \, , \\
-\sum_{\kappa k} [ F_{\mu \kappa \sigma} \delta_{ik} - F_{ik \sigma} S_{\mu \kappa} ] X^p_{\kappa k \sigma} + \sum_{\lambda} K_{\mu \lambda \sigma} [\mathbf{D}^{{\rm{\tiny{X}}}p}] C_{\lambda i \sigma} &=  \sum_{\kappa} \Omega^p S_{\mu \kappa} X^p_{\kappa i \sigma} \, . 
+\sum_{\kappa k} [ F_{\mu \kappa \sigma} \delta_{ik} - F_{ik \sigma} S_{\mu \kappa} ] X^p_{\kappa k \sigma} + \sum_{\lambda} K_{\mu \lambda \sigma} [\mathbf{D}^{{\rm{\tiny{X}}}p}] C_{\lambda i \sigma} &=  \sum_{\kappa} \Omega^p S_{\mu \kappa} X^p_{\kappa i \sigma} \, .
 $$
 
 The Hermitian matrix $\mathbf{A}$ contains as zeroth-order contributions the difference in the
@@ -107,6 +107,27 @@ To compute excited-state gradients and thus corresponding fluorescence spectra, 
 be optimized furthermore has to be specified by adding the subsection `EXCITED_STATES` of the
 section `DFT`.
 
+## Efficient computation and storage of ERIs
+
+When calculating TDDFT gradients, the cost of computing electron repulsion integrals (ERIs) and their derivatives can be significant.
+Repeatedly calculating and contracting these ERIs on-the-fly can be very inefficient.
+To speed up the calculation process, it is recommended to store the ERIs in-core (in RAM) and reuse them whenever needed.
+In the input file, the `MAX_MEMORY` keyword in the [MEMORY](#CP2K_INPUT.FORCE_EVAL.DFT.XC.HF) subsection controls the storage of both normal ERIs and derivative ERIs.
+By default, the `MAX_MEMORY` parameter is set to 512 MiB. When `MAX_MEMORY` is assigned a non-zero value, the ERIs are stored in memory. If there is insufficient space, the algorithm switches to the calculation for the remaining ERIs on-the-fly.
+This approach can significantly accelerate these computations compared to recalculating the ERIs on-the-fly.
+
+For TDDFT gradients specifically, the cost of computing derivative ERIs can be up to 12 times higher than that of normal ERIs. To efficiently handle derivative ERIs, there are two approaches to achieve speedup:
+
+1. Using the `TREAT_FORCES_IN_CORE` keyword in the [MEMORY](#CP2K_INPUT.FORCE_EVAL.DFT.XC.HF) subsection with `SCREEN_P_FORCES` (in the [SCREENING](#CP2K_INPUT.FORCE_EVAL.DFT.XC.HF)) set to `FALSE`:
+- `TREAT_FORCES_IN_CORE` determines whether the derivative ERIs should be stored in RAM or not. By default it set to `FALSE`.
+By storing derivative ERIs in-core and reusing them, a significant speedup (up to 3 times for derivative ERIs calculations) can be achieved without any loss in accuracy compared to the on-the-fly computation of ERIs.
+This is due to the fact that the process of contracting derivative ERIs can be invoked up to four times in TDDFT.
+
+2. Using the `SCREEN_P_FORCES` keyword in the [SCREENING](#CP2K_INPUT.FORCE_EVAL.DFT.XC.HF) subsection:
+- `SCREEN_P_FORCES` screens the electronic repulsion integrals for the forces using the density matrix, by default `TRUE`.
+  This feature is disabled for the response part of forces in MP2/RPA/TDDFT, which means if the derivative ERIs were stored before, they need to be recalculated.
+  The benefit comes from the screening itself, but it may require a tighter `EPS_SCHWARZ_FORCES` setting.
+
 ## Simple examples
 
 ### Excitation energies for acetone
@@ -133,17 +154,27 @@ specify the chosen functional in the subsection `&XC_FUNCTIONAL` of the `&XC` se
                                          ! FULL kernel is for GGA and hybrid functional computations
                                          ! sTDA kernel is referring to a semi-empirical sTDA computation
        NSTATES 10                      ! specifies the number of excited states to be computed
-       MAX_ITER   100                  ! number of iterations for the Davidson algorithm
+       MAX_ITER 100                    ! number of iterations for the Davidson algorithm
        CONVERGENCE [eV] 1.0e-7         ! convergence threshold in eV
        RKS_TRIPLETS F                  ! Keyword to choose between singlet and triplet excitations
      !  &XC                            ! If choosing kernel FULL, the underlying functional can be
      !   &XC_FUNCTIONAL PBE0             ! specified by adding an XC section
      !   &END XC_FUNCTIONAL              ! The functional can be chosen independently from the chosen
-     !  &END XC                        ! GS functional except when choosing ADMM 
-     !  &MGRID                         ! It is also possible to choose a separate grid for the real-space 
-     !    CUTOFF 800                   ! integration of the response density in the TDDFT part,
-     !    REL_CUTOFF 80                ! however, in general a consistent setup for GS and ES is recommended
-     !  &END MGRID 
+     !   &HF                           ! GS functional except when choosing ADMM
+     !    &SCREENING                   ! It is also possible to choose a separate grid for the real-space
+     !      EPS_SCHWARZ_FORCES 1.0E-6  ! integration of the response density in the TDDFT part,
+     !      SCREEN_P_FORCES T          ! however, in general a consistent setup for GS and ES is recommended
+     !    &END SCREENING
+     !    &MEMORY
+     !      MAX_MEMORY 512
+     !      TREAT_FORCES_IN_CORE F
+     !    &END MEMORY
+     !   &END HF
+     !  &END XC
+     !  &MGRID
+     !    CUTOFF 800
+     !    REL_CUTOFF 80
+     !  &END MGRID
       &END TDDFPT
     &END PROPERTIES
   &DFT
@@ -172,8 +203,8 @@ specify the chosen functional in the subsection `&XC_FUNCTIONAL` of the `&XC` se
       CUTOFF 800
       REL_CUTOFF 80
     &END MGRID
-    &AUXILIARY_DENSITY_MATRIX_METHOD       ! For hybrid functionals, it is recommended to choose ADMM 
-      METHOD BASIS_PROJECTION              ! the ADMM environment for ground and excited state has to be 
+    &AUXILIARY_DENSITY_MATRIX_METHOD       ! For hybrid functionals, it is recommended to choose ADMM
+      METHOD BASIS_PROJECTION              ! the ADMM environment for ground and excited state has to be
       EXCH_SCALING_MODEL NONE              ! identical
       EXCH_CORRECTION_FUNC NONE            ! Triple-zeta auxiliary basis sets are recommended (see below)
       ADMM_PURIFICATION_METHOD NONE        ! For periodic systems (see below), only specific ADMM options
@@ -185,6 +216,16 @@ specify the chosen functional in the subsection `&XC_FUNCTIONAL` of the `&XC` se
     &XC
      &XC_FUNCTIONAL PBE0
      &END XC_FUNCTIONAL
+     &HF
+      &SCREENING
+        EPS_SCHWARZ_FORCES 1.0E-6
+        SCREEN_P_FORCES T
+      &END SCREENING
+      &MEMORY
+        MAX_MEMORY 512
+        TREAT_FORCES_IN_CORE F
+      &END MEMORY
+     &END HF
     &END XC
   &END DFT
   &SUBSYS
@@ -265,7 +306,7 @@ choosing one of the options `COM` (center of mass), `COAC` (center of atomic cha
 
 ```none
  -------------------------------------------------------------------------------
- -  TDDFPT run converged in 10 iteration(s) 
+ -  TDDFPT run converged in 10 iteration(s)
  -------------------------------------------------------------------------------
 
  R-TDDFPT states of multiplicity 1
