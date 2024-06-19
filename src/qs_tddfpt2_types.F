@@ -413,10 +413,10 @@ CONTAINS
 
       ! work plain-wave grids
       CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
-      ALLOCATE (work_matrices%A_ia_rspace_sub(evecs_dim))
-      ALLOCATE (work_matrices%wpw_gspace_sub(evecs_dim), work_matrices%wpw_rspace_sub(evecs_dim), &
-                work_matrices%wpw_tau_rspace_sub(evecs_dim))
-      DO ispin = 1, evecs_dim
+      ALLOCATE (work_matrices%A_ia_rspace_sub(nspins))
+      ALLOCATE (work_matrices%wpw_gspace_sub(nspins), work_matrices%wpw_rspace_sub(nspins), &
+                work_matrices%wpw_tau_rspace_sub(nspins))
+      DO ispin = 1, nspins
          CALL auxbas_pw_pool%create_pw(work_matrices%A_ia_rspace_sub(ispin), &
                                        use_data=REALDATA3D, in_space=REALSPACE)
 
