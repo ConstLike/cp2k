@@ -140,7 +140,7 @@ CONTAINS
                                                             nstate_max, nstates, nvirt, old_state
       INTEGER, DIMENSION(maxspins)                       :: nactive
       LOGICAL                                            :: do_admm, do_exck, do_hfx, do_hfxlr, &
-                                                            do_soc, lmult_tmp, state_change
+                                                            do_soc, lmult_tmp, state_change, do_sf
       REAL(kind=dp)                                      :: gsmin, gsval, xsval
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: evals, ostrength
       TYPE(cell_type), POINTER                           :: cell
@@ -191,6 +191,7 @@ CONTAINS
       tddfpt_control%do_admm = do_admm
       tddfpt_control%do_hfxlr = do_hfxlr
       tddfpt_control%do_exck = do_exck
+      do_sf = tddfpt_control%spinflip /= no_sf_tddfpt
 
       soc_section => section_vals_get_subs_vals(tddfpt_section, "SOC")
       CALL section_vals_get(soc_section, explicit=do_soc)
@@ -285,7 +286,7 @@ CONTAINS
             tddfpt_control%nstates = nstate_max
          END IF
          CALL tddfpt_create_work_matrices(work_matrices, gs_mos, nstates, do_hfx, do_admm, do_exck, &
-                                          qs_env, sub_env)
+                                          do_sf,qs_env, sub_env)
 
       END IF
 
@@ -326,11 +327,11 @@ CONTAINS
          NULLIFY (kernel_env%stda_kernel)
       END IF
 
-      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
-         ALLOCATE (evects(nspins, nstates))
-      ELSE
+      IF (do_sf) THEN
       ! only alpha -> beta excitations are considered in spin-flip TDDFT
          ALLOCATE (evects(1, nstates))
+      ELSE
+         ALLOCATE (evects(nspins, nstates))
       END IF
       ALLOCATE (evals(nstates))
       ALLOCATE (S_evects(SIZE(evects,1), nstates))
@@ -1158,6 +1159,7 @@ CONTAINS
                                                             nspins
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: evals_mult, ostrength_mult
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :)     :: evects_mult
+      LOGICAL                                               do_sf
 
       CALL timeset(routineN, handle)
 
@@ -1169,6 +1171,7 @@ CONTAINS
       nspins = SIZE(gs_mos)
       ALLOCATE (evects_mult(nspins, nstates))
       ALLOCATE (evals_mult(nstates))
+      do_sf = tddfpt_control%spinflip /= no_sf_tddfpt
 
       ! First multiplicity
       IF (lmult_tmp) THEN
@@ -1202,7 +1205,7 @@ CONTAINS
          CALL release_kernel_env(kernel_env%full_kernel)
          CALL tddfpt_release_work_matrices(work_matrices, sub_env)
          CALL tddfpt_create_work_matrices(work_matrices, gs_mos, nstates, tddfpt_control%do_hfx, tddfpt_control%do_admm, &
-                                          tddfpt_control%do_exck, qs_env, sub_env)
+                                          tddfpt_control%do_exck, do_sf, qs_env, sub_env)
       END IF
 
       DO istate = 1, nstates

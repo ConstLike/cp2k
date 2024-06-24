@@ -865,20 +865,24 @@ CONTAINS
 
       xc_fun_sections => section_vals_get_subs_vals(xc_section, "XC_FUNCTIONAL")
 
+      ! Create deriv_set object
       CALL xc_dset_create(deriv_set, pw_pool)
 
+      ! Create objects for density related stuff
       CALL xc_rho_set_create(rho_set, &
                              rho_r(1)%pw_grid%bounds_local, &
                              rho_cutoff=section_get_rval(xc_section, "density_cutoff"), &
                              drho_cutoff=section_get_rval(xc_section, "gradient_cutoff"), &
                              tau_cutoff=section_get_rval(xc_section, "tau_cutoff"))
 
+      ! Calculate density stuff, for example the gradient of rho, according to the functional needs
       CALL xc_rho_set_update(rho_set, rho_r, rho_g, tau, &
                              xc_functionals_get_needs(xc_fun_sections, lsd, calc_potential), &
                              section_get_ival(xc_section, "XC_GRID%XC_DERIV"), &
                              section_get_ival(xc_section, "XC_GRID%XC_SMOOTH_RHO"), &
                              pw_pool)
 
+      ! Calculate values of the functional on the grid
       CALL xc_functionals_eval(xc_fun_sections, &
                                lsd=lsd, &
                                rho_set=rho_set, &
@@ -2845,9 +2849,6 @@ CONTAINS
          END IF
 
          IF (gradient_f) THEN
-         ! Skip further contributions to spin-flip xcKernel
-         IF (.NOT.do_spinflip) THEN
-
             IF (my_compute_virial) THEN
                CALL virial_drho_drho(virial_pw, drhoa, v_drhoa(1), virial_xc)
                CALL virial_drho_drho(virial_pw, drhob, v_drhob(2), virial_xc)
@@ -2905,15 +2906,36 @@ CONTAINS
                ! partial integration
                DO idir = 1, 3
 
-                  DO ispin = 1, nspins
-!$OMP                PARALLEL WORKSHARE DEFAULT(NONE) &
-!$OMP                SHARED(v_drho_r,v_drhoa,v_drhob,v_drho,drhoa,drhob,drho,ispin,idir)
-                     v_drho_r(idir, ispin)%cr3d(:, :, :) = &
-                        v_drhoa(ispin)%cr3d(:, :, :)*drhoa(idir)%array(:, :, :) + &
-                        v_drhob(ispin)%cr3d(:, :, :)*drhob(idir)%array(:, :, :) + &
-                        v_drho(ispin)%cr3d(:, :, :)*drho(idir)%array(:, :, :)
-!$OMP                END PARALLEL WORKSHARE
-                  END DO
+                  ! GGA contributions to the spin-flip xcKernel
+                  IF (do_spinflip) THEN
+!$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
+!$OMP                SHARED(bo,v_drho_r,v_drhoa,v_drhob,v_drho,rhoa,rhob,drhoa,drhob,drho,ispin,idir) COLLAPSE(3)
+                     DO k = bo(1, 3), bo(2, 3)
+                        DO j = bo(1, 2), bo(2, 2)
+                           DO i = bo(1, 1), bo(2, 1)
+                              s = rhoa(i,j,k) - rhob(i,j,k)
+                              IF (ABS(s).GT.1.E-4) THEN
+                                 v_drho_r(idir, 1)%cr3d(i, j, k) = &
+                                    (v_drhoa(1)%cr3d(i, j, k) - v_drhob(1)%cr3d(i, j, k))* &
+                                    (drhoa(idir)%array(i, j, k) - drhob(idir)%array(i, j, k))/s
+                              ELSE
+                                 v_drho_r(idir, 1)%cr3d(i, j, k) = 0.0
+                              END IF
+                           END DO
+                        END DO
+                     END DO
+!$OMP                END PARALLEL DO
+                  ELSE
+                     DO ispin = 1, nspins
+!$OMP                   PARALLEL WORKSHARE DEFAULT(NONE) &
+!$OMP                   SHARED(v_drho_r,v_drhoa,v_drhob,v_drho,drhoa,drhob,drho,ispin,idir)
+                        v_drho_r(idir, ispin)%cr3d(:, :, :) = &
+                           v_drhoa(ispin)%cr3d(:, :, :)*drhoa(idir)%array(:, :, :) + &
+                           v_drhob(ispin)%cr3d(:, :, :)*drhob(idir)%array(:, :, :) + &
+                           v_drho(ispin)%cr3d(:, :, :)*drho(idir)%array(:, :, :)
+!$OMP                   END PARALLEL WORKSHARE
+                     END DO
+                  END IF
                   IF (ASSOCIATED(e_drhoa)) THEN
 !$OMP                PARALLEL WORKSHARE DEFAULT(NONE) &
 !$OMP                SHARED(v_drho_r,e_drhoa,drho1a,idir)
@@ -2950,14 +2972,16 @@ CONTAINS
                   END IF
                END DO
 
-               DO ispin = 1, nspins
-                  ! partial integration
-                  CALL xc_pw_divergence(xc_deriv_method_id, v_drho_r(:, ispin), tmp_g, vxc_g, v_xc(ispin))
-               END DO ! ispin
+               ! partial integration
+               IF (do_spinflip) THEN
+        !          CALL xc_pw_divergence(xc_deriv_method_id, v_drho_r(:, 1), tmp_g, vxc_g, v_xc(1))
+               ELSE
+                  DO ispin = 1, nspins
+                     CALL xc_pw_divergence(xc_deriv_method_id, v_drho_r(:, ispin), tmp_g, vxc_g, v_xc(ispin))
+                  END DO ! ispin
+               END IF
 
             END IF
-            END IF
-
             DO idir = 1, 3
                DEALLOCATE (drho(idir)%array)
                DEALLOCATE (drho1(idir)%array)
