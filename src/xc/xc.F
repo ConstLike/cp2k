@@ -1528,7 +1528,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE xc_calc_2nd_deriv(v_xc, v_xc_tau, deriv_set, rho_set, rho1_r, rho1_g, tau1_r, &
                                 pw_pool, xc_section, gapw, vxg, &
-                                lsd_singlets, do_excitations, do_triplet, do_tddft, &
+                                lsd_singlets, do_excitations, do_sf, do_triplet, do_tddft, &
                                 compute_virial, virial_xc)
 
       TYPE(pw_type), DIMENSION(:), POINTER             :: v_xc, v_xc_tau
@@ -1540,7 +1540,7 @@ CONTAINS
       LOGICAL, INTENT(IN)                                :: gapw
       REAL(KIND=dp), DIMENSION(:, :, :, :), OPTIONAL, &
          POINTER                                         :: vxg
-      LOGICAL, INTENT(IN), OPTIONAL                      :: lsd_singlets, do_excitations, &
+      LOGICAL, INTENT(IN), OPTIONAL                      :: lsd_singlets, do_excitations, do_sf, &
                                                             do_triplet, do_tddft, compute_virial
       REAL(KIND=dp), DIMENSION(3, 3), INTENT(INOUT), &
          OPTIONAL                                        :: virial_xc
@@ -1550,7 +1550,7 @@ CONTAINS
       INTEGER                                            :: handle, ispin, nspins
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: lsd, my_compute_virial, &
-                                                            my_do_excitations, my_do_tddft, &
+                                                            my_do_excitations, my_do_tddft, my_do_sf, &
                                                             my_do_triplet, my_lsd_singlets
       REAL(KIND=dp)                                      :: fac
       TYPE(section_vals_type), POINTER                   :: xc_fun_section
@@ -1564,6 +1564,9 @@ CONTAINS
 
       my_do_tddft = .FALSE.
       IF (PRESENT(do_tddft)) my_do_tddft = do_tddft
+
+      my_do_sf = .FALSE.
+      IF (PRESENT(do_sf)) my_do_sf = do_sf
 
       my_do_excitations = .FALSE.
       IF (PRESENT(do_excitations)) my_do_excitations = do_excitations
@@ -1629,7 +1632,7 @@ CONTAINS
          END IF
 
          CALL xc_calc_2nd_deriv_analytical(v_xc, v_xc_tau, deriv_set, rho_set, &
-                                           rho1_set, pw_pool, xc_section, gapw, vxg=vxg, &
+                                           rho1_set, pw_pool, xc_section, gapw, vxg=vxg, spinflip=my_do_sf,&
                                            tddfpt_fac=fac, compute_virial=compute_virial, virial_xc=virial_xc)
 
          CALL xc_rho_set_release(rho1_set)
@@ -2943,14 +2946,32 @@ CONTAINS
                                                        e_drhoa(:, :, :)*drho1a(idir)%array(:, :, :)
 !$OMP                END PARALLEL WORKSHARE
                   END IF
-                  IF (nspins /= 1 .AND. ASSOCIATED(e_drhob)) THEN
+                  IF (do_spinflip .AND. ASSOCIATED(e_drhob)) THEN
+!$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
+!$OMP                SHARED(bo,rhoa,rhob,v_drho_r,e_drhob,drho1b,idir) COLLAPSE(3)
+                     DO k = bo(1, 3), bo(2, 3)
+                        DO j = bo(1, 2), bo(2, 2)
+                           DO i = bo(1, 1), bo(2, 1)
+                              s = rhoa(i,j,k) - rhob(i,j,k)
+                              IF (ABS(s).GT.1.E-4) THEN
+                                 v_drho_r(idir, 1)%cr3d(:, :, :) = v_drho_r(idir, 1)%cr3d(:, :, :) + &
+                                                                   e_drhob(:, :, :)* &
+                                                                   drho1b(idir)%array(:, :, :)/s
+                              ELSE
+                                 v_drho_r(idir, 1)%cr3d(:, :, :) = 0.0
+                              END IF
+                           END DO
+                        END DO
+                     END DO
+!$OMP                END PARALLEL DO
+                  ELSE IF (nspins /= 1 .AND. ASSOCIATED(e_drhob)) THEN
 !$OMP                PARALLEL WORKSHARE DEFAULT(NONE)&
 !$OMP                SHARED(v_drho_r,e_drhob,drho1b,idir)
                      v_drho_r(idir, 2)%cr3d(:, :, :) = v_drho_r(idir, 2)%cr3d(:, :, :) - &
                                                        e_drhob(:, :, :)*drho1b(idir)%array(:, :, :)
 !$OMP                END PARALLEL WORKSHARE
                   END IF
-                  IF (ASSOCIATED(e_drho)) THEN
+                  IF (ASSOCIATED(e_drho).AND.(.NOT.do_spinflip)) THEN
 !$OMP                  PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
 !$OMP                  SHARED(bo,v_drho_r,e_drho,drho1a,drho1b,drho1,fac,idir,nspins) COLLAPSE(3)
                      DO k = bo(1, 3), bo(2, 3)
@@ -2974,7 +2995,7 @@ CONTAINS
 
                ! partial integration
                IF (do_spinflip) THEN
-        !          CALL xc_pw_divergence(xc_deriv_method_id, v_drho_r(:, 1), tmp_g, vxc_g, v_xc(1))
+                  CALL xc_pw_divergence(xc_deriv_method_id, v_drho_r(:, 1), tmp_g, vxc_g, v_xc(1))
                ELSE
                   DO ispin = 1, nspins
                      CALL xc_pw_divergence(xc_deriv_method_id, v_drho_r(:, ispin), tmp_g, vxc_g, v_xc(ispin))
