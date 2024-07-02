@@ -62,7 +62,8 @@ MODULE hfx_derivatives
    USE kinds, ONLY: dp, &
                     int_8
    USE libint_wrapper, ONLY: cp_libint_t
-   USE machine, ONLY: m_walltime
+   USE machine, ONLY: m_flush, &
+                      m_walltime
    USE mathconstants, ONLY: fac
    USE orbital_pointers, ONLY: nco, &
                                ncoset, &
@@ -229,6 +230,8 @@ CONTAINS
 
       my_resp_only = .FALSE.
       IF (PRESENT(resp_only)) my_resp_only = resp_only
+
+      logger => cp_get_default_logger()
 
       is_anti_symmetric = dbcsr_get_matrix_type(rho_ao(1, 1)%matrix) .EQ. dbcsr_type_antisymmetric
 
@@ -492,6 +495,19 @@ CONTAINS
       max_val_memory = 1_int_8
 
 !$OMP MASTER
+      logger => cp_get_default_logger()
+      IF (.not.treat_forces_in_core) THEN
+         iw = cp_print_key_unit_nr(logger, hfx_section, "HF_INFO", &
+                                   extension=".scfLog")
+         IF (iw > 0) THEN
+            WRITE (UNIT=iw, FMT="(/,(T3,A))") &
+               "HFX_MEM_INFO| Compute HFX derivatives on-the-fly."
+            CALL m_flush(iw)
+         END IF
+         CALL cp_print_key_finished_output(iw, logger, hfx_section, &
+                                           "HF_INFO")
+      END IF
+
       !! Set pointer for is_assoc helper
       shm_is_assoc_atomic_block => actual_x_data%is_assoc_atomic_block
       shm_number_of_p_entries = actual_x_data%number_of_p_entries
@@ -1522,7 +1538,7 @@ CONTAINS
       END DO !bin
 
 !$OMP MASTER
-      logger => cp_get_default_logger()
+
       do_print_load_balance_info = .FALSE.
       do_print_load_balance_info = BTEST(cp_print_key_should_output(logger%iter_info, hfx_section, &
                                                                     "LOAD_BALANCE%PRINT/LOAD_BALANCE_INFO"), cp_p_file)
