@@ -35,12 +35,7 @@ python3 -m venv /opt/venv
 export PATH="/opt/venv/bin:$PATH"
 
 # install python packages
-pip3 install --quiet \
-  sphinx \
-  myst-parser \
-  sphinx_rtd_theme \
-  sphinxcontrib-youtube \
-  lxml
+pip3 install -r /opt/cp2k/docs/requirements.txt
 
 echo -e "\n========== Generating Manual =========="
 

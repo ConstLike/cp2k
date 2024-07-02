@@ -191,7 +191,7 @@ required.
   multiplications.
 - Add `-lstdc++ -lcudart -lnvrtc -lcuda -lcublas` to LIBS.
 - Specify the GPU type (e.g., `GPUVER = P100`), possible values are K20X, K40, K80, P100, V100,
-  A100, A40.
+  A100, H100, A40.
 - Specify the C++ compiler (e.g., `CXX = g++`) and the CXXFLAGS to support the C++11 standard.
 - CUFFT 7.0 has a known bug and is therefore disabled by default. NVIDIA's webpage list a patch (an
   upgraded version cufft i.e. >= 7.0.35) - use this together with `-D__HAS_PATCHED_CUFFT_70`.
@@ -471,6 +471,13 @@ DeePMD-kit - Deep Potential Molecular Dyanmics. Support for DeePMD-kit can be en
 - DeePMD-kit C interface can be downloaded from
   <https://docs.deepmodeling.com/projects/deepmd/en/master/install/install-from-c-library.html>
 - For more information see <https://github.com/deepmodeling/deepmd-kit.git>.
+
+### 2z. DFTD4 (optional, dispersion correction)
+
+- dftd4 - Generally Applicable Atomic-Charge Dependent London Dispersion Correction.
+- For more information see <https://github.com/dftd4/dftd4>
+- Add `-D__DFTD4` to DFLAGS, `-ldftd4 -lmstore -lmulticharge -lmctc-lib` to LIBS and
+  `-I'${DFTD4_DFTD4}/../..' -I'${DFTD4_DFTD4}' -I'${DFTD4_MCTC}'` to CFLAGS
 
 ## 3. Compile
 
