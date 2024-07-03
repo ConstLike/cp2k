@@ -2778,8 +2778,12 @@ CONTAINS
 
             CALL prepare_dr1dr(dra1dra, drhoa, drho1a)
             IF (nspins /= 1) THEN
-               CALL prepare_dr1dr(drb1drb, drhob, drho1b)
-               CALL prepare_dr1dr(dr1dr, drho, drho1)
+               IF (do_spinflip) THEN
+                  CALL prepare_dr1dr(drb1drb, drhob, drho1a)
+               ELSE
+                  CALL prepare_dr1dr(drb1drb, drhob, drho1b)
+                  CALL prepare_dr1dr(dr1dr, drho, drho1)
+               END IF
             ELSE
                CALL prepare_dr1dr(drb1drb, drhob, drho1b)
                CALL prepare_dr1dr_ab(dr1dr, drhoa, drhob, drho1a, drho1b, fac)
@@ -2841,6 +2845,53 @@ CONTAINS
 !$OMP                END PARALLEL DO
                   END IF
                END IF
+               ! GGA contributions to the spin-flip xcKernel
+               deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drhoa])
+               IF (ASSOCIATED(deriv_att)) THEN
+                  CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
+                  deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drhob])
+                  IF (ASSOCIATED(deriv_att)) THEN
+                     CALL xc_derivative_get(deriv_att, deriv_data=deriv_data2)
+!$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
+!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,v_xc,rhoa,rhob) COLLAPSE(3)
+                     DO k = bo(1, 3), bo(2, 3)
+                        DO j = bo(1, 2), bo(2, 2)
+                           DO i = bo(1, 1), bo(2, 1)
+                              s = rhoa(i,j,k) - rhob(i,j,k)
+                              IF (ABS(s).GT.1.E-4) THEN
+                                 v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
+                                 deriv_data(i, j, k)*dra1dra(i, j, k) - &
+                                 deriv_data2(i, j, k)*drb1drb(i, j, k)
+                              ELSE
+                                 v_xc (1)%cr3d(i, j, k) = 0.0
+                              END IF
+                           END DO
+                        END DO
+                     END DO
+!$OMP                END PARALLEL DO
+                  END IF
+               END IF
+               deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drho])
+               IF (ASSOCIATED(deriv_att)) THEN
+                  CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
+                  deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drhob])
+!$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
+!$OMP             SHARED(bo,deriv_data,dra1dra,drb1drb,v_xc,rhoa,rhob) COLLAPSE(3)
+                  DO k = bo(1, 3), bo(2, 3)
+                     DO j = bo(1, 2), bo(2, 2)
+                        DO i = bo(1, 1), bo(2, 1)
+                           s = rhoa(i,j,k) - rhob(i,j,k)
+                           IF (ABS(s).GT.1.E-4) THEN
+                              v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
+                              deriv_data(i, j, k)*(dra1dra(i, j, k) - drb1drb(i, j, k))
+                           ELSE
+                              v_xc (1)%cr3d(i, j, k) = 0.0
+                           END IF
+                        END DO
+                     END DO
+                  END DO
+!$OMP             END PARALLEL DO
+               END IF
 
             END IF
 
@@ -2852,83 +2903,65 @@ CONTAINS
          END IF
 
          IF (gradient_f) THEN
-            IF (my_compute_virial) THEN
-               CALL virial_drho_drho(virial_pw, drhoa, v_drhoa(1), virial_xc)
-               CALL virial_drho_drho(virial_pw, drhob, v_drhob(2), virial_xc)
-               DO idir = 1, 3
-!$OMP          PARALLEL WORKSHARE DEFAULT(NONE) SHARED(drho,idir,v_drho,virial_pw)
-                  virial_pw%cr3d(:, :, :) = drho(idir)%array(:, :, :)*(v_drho(1)%cr3d(:, :, :) + v_drho(2)%cr3d(:, :, :))
-!$OMP          END PARALLEL WORKSHARE
-                  DO jdir = 1, idir
-                     tmp = -0.5_dp*virial_pw%pw_grid%dvol*accurate_dot_product(virial_pw%cr3d(:, :, :), &
-                                                                               drho(jdir)%array(:, :, :))
-                     virial_xc(jdir, idir) = virial_xc(jdir, idir) + tmp
-                     virial_xc(idir, jdir) = virial_xc(jdir, idir)
-                  END DO
-               END DO
-            END IF ! my_compute_virial
+            IF (.NOT.do_spinflip) THEN
 
-            IF (my_gapw) THEN
+               IF (my_compute_virial) THEN
+                  CALL virial_drho_drho(virial_pw, drhoa, v_drhoa(1), virial_xc)
+                  CALL virial_drho_drho(virial_pw, drhob, v_drhob(2), virial_xc)
+                  DO idir = 1, 3
+!$OMP             PARALLEL WORKSHARE DEFAULT(NONE) SHARED(drho,idir,v_drho,virial_pw)
+                     virial_pw%cr3d(:, :, :) = drho(idir)%array(:, :, :)*(v_drho(1)%cr3d(:, :, :) + v_drho(2)%cr3d(:, :, :))
+!$OMP             END PARALLEL WORKSHARE
+                     DO jdir = 1, idir
+                        tmp = -0.5_dp*virial_pw%pw_grid%dvol*accurate_dot_product(virial_pw%cr3d(:, :, :), &
+                                                                                  drho(jdir)%array(:, :, :))
+                        virial_xc(jdir, idir) = virial_xc(jdir, idir) + tmp
+                        virial_xc(idir, jdir) = virial_xc(jdir, idir)
+                     END DO
+                  END DO
+               END IF ! my_compute_virial
+
+               IF (my_gapw) THEN
 !$OMP            PARALLEL DO PRIVATE(ia,idir,ispin,ir) DEFAULT(NONE) &
 !$OMP            SHARED(bo,nspins,vxg,drhoa,drhob,v_drhoa,v_drhob,v_drho, &
 !$OMP                   e_drhoa,e_drhob,e_drho,drho1a,drho1b,fac,drho,drho1) COLLAPSE(3)
-               DO ir = bo(1, 2), bo(2, 2)
-                  DO ia = bo(1, 1), bo(2, 1)
-                     DO idir = 1, 3
-                        DO ispin = 1, nspins
-                           vxg(idir, ia, ir, ispin) = &
-                              -(v_drhoa(ispin)%cr3d(ia, ir, 1)*drhoa(idir)%array(ia, ir, 1) + &
-                                v_drhob(ispin)%cr3d(ia, ir, 1)*drhob(idir)%array(ia, ir, 1) + &
-                                v_drho(ispin)%cr3d(ia, ir, 1)*drho(idir)%array(ia, ir, 1))
-                        END DO
-                        IF (ASSOCIATED(e_drhoa)) THEN
-                           vxg(idir, ia, ir, 1) = vxg(idir, ia, ir, 1) + &
-                                                  e_drhoa(ia, ir, 1)*drho1a(idir)%array(ia, ir, 1)
-                        END IF
-                        IF (nspins /= 1 .AND. ASSOCIATED(e_drhob)) THEN
-                           vxg(idir, ia, ir, 2) = vxg(idir, ia, ir, 2) + &
-                                                  e_drhob(ia, ir, 1)*drho1b(idir)%array(ia, ir, 1)
-                        END IF
-                        IF (ASSOCIATED(e_drho)) THEN
-                           IF (nspins /= 1) THEN
+                  DO ir = bo(1, 2), bo(2, 2)
+                     DO ia = bo(1, 1), bo(2, 1)
+                        DO idir = 1, 3
+                           DO ispin = 1, nspins
+                              vxg(idir, ia, ir, ispin) = &
+                                 -(v_drhoa(ispin)%cr3d(ia, ir, 1)*drhoa(idir)%array(ia, ir, 1) + &
+                                   v_drhob(ispin)%cr3d(ia, ir, 1)*drhob(idir)%array(ia, ir, 1) + &
+                                   v_drho(ispin)%cr3d(ia, ir, 1)*drho(idir)%array(ia, ir, 1))
+                           END DO
+                           IF (ASSOCIATED(e_drhoa)) THEN
                               vxg(idir, ia, ir, 1) = vxg(idir, ia, ir, 1) + &
-                                                     e_drho(ia, ir, 1)*drho1(idir)%array(ia, ir, 1)
-                              vxg(idir, ia, ir, 2) = vxg(idir, ia, ir, 2) + &
-                                                     e_drho(ia, ir, 1)*drho1(idir)%array(ia, ir, 1)
-                           ELSE
-                              vxg(idir, ia, ir, 1) = vxg(idir, ia, ir, 1) + &
-                                                     e_drho(ia, ir, 1)*(drho1a(idir)%array(ia, ir, 1) + &
-                                                                        fac*drho1b(idir)%array(ia, ir, 1))
+                                                     e_drhoa(ia, ir, 1)*drho1a(idir)%array(ia, ir, 1)
                            END IF
-                        END IF
+                           IF (nspins /= 1 .AND. ASSOCIATED(e_drhob)) THEN
+                              vxg(idir, ia, ir, 2) = vxg(idir, ia, ir, 2) + &
+                                                     e_drhob(ia, ir, 1)*drho1b(idir)%array(ia, ir, 1)
+                           END IF
+                           IF (ASSOCIATED(e_drho)) THEN
+                              IF (nspins /= 1) THEN
+                                 vxg(idir, ia, ir, 1) = vxg(idir, ia, ir, 1) + &
+                                                        e_drho(ia, ir, 1)*drho1(idir)%array(ia, ir, 1)
+                                 vxg(idir, ia, ir, 2) = vxg(idir, ia, ir, 2) + &
+                                                        e_drho(ia, ir, 1)*drho1(idir)%array(ia, ir, 1)
+                              ELSE
+                                 vxg(idir, ia, ir, 1) = vxg(idir, ia, ir, 1) + &
+                                                        e_drho(ia, ir, 1)*(drho1a(idir)%array(ia, ir, 1) + &
+                                                                           fac*drho1b(idir)%array(ia, ir, 1))
+                              END IF
+                           END IF
+                        END DO
                      END DO
                   END DO
-               END DO
-            ELSE
+               ELSE
 
-               ! partial integration
-               DO idir = 1, 3
+                  ! partial integration
+                  DO idir = 1, 3
 
-                  ! GGA contributions to the spin-flip xcKernel
-                  IF (do_spinflip) THEN
-!$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP                SHARED(bo,v_drho_r,v_drhoa,v_drhob,v_drho,rhoa,rhob,drhoa,drhob,drho,ispin,idir) COLLAPSE(3)
-                     DO k = bo(1, 3), bo(2, 3)
-                        DO j = bo(1, 2), bo(2, 2)
-                           DO i = bo(1, 1), bo(2, 1)
-                              s = rhoa(i,j,k) - rhob(i,j,k)
-                              IF (ABS(s).GT.1.E-4) THEN
-                                 v_drho_r(idir, 1)%cr3d(i, j, k) = &
-                                    (v_drhoa(1)%cr3d(i, j, k) - v_drhob(1)%cr3d(i, j, k))* &
-                                    (drhoa(idir)%array(i, j, k) - drhob(idir)%array(i, j, k))/s
-                              ELSE
-                                 v_drho_r(idir, 1)%cr3d(i, j, k) = 0.0
-                              END IF
-                           END DO
-                        END DO
-                     END DO
-!$OMP                END PARALLEL DO
-                  ELSE
                      DO ispin = 1, nspins
 !$OMP                   PARALLEL WORKSHARE DEFAULT(NONE) &
 !$OMP                   SHARED(v_drho_r,v_drhoa,v_drhob,v_drho,drhoa,drhob,drho,ispin,idir)
@@ -2938,71 +2971,51 @@ CONTAINS
                            v_drho(ispin)%cr3d(:, :, :)*drho(idir)%array(:, :, :)
 !$OMP                   END PARALLEL WORKSHARE
                      END DO
-                  END IF
-                  IF (ASSOCIATED(e_drhoa)) THEN
-!$OMP                PARALLEL WORKSHARE DEFAULT(NONE) &
-!$OMP                SHARED(v_drho_r,e_drhoa,drho1a,idir)
-                     v_drho_r(idir, 1)%cr3d(:, :, :) = v_drho_r(idir, 1)%cr3d(:, :, :) - &
-                                                       e_drhoa(:, :, :)*drho1a(idir)%array(:, :, :)
-!$OMP                END PARALLEL WORKSHARE
-                  END IF
-                  IF (do_spinflip .AND. ASSOCIATED(e_drhob)) THEN
-!$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP                SHARED(bo,rhoa,rhob,v_drho_r,e_drhob,drho1b,idir) COLLAPSE(3)
-                     DO k = bo(1, 3), bo(2, 3)
-                        DO j = bo(1, 2), bo(2, 2)
-                           DO i = bo(1, 1), bo(2, 1)
-                              s = rhoa(i,j,k) - rhob(i,j,k)
-                              IF (ABS(s).GT.1.E-4) THEN
-                                 v_drho_r(idir, 1)%cr3d(:, :, :) = v_drho_r(idir, 1)%cr3d(:, :, :) + &
-                                                                   e_drhob(:, :, :)* &
-                                                                   drho1b(idir)%array(:, :, :)/s
-                              ELSE
-                                 v_drho_r(idir, 1)%cr3d(:, :, :) = 0.0
-                              END IF
+                     IF (ASSOCIATED(e_drhoa)) THEN
+!$OMP                   PARALLEL WORKSHARE DEFAULT(NONE) &
+!$OMP                   SHARED(v_drho_r,e_drhoa,drho1a,idir)
+                        v_drho_r(idir, 1)%cr3d(:, :, :) = v_drho_r(idir, 1)%cr3d(:, :, :) - &
+                                                          e_drhoa(:, :, :)*drho1a(idir)%array(:, :, :)
+!$OMP                   END PARALLEL WORKSHARE
+                     END IF
+                     IF (nspins /= 1 .AND. ASSOCIATED(e_drhob)) THEN
+!$OMP                   PARALLEL WORKSHARE DEFAULT(NONE)&
+!$OMP                   SHARED(v_drho_r,e_drhob,drho1b,idir)
+                        v_drho_r(idir, 2)%cr3d(:, :, :) = v_drho_r(idir, 2)%cr3d(:, :, :) - &
+                                                          e_drhob(:, :, :)*drho1b(idir)%array(:, :, :)
+!$OMP                   END PARALLEL WORKSHARE
+                     END IF
+                     IF (ASSOCIATED(e_drho)) THEN
+!$OMP                   PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
+!$OMP                   SHARED(bo,v_drho_r,e_drho,drho1a,drho1b,drho1,fac,idir,nspins) COLLAPSE(3)
+                        DO k = bo(1, 3), bo(2, 3)
+                           DO j = bo(1, 2), bo(2, 2)
+                              DO i = bo(1, 1), bo(2, 1)
+                                 IF (nspins /= 1) THEN
+                                    v_drho_r(idir, 1)%cr3d(i, j, k) = v_drho_r(idir, 1)%cr3d(i, j, k) - &
+                                                                      e_drho(i, j, k)*drho1(idir)%array(i, j, k)
+                                    v_drho_r(idir, 2)%cr3d(i, j, k) = v_drho_r(idir, 2)%cr3d(i, j, k) - &
+                                                                      e_drho(i, j, k)*drho1(idir)%array(i, j, k)
+                                 ELSE
+                                    v_drho_r(idir, 1)%cr3d(i, j, k) = v_drho_r(idir, 1)%cr3d(i, j, k) - &
+                                                                      e_drho(i, j, k)*(drho1a(idir)%array(i, j, k) + &
+                                                                                       fac*drho1b(idir)%array(i, j, k))
+                                 END IF
+                              END DO
                            END DO
                         END DO
-                     END DO
-!$OMP                END PARALLEL DO
-                  ELSE IF (nspins /= 1 .AND. ASSOCIATED(e_drhob)) THEN
-!$OMP                PARALLEL WORKSHARE DEFAULT(NONE)&
-!$OMP                SHARED(v_drho_r,e_drhob,drho1b,idir)
-                     v_drho_r(idir, 2)%cr3d(:, :, :) = v_drho_r(idir, 2)%cr3d(:, :, :) - &
-                                                       e_drhob(:, :, :)*drho1b(idir)%array(:, :, :)
-!$OMP                END PARALLEL WORKSHARE
-                  END IF
-                  IF (ASSOCIATED(e_drho).AND.(.NOT.do_spinflip)) THEN
-!$OMP                  PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
-!$OMP                  SHARED(bo,v_drho_r,e_drho,drho1a,drho1b,drho1,fac,idir,nspins) COLLAPSE(3)
-                     DO k = bo(1, 3), bo(2, 3)
-                        DO j = bo(1, 2), bo(2, 2)
-                           DO i = bo(1, 1), bo(2, 1)
-                              IF (nspins /= 1) THEN
-                                 v_drho_r(idir, 1)%cr3d(i, j, k) = v_drho_r(idir, 1)%cr3d(i, j, k) - &
-                                                                   e_drho(i, j, k)*drho1(idir)%array(i, j, k)
-                                 v_drho_r(idir, 2)%cr3d(i, j, k) = v_drho_r(idir, 2)%cr3d(i, j, k) - &
-                                                                   e_drho(i, j, k)*drho1(idir)%array(i, j, k)
-                              ELSE
-                                 v_drho_r(idir, 1)%cr3d(i, j, k) = v_drho_r(idir, 1)%cr3d(i, j, k) - &
-                                                                   e_drho(i, j, k)*(drho1a(idir)%array(i, j, k) + &
-                                                                                    fac*drho1b(idir)%array(i, j, k))
-                              END IF
-                           END DO
-                        END DO
-                     END DO
-                  END IF
-               END DO
+                     END IF
+                  END DO
 
                ! partial integration
-               IF (do_spinflip) THEN
-                  CALL xc_pw_divergence(xc_deriv_method_id, v_drho_r(:, 1), tmp_g, vxc_g, v_xc(1))
-               ELSE
                   DO ispin = 1, nspins
                      CALL xc_pw_divergence(xc_deriv_method_id, v_drho_r(:, ispin), tmp_g, vxc_g, v_xc(ispin))
                   END DO ! ispin
+
                END IF
 
-            END IF
+            END IF ! .NOT.do_spinflip
+
             DO idir = 1, 3
                DEALLOCATE (drho(idir)%array)
                DEALLOCATE (drho1(idir)%array)
