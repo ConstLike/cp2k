@@ -474,7 +474,9 @@ CONTAINS
          name="TREAT_FORCES_IN_CORE", &
          description="Determines whether the derivative ERI's should be stored to RAM or not. "// &
          "Storing derivative ERIs can speed up calculations. "// &
-         "Memory usage is defined via MAX_MEMORY, i.e., the memory is shared with the energy ERI's.", &
+         "Memory usage is defined via MAX_MEMORY, i.e., the memory is shared with the energy ERI's. "// &
+         "It may also be of interest to consider another keyword SCREEN_P_FORCES "// &
+         " (see FORCE_EVAL/DFT/XC/HF/SCREENING) for the speedup reasons.", &
          usage="TREAT_FORCES_IN_CORE FALSE", &
          default_l_val=.FALSE.)
       CALL section_add_keyword(section, keyword)
