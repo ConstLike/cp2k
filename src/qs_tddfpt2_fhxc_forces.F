@@ -100,7 +100,8 @@ MODULE qs_tddfpt2_fhxc_forces
    USE qs_force_types,                  ONLY: qs_force_type
    USE qs_fxc,                          ONLY: qs_fgxc_create,&
                                               qs_fgxc_gdiff,&
-                                              qs_fgxc_release
+                                              qs_fgxc_release, &
+                                              qs_fgxc_analytic
    USE qs_gapw_densities,               ONLY: prepare_gapw_den
    USE qs_integrate_potential,          ONLY: integrate_v_rspace
    USE qs_kernel_types,                 ONLY: full_kernel_env_type
@@ -552,11 +553,9 @@ CONTAINS
          IF ((do_analytic .AND. .NOT. do_numeric).OR.do_sf) THEN
             IF (.NOT.do_sf) THEN
                CPABORT("Analytic 3rd EXC derivatives not available")
-!            ELSE !TODO
-!               CALL qs_fxc_analytic(rho, rhox, xc_section, order, eps_delta, is_rks_triplets, &
-!                                  fxc_rho, fxc_tau, gxc_rho, gxc_tau)
-!               CALL qs_gxc_analytic(ks_env, rho, rhox, xc_section, order, eps_delta, is_rks_triplets, &
-!                                  fxc_rho, fxc_tau, gxc_rho, gxc_tau)
+            ELSE !TODO
+               CALL qs_fgxc_analytic(rho, rhox, xc_section, auxbas_pw_pool, &
+                                     fxc_rho, fxc_tau, gxc_rho, gxc_tau, spinflip=do_sf)
             END IF
          ELSEIF (do_numeric) THEN
             IF (do_analytic) THEN
