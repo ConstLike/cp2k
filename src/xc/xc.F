@@ -3321,9 +3321,9 @@ CONTAINS
                !   vxca = (vxc^{\alpha}-vxc^{\beta})*rho1/(rhoa-rhob)^2
                !   vxcb =-(vxc^{\alpha}-vxc^{\beta})*rho1/(rhoa-rhob)^2
                !     Alpha LDA contribution
-               !           | d e_xc      d e_xc  |       rho1a    
-               !   vxca =  |-------- - ----------|*----------------- 
-               !           | drhoa      drhob    |  (rhoa - rhob)^2
+               !                 | d e_xc      d e_xc  |       rho1a    
+               !   vxca =  rho1a*|-------- - ----------|*----------------- 
+               !                 | drhoa      drhob    |  (rhoa - rhob)^2
                deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhoa])
                IF (ASSOCIATED(deriv_att)) THEN
                   CALL xc_derivative_get(deriv_att, deriv_data = deriv_data)
@@ -3349,7 +3349,7 @@ CONTAINS
                   END IF
                END IF
                !     Alpha GGA contributions
-               !             |  d e_xc               d e_xc          |         1        
+               !             |  d e_xc               d e_xc          |       rho1a      
                !   vxca += + |----------*dra1dra - ----------*drb1drb|*----------------- 
                !             | d|drhoa|             d|drhob|         |  (rhoa - rhob)^2
                deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drhoa])
@@ -3412,9 +3412,9 @@ CONTAINS
                !   vxca = rho1*(fxc^{\alpha\alpha}-fxc^{\alpha\beta})*rho1/(rhoa-rhob)
                !   vxcb = rho1*(fxc^{\beta\alpha}-fxc^{\beta\beta})*rho1/(rhoa-rhob)
                !     Alpha LDA contribution
-               !            |  d^2 e_xc        d^2 e_xc   |     rho1a^2    
-               !   vxca +=  |------------- - -------------|*------------- 
-               !            | drhoa drhoa     drhoa drhob |  rhoa - rhob
+               !                  |  d^2 e_xc        d^2 e_xc   |     rho1a      
+               !   vxca +=  rho1a*|------------- - -------------|*------------- 
+               !                  | drhoa drhoa     drhoa drhob |  rhoa - rhob
                deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhoa, deriv_rhob])
                IF (ASSOCIATED(deriv_att)) THEN
                   CALL xc_derivative_get(deriv_att, deriv_data=deriv_data2)
@@ -3439,9 +3439,9 @@ CONTAINS
 !$OMP                END PARALLEL DO
                   END IF
                !     Beta LDA contribution
-               !            |  d^2 e_xc        d^2 e_xc   |    rho1a^2    
-               !   vxcb +=  |------------- - -------------|*------------- 
-               !            | drhob drhoa     drhob drhob |  rhoa - rhob
+               !                  |  d^2 e_xc        d^2 e_xc   |    rho1a   
+               !   vxcb +=  rho1a*|------------- - -------------|*------------- 
+               !                  | drhob drhoa     drhob drhob |  rhoa - rhob
                   deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhob, deriv_rhob])
                   IF (ASSOCIATED(deriv_att)) THEN
                      CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
