@@ -329,7 +329,9 @@ CONTAINS
       do_sf = .FALSE.
       IF (PRESENT(spinflip)) do_sf = spinflip
       !
-      nspins = SIZE(rho1_r)
+      ! Get the values on the gridpoints of the rho0 density
+      CALL qs_rho_get(rho0_struct, rho_r=rho0_r, rho_g=rho0_g, tau_r=tau0_r)
+      nspins = SIZE(rho0_r)
       lsd = (nspins == 2)
       !
       IF (do_sf) THEN
@@ -349,13 +351,9 @@ CONTAINS
       needs = xc_functionals_get_needs(xc_fun_section, lsd, .TRUE.)
 
       ! Create fields for the kernel and kernel derivative
-      NULLIFY (fxc_rho,fxc_tau,gxc_rho,gxc_tau)
       ALLOCATE (fxc_rho(spindim),gxc_rho(nspins))
       DO ispin = 1, spindim
          CALL pw_pool%create_pw(fxc_rho(ispin), &
-                                use_data=REALDATA3D, &
-                                in_space=REALSPACE)
-         CALL pw_pool%create_pw(gxc_rho(ispin), &
                                 use_data=REALDATA3D, &
                                 in_space=REALSPACE)
          CALL pw_zero(fxc_rho(ispin))
@@ -386,8 +384,6 @@ CONTAINS
       END IF
 
       ! Build rho0_set
-      ! Get the values on the gridpoints of the rho0 density
-      CALL qs_rho_get(rho0_struct, rho_r=rho0_r, rho_g=rho0_g, tau_r=tau0_r)
       ! calculate the arguments needed by the functionals
       ! Needs
       !   deriv_set  xc_derivative_set_type just declared
@@ -400,6 +396,8 @@ CONTAINS
                              do_sf=do_sf)
 
       ! Build rho1_set
+      ! Get the values on the gridpoints of the rho1 density
+      CALL qs_rho_get(rho1_struct, rho_r=rho1_r, rho_g=rho1_g, tau_r=tau1_r)
       bo = rho1_r(1)%pw_grid%bounds_local
       ! create the place where to store the argument for the functionals
       ! Needs
@@ -409,8 +407,6 @@ CONTAINS
                              rho_cutoff=section_get_rval(xc_section, "DENSITY_CUTOFF"), &
                              drho_cutoff=section_get_rval(xc_section, "GRADIENT_CUTOFF"), &
                              tau_cutoff=section_get_rval(xc_section, "TAU_CUTOFF"))
-      ! Get the values on the gridpoints of the rho1 density
-      CALL qs_rho_get(rho1_struct, rho_r=rho1_r, rho_g=rho1_g, tau_r=tau1_r)
       ! calculate the arguments needed by the functionals
       ! Needs
       !   rho1_set             object created by xc_rho_set_create
@@ -420,7 +416,7 @@ CONTAINS
       CALL xc_rho_set_update(rho1_set, rho1_r, rho1_g, tau1_r, needs, &
                              section_get_ival(xc_section, "XC_GRID%XC_DERIV"), &
                              section_get_ival(xc_section, "XC_GRID%XC_SMOOTH_RHO"), &
-                             pw_pool)
+                             pw_pool, spinflip=do_sf)
 
       ! Calculate exchange correlation kernel
       ! Needs
