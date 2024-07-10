@@ -467,7 +467,6 @@ CONTAINS
 
       ! Overlap matrix, build the Lambda matrix, Eq. 51.
       NULLIFY (matrix_wx1,matrix_wz)
-      CALL dbcsr_allocate_matrix_set(matrix_wx1, nspins)
       CALL dbcsr_allocate_matrix_set(matrix_wz, nspins)
       matrix_wx1 => ex_env%matrix_wx1
       CALL get_qs_env(qs_env=qs_env, matrix_s=matrix_s, matrix_ks=matrix_ks)
