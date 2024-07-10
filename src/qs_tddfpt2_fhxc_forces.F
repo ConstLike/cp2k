@@ -601,8 +601,8 @@ CONTAINS
 
          IF (debug_forces) fodeb(1:3) = force(1)%rho_elec(1:3, 1)
          NULLIFY (matrix_fx)
-         CALL dbcsr_allocate_matrix_set(matrix_fx, nspins)
-         DO ispin = 1, nspins
+         CALL dbcsr_allocate_matrix_set(matrix_fx, SIZE(fxc_rho))
+         DO ispin = 1, SIZE(fxc_rho,1)
             ALLOCATE (matrix_fx(ispin)%matrix)
             CALL dbcsr_create(matrix_fx(ispin)%matrix, template=matrix_s(1)%matrix)
             CALL dbcsr_copy(matrix_fx(ispin)%matrix, matrix_s(1)%matrix)
