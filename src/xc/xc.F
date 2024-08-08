@@ -2667,7 +2667,7 @@ CONTAINS
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: gradient_f, lsd, my_compute_virial, &
                                                             my_gapw, tau_f, laplace_f, rho_f, do_spinflip
-      REAL(KIND=dp)                                      :: fac, gradient_cut, tmp, factor2, s
+      REAL(KIND=dp)                                      :: fac, gradient_cut, tmp, factor2, s, S_THRESH
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: dr1dr, dra1dra, drb1drb
       REAL(kind=dp), DIMENSION(:, :, :), POINTER         :: deriv_data, deriv_data2, e_drhoa, e_drhob, &
                                                             e_drho, norm_drho, norm_drhoa, &
@@ -2698,6 +2698,7 @@ CONTAINS
       IF (my_compute_virial) THEN
          CPASSERT(PRESENT(virial_xc))
       END IF
+      S_THRESH = 0.0
 
       CALL section_vals_val_get(xc_section, "XC_GRID%XC_DERIV", &
                                 i_val=xc_deriv_method_id)
@@ -2823,7 +2824,12 @@ CONTAINS
 
          IF (do_spinflip) THEN
 
-            ! Compute (vxc^{\alpha}-vxc^{\beta})*\rho(1)/(rhoa-rhob) over the grid points
+            ! vxc contributions
+            !   vxc = (vxc^{\alpha}-vxc^{\beta})*rho1/(rhoa-rhob)
+            !     Alpha LDA contribution
+            !                 | d e_xc      d e_xc  |     rho1a    
+            !   vxca =  rho1a*|-------- - ----------|*------------- 
+            !                 | drhoa      drhob    |  rhoa - rhob
             deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhoa])
             IF (ASSOCIATED(deriv_att)) THEN
                CALL xc_derivative_get(deriv_att, deriv_data = deriv_data)
@@ -2831,12 +2837,12 @@ CONTAINS
                IF (ASSOCIATED(deriv_att)) THEN
                   CALL xc_derivative_get(deriv_att, deriv_data = deriv_data2)
 !$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP             SHARED(bo,v_xc,deriv_data,deriv_data2,rho1a,rhoa,rhob) COLLAPSE(3)
+!$OMP             SHARED(bo,v_xc,deriv_data,deriv_data2,rho1a,rhoa,rhob,S_THRESH) COLLAPSE(3)
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
                            s = rhoa(i,j,k) - rhob(i,j,k)
-                           IF (ABS(s).GT.1.E-4) THEN
+                           IF (ABS(s).GT.S_THRESH) THEN
                              v_xc(1)%cr3d(i,j,k) = v_xc(1)%cr3d(i,j,k) + &
                              (deriv_data(i,j,k) - deriv_data2(i,j,k))*rho1a(i,j,k)/s
                            ELSE
@@ -2856,12 +2862,12 @@ CONTAINS
                IF (ASSOCIATED(deriv_att)) THEN
                   CALL xc_derivative_get(deriv_att, deriv_data=deriv_data2)
 !$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP             SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,v_xc,rhoa,rhob) COLLAPSE(3)
+!$OMP             SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,v_xc,rhoa,rhob,S_THRESH) COLLAPSE(3)
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
                            s = rhoa(i,j,k) - rhob(i,j,k)
-                           IF (ABS(s).GT.1.E-4) THEN
+                           IF (ABS(s).GT.S_THRESH) THEN
                               v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
                               (deriv_data(i, j, k)*dra1dra(i, j, k) - &
                               deriv_data2(i, j, k)*drb1drb(i, j, k))/s
@@ -2879,12 +2885,12 @@ CONTAINS
                CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
                deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drhob])
 !$OMP          PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP          SHARED(bo,deriv_data,dra1dra,drb1drb,v_xc,rhoa,rhob) COLLAPSE(3)
+!$OMP          SHARED(bo,deriv_data,dra1dra,drb1drb,v_xc,rhoa,rhob,S_THRESH) COLLAPSE(3)
                DO k = bo(1, 3), bo(2, 3)
                   DO j = bo(1, 2), bo(2, 2)
                      DO i = bo(1, 1), bo(2, 1)
                         s = rhoa(i,j,k) - rhob(i,j,k)
-                        IF (ABS(s).GT.1.E-4) THEN
+                        IF (ABS(s).GT.S_THRESH) THEN
                            v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
                            deriv_data(i, j, k)*(dra1dra(i, j, k) - drb1drb(i, j, k))/s
                         ELSE
@@ -3200,7 +3206,7 @@ CONTAINS
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: lsd, do_spinflip, &
                                                             rho_f, gradient_f, tau_f, laplace_f
-      REAL(KIND=dp)                                      :: s
+      REAL(KIND=dp)                                      :: s, S_THRESH, S_THRESH2, drho_cutoff
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: dr1dr, dra1dra, drb1drb
       REAL(kind=dp), DIMENSION(:, :, :), POINTER         :: deriv_data, deriv_data2, e_drhoa, e_drhob, &
                                                             e_drho, norm_drho, norm_drhoa, &
@@ -3232,6 +3238,11 @@ CONTAINS
       bo = rho_set%local_bounds
       !
       CALL check_for_derivatives(deriv_set, lsd, rho_f, gradient_f, tau_f, laplace_f)
+      !
+      CALL xc_rho_set_get(rho1_set, drho_cutoff=drho_cutoff)
+      !
+      S_THRESH = 0.0
+      S_THRESH2= 0.0
 
       ! Initialize potential
       DO ispin = 1, nspins
@@ -3346,16 +3357,14 @@ CONTAINS
                   IF (ASSOCIATED(deriv_att)) THEN
                      CALL xc_derivative_get(deriv_att, deriv_data = deriv_data2)
 !$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP                SHARED(bo,v_xc,deriv_data,deriv_data2,rho1a,rhoa,rhob) COLLAPSE(3)
+!$OMP                SHARED(bo,v_xc,deriv_data,deriv_data2,rho1a,rhoa,rhob,S_THRESH2) COLLAPSE(3)
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
                               s = (rhoa(i,j,k) - rhob(i,j,k))**2
-                              IF (s.GT.1.E-8) THEN
+                              IF (s.GT.S_THRESH2) THEN
                                 v_xc(1)%cr3d(i,j,k) = v_xc(1)%cr3d(i,j,k) + &
                                 (deriv_data(i,j,k) - deriv_data2(i,j,k))*rho1a(i,j,k)**2/s
-                              ELSE
-                                v_xc(1)%cr3d(i,j,k) = 0.0
                               END IF
                            END DO
                         END DO
@@ -3374,17 +3383,15 @@ CONTAINS
                   IF (ASSOCIATED(deriv_att)) THEN
                      CALL xc_derivative_get(deriv_att, deriv_data=deriv_data2)
 !$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,v_xc,rhoa,rhob) COLLAPSE(3)
+!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,v_xc,rho1a,rhoa,rhob,S_THRESH2) COLLAPSE(3)
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
                               s = (rhoa(i,j,k) - rhob(i,j,k))**2
-                              IF (s.GT.1.E-8) THEN
+                              IF (s.GT.S_THRESH2) THEN
                                  v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
-                                 (deriv_data(i, j, k) *dra1dra(i, j, k) - &
-                                  deriv_data2(i, j, k)*drb1drb(i, j, k))/s
-                              ELSE
-                                 v_xc (1)%cr3d(i, j, k) = 0.0
+                                 (deriv_data(i, j, k) *dra1dra(i, j, k) - deriv_data2(i, j, k)*drb1drb(i, j, k)) &
+                                  *rho1a(i,j,k)/s
                               END IF
                            END DO
                         END DO
@@ -3392,29 +3399,27 @@ CONTAINS
 !$OMP                END PARALLEL DO
                   END IF
                END IF
-               deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drho])
-               IF (ASSOCIATED(deriv_att)) THEN
-                  CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
-!$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP             SHARED(bo,deriv_data,dra1dra,drb1drb,v_xc,rhoa,rhob) COLLAPSE(3)
-                  DO k = bo(1, 3), bo(2, 3)
-                     DO j = bo(1, 2), bo(2, 2)
-                        DO i = bo(1, 1), bo(2, 1)
-                           s = (rhoa(i,j,k) - rhob(i,j,k))**2
-                           IF (s.GT.1.E-8) THEN
-                              v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
-                              deriv_data(i, j, k)*(dra1dra(i, j, k) - drb1drb(i, j, k))/s
-                           ELSE
-                              v_xc (1)%cr3d(i, j, k) = 0.0
-                           END IF
-                        END DO
-                     END DO
-                  END DO
-!$OMP             END PARALLEL DO
-               END IF
+!               deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drho])
+!               IF (ASSOCIATED(deriv_att)) THEN
+!                  CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
+!!$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
+!!$OMP             SHARED(bo,deriv_data,dra1dra,drb1drb,v_xc,rhoa,rhob,S_THRESH2) COLLAPSE(3)
+!                  DO k = bo(1, 3), bo(2, 3)
+!                     DO j = bo(1, 2), bo(2, 2)
+!                        DO i = bo(1, 1), bo(2, 1)
+!                           s = (rhoa(i,j,k) - rhob(i,j,k))**2
+!                           IF (s.GT.S_THRESH2) THEN
+!                              v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
+!                              deriv_data(i, j, k)*(dra1dra(i, j, k) - drb1drb(i, j, k))rho1a(i,j,k)/s
+!                           END IF
+!                        END DO
+!                     END DO
+!                  END DO
+!!$OMP             END PARALLEL DO
+!               END IF
                !     Beta contribution = - alpha
 !$OMP          PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP          SHARED(bo,v_xc,deriv_data,deriv_data2,rho1a,rhoa,rhob) COLLAPSE(3)
+!$OMP          SHARED(bo,v_xc) COLLAPSE(3)
                DO k = bo(1, 3), bo(2, 3)
                   DO j = bo(1, 2), bo(2, 2)
                      DO i = bo(1, 1), bo(2, 1)
@@ -3437,16 +3442,14 @@ CONTAINS
                   IF (ASSOCIATED(deriv_att)) THEN
                      CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
 !$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP                SHARED(bo,deriv_data,deriv_data2,rho1a,v_xc,rhoa,rhob) COLLAPSE(3)
+!$OMP                SHARED(bo,deriv_data,deriv_data2,rho1a,v_xc,rhoa,rhob,S_THRESH) COLLAPSE(3)
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
                               s = rhoa(i,j,k) - rhob(i,j,k)
-                              IF (ABS(s).GT.1.E-4) THEN
+                              IF (ABS(s).GT.S_THRESH) THEN
                                  v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
                                  rho1a(i, j, k)**2*(deriv_data(i, j, k) - deriv_data2(i, j, k))/s
-                              ELSE
-                                 v_xc (1)%cr3d(i, j, k) = 0.0
                               END IF
                            END DO
                         END DO
@@ -3461,16 +3464,14 @@ CONTAINS
                   IF (ASSOCIATED(deriv_att)) THEN
                      CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
 !$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP                SHARED(bo,deriv_data,deriv_data2,rho1a,v_xc,rhoa,rhob) COLLAPSE(3)
+!$OMP                SHARED(bo,deriv_data,deriv_data2,rho1a,v_xc,rhoa,rhob,S_THRESH) COLLAPSE(3)
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
                               s = rhoa(i,j,k) - rhob(i,j,k)
-                              IF (ABS(s).GT.1.E-4) THEN
+                              IF (ABS(s).GT.S_THRESH) THEN
                                  v_xc (2)%cr3d(i, j, k) = v_xc (2)%cr3d(i, j, k) + &
                                  rho1a(i, j, k)**2*(deriv_data2(i, j, k) - deriv_data(i, j, k))/s
-                              ELSE
-                                 v_xc (2)%cr3d(i, j, k) = 0.0
                               END IF
                            END DO
                         END DO
@@ -3489,17 +3490,15 @@ CONTAINS
                   IF (ASSOCIATED(deriv_att)) THEN
                      CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
 !$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,rho1a,v_xc,rhoa,rhob) COLLAPSE(3)
+!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,rho1a,v_xc,rhoa,rhob,S_THRESH) COLLAPSE(3)
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
                               s = rhoa(i,j,k) - rhob(i,j,k)
-                              IF (ABS(s).GT.1.E-4) THEN
+                              IF (ABS(s).GT.S_THRESH) THEN
                                  v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
-                                 rho1a(i, j, k)/s*deriv_data(i, j, k)*dra1dra(i, j, k) - &
-                                 rho1a(i, j, k)/s*deriv_data2(i, j, k)*drb1drb(i, j, k)
-                              ELSE
-                                 v_xc (1)%cr3d(i, j, k) = 0.0
+                                 (deriv_data(i, j, k)*dra1dra(i, j, k) - deriv_data2(i, j, k)*drb1drb(i, j, k)) &
+                                 *rho1a(i, j, k)/s
                               END IF
                            END DO
                         END DO
@@ -3509,7 +3508,7 @@ CONTAINS
                END IF
                !     Beta GGA contribution
                !            |    d^2 e_xc                   d^2 e_xc            |     rho1a    
-               !   vxca +=  |----------------*dra1dra - ----------------*drb1drb|*------------- 
+               !   vxcb +=  |----------------*dra1dra - ----------------*drb1drb|*------------- 
                !            | drhob d|drhoa|             drhob d|drhob|         |  rhoa - rhob
                deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhob, deriv_norm_drhoa])
                IF (ASSOCIATED(deriv_att)) THEN
@@ -3518,17 +3517,15 @@ CONTAINS
                   IF (ASSOCIATED(deriv_att)) THEN
                      CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
 !$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,rho1a,v_xc,rhoa,rhob) COLLAPSE(3)
+!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,rho1a,v_xc,rhoa,rhob,S_THRESH) COLLAPSE(3)
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
                               s = rhoa(i,j,k) - rhob(i,j,k)
-                              IF (ABS(s).GT.1.E-4) THEN
+                              IF (ABS(s).GT.S_THRESH) THEN
                                  v_xc (2)%cr3d(i, j, k) = v_xc (2)%cr3d(i, j, k) + &
                                  (deriv_data2(i, j, k)*dra1dra(i, j, k) - &
                                   deriv_data (i, j, k)*drb1drb(i, j, k))*rho1a(i, j, k)/s
-                              ELSE
-                                 v_xc (2)%cr3d(i, j, k) = 0.0
                               END IF
                            END DO
                         END DO
@@ -3536,38 +3533,19 @@ CONTAINS
 !$OMP                END PARALLEL DO
                   END IF
                END IF
-               deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhoa, deriv_norm_drho])
-               IF (ASSOCIATED(deriv_att)) THEN
-                  CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
-                  deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhob, deriv_norm_drho])
-                  IF (ASSOCIATED(deriv_att)) THEN
-                     CALL xc_derivative_get(deriv_att, deriv_data=deriv_data2)
-!$OMP                PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,rho1a,v_xc,rhoa,rhob) COLLAPSE(3)
-                     DO k = bo(1, 3), bo(2, 3)
-                        DO j = bo(1, 2), bo(2, 2)
-                           DO i = bo(1, 1), bo(2, 1)
-                              s = rhoa(i,j,k) - rhob(i,j,k)
-                              IF (ABS(s).GT.1.E-4) THEN
-                                 v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
-                                 deriv_data(i, j, k)*(dra1dra(i, j, k) - drb1drb(i, j, k))*rho1a(i, j, k)/s
-                                 v_xc (2)%cr3d(i, j, k) = v_xc (2)%cr3d(i, j, k) + &
-                                 deriv_data2(i, j, k)*(dra1dra(i, j, k) - drb1drb(i, j, k))*rho1a(i, j, k)/s
-                              ELSE
-                                 v_xc (1)%cr3d(i, j, k) = 0.0
-                                 v_xc (2)%cr3d(i, j, k) = 0.0
-                              END IF
-                           END DO
-                        END DO
-                     END DO
-!$OMP                END PARALLEL DO
-                  END IF
-               END IF
+               !     Spinless GGA contribution cancels out
+               !            |   d^2 e_xc                d^2 e_xc          |     rho1a    
+               !   vxca +=  |---------------*dr1dr - ---------------*dr1dr|*------------- = 0
+               !            | drhoa d|drho|           drhoa d|drho|       |  rhoa - rhob
+               !
+               !            |   d^2 e_xc                d^2 e_xc          |     rho1a    
+               !   vxcb +=  |---------------*dr1dr - ---------------*dr1dr|*------------- = 0
+               !            | drhob d|drho|           drhob d|drho|       |  rhoa - rhob
                ! Calculate the vector for the partial integration term of GGA functionals
                !   First contribution alpha
-               !              |   d^2 e_xc           d^2 e_xc     |
-               !   v_drhoa = -|---------------- - ----------------| * rho1a
-               !              | d|drhoa| drhoa     d|drhoa| drhob |
+               !               |   d^2 e_xc           d^2 e_xc     |
+               !   v_drhoa += -|---------------- - ----------------| * rho1a
+               !               | d|drhoa| drhoa     d|drhoa| drhob |
                deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drhoa, deriv_rhob])
                IF (ASSOCIATED(deriv_att)) THEN
                   CALL xc_derivative_get(deriv_att, deriv_data=deriv_data2)
@@ -3588,9 +3566,9 @@ CONTAINS
                   END IF
                END IF
                !   First contribution beta
-               !              |   d^2 e_xc           d^2 e_xc     |
-               !   v_drhob = -|---------------- - ----------------| * rho1a
-               !              | d|drhob| drhoa     d|drhob| drhob |
+               !               |   d^2 e_xc           d^2 e_xc     |
+               !   v_drhob += -|---------------- - ----------------| * rho1a
+               !               | d|drhob| drhoa     d|drhob| drhob |
                deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drhob, deriv_rhoa])
                IF (ASSOCIATED(deriv_att)) THEN
                   CALL xc_derivative_get(deriv_att, deriv_data=deriv_data2)
@@ -3610,27 +3588,35 @@ CONTAINS
 !$OMP                END PARALLEL DO
                   END IF
                END IF
-               deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drho, deriv_rhoa])
-               IF (ASSOCIATED(deriv_att)) THEN
-                  CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
-                  deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drho, deriv_rhob])
-                  IF (ASSOCIATED(deriv_att)) THEN
-                     CALL xc_derivative_get(deriv_att, deriv_data=deriv_data2)
-!$OMP                PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
-!$OMP                SHARED(bo,deriv_data,deriv_data2,rho1a,v_drho) COLLAPSE(3)
-                     DO k = bo(1, 3), bo(2, 3)
-                        DO j = bo(1, 2), bo(2, 2)
-                           DO i = bo(1, 1), bo(2, 1)
-                              v_drho(1)%cr3d(i, j, k) = v_drho(1)%cr3d(i, j, k) - &
-                              (deriv_data(i, j, k) - deriv_data2(i, j, k))*rho1a(i, j, k)
-                              v_drho(2)%cr3d(i, j, k) = v_drho(2)%cr3d(i, j, k) - &
-                              (deriv_data(i, j, k) - deriv_data2(i, j, k))*rho1a(i, j, k)
-                           END DO
-                        END DO
-                     END DO
-!$OMP                END PARALLEL DO
-                  END IF
-               END IF
+               !   First contribution spinless
+               !                 |   d^2 e_xc          d^2 e_xc    |
+               !   v_drho(1) += -|--------------- - ---------------|*rho1a
+               !                 | d|drho| drhoa     d|drho| drhob |
+               !
+               !                 |   d^2 e_xc          d^2 e_xc    |
+               !   v_drho(2) += -|--------------- - ---------------|*rho1a
+               !                 | d|drho| drhoa     d|drho| drhob |
+!               deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drho, deriv_rhoa])
+!               IF (ASSOCIATED(deriv_att)) THEN
+!                  CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
+!                  deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drho, deriv_rhob])
+!                  IF (ASSOCIATED(deriv_att)) THEN
+!                     CALL xc_derivative_get(deriv_att, deriv_data=deriv_data2)
+!!$OMP                PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
+!!$OMP                SHARED(bo,deriv_data,deriv_data2,rho1a,v_drho) COLLAPSE(3)
+!                     DO k = bo(1, 3), bo(2, 3)
+!                        DO j = bo(1, 2), bo(2, 2)
+!                           DO i = bo(1, 1), bo(2, 1)
+!                              v_drho(1)%cr3d(i, j, k) = v_drho(1)%cr3d(i, j, k) - &
+!                              (deriv_data(i, j, k) - deriv_data2(i, j, k))*rho1a(i, j, k)
+!                              v_drho(2)%cr3d(i, j, k) = v_drho(2)%cr3d(i, j, k) - &
+!                              (deriv_data(i, j, k) - deriv_data2(i, j, k))*rho1a(i, j, k)
+!                           END DO
+!                        END DO
+!                     END DO
+!!$OMP                END PARALLEL DO
+!                  END IF
+!               END IF
                !   Second contribution alpha
                !                     d^2 e_xc        dra1dra        d^2 e_xc         drb1drb
                !   v_drhoa += - -------------------*--------- + -------------------*---------
@@ -3642,13 +3628,13 @@ CONTAINS
                   IF (ASSOCIATED(deriv_att)) THEN
                      CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
 !$OMP                PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
-!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,norm_drhoa,norm_drhob,v_drhoa) COLLAPSE(3)
+!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,norm_drhoa,norm_drhob,v_drhoa,drho_cutoff) COLLAPSE(3)
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
                               v_drhoa (1)%cr3d(i, j, k) = v_drhoa (1)%cr3d(i, j, k) - &
-                              deriv_data (i, j, k)*dra1dra(i, j, k)/norm_drhoa(i, j, k) + &
-                              deriv_data2(i, j, k)*drb1drb(i, j, k)/norm_drhob(i, j, k)
+                              deriv_data (i, j, k)*dra1dra(i, j, k)/MAX(norm_drhoa(i, j, k),drho_cutoff) + &
+                              deriv_data2(i, j, k)*drb1drb(i, j, k)/MAX(norm_drhob(i, j, k),drho_cutoff)
                            END DO
                         END DO
                      END DO
@@ -3662,36 +3648,28 @@ CONTAINS
                   IF (ASSOCIATED(deriv_att)) THEN
                      CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
 !$OMP                PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
-!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,norm_drhoa,norm_drhob,v_drhob) COLLAPSE(3)
+!$OMP                SHARED(bo,deriv_data,deriv_data2,dra1dra,drb1drb,norm_drhoa,norm_drhob,v_drhob,drho_cutoff) COLLAPSE(3)
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
                               v_drhob (2)%cr3d(i, j, k) = v_drhob (2)%cr3d(i, j, k) - &
-                              deriv_data2(i, j, k)*dra1dra(i, j, k)/norm_drhoa(i, j, k) + &
-                              deriv_data (i, j, k)*drb1drb(i, j, k)/norm_drhob(i, j, k)
+                              deriv_data2(i, j, k)*dra1dra(i, j, k)/MAX(norm_drhoa(i, j, k),drho_cutoff) + &
+                              deriv_data (i, j, k)*drb1drb(i, j, k)/MAX(norm_drhob(i, j, k),drho_cutoff)
                            END DO
                         END DO
                      END DO
 !$OMP                END PARALLEL DO
                   END IF
                END IF
-               deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drho, deriv_norm_drho])
-               IF (ASSOCIATED(deriv_att)) THEN
-                  CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
-!$OMP             PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
-!$OMP             SHARED(bo,deriv_data,dra1dra,drb1drb,norm_drho,v_drho) COLLAPSE(3)
-                  DO k = bo(1, 3), bo(2, 3)
-                     DO j = bo(1, 2), bo(2, 2)
-                        DO i = bo(1, 1), bo(2, 1)
-                           v_drho(1)%cr3d(i, j, k) = v_drho(1)%cr3d(i, j, k) - &
-                           deriv_data(i, j, k)*(dra1dra(i, j, k) - drb1drb(i, j, k))/norm_drho(i, j, k)
-                           v_drho(2)%cr3d(i, j, k) = v_drho(2)%cr3d(i, j, k) - &
-                           deriv_data(i, j, k)*(dra1dra(i, j, k) - drb1drb(i, j, k))/norm_drho(i, j, k)
-                        END DO
-                     END DO
-                  END DO
-!$OMP             END PARALLEL DO
-               END IF
+               !   Second contribution spinless cancels out
+               !                      d^2 e_xc       dr1dr        d^2 e_xc        dr1dr
+               !   v_drho(1) += - -----------------*-------- + -----------------*-------- = 0
+               !                   d|drho| d|drho|   |drho|     d|drho| d|drho|   |drho|
+               !
+               !                      d^2 e_xc       dr1dr        d^2 e_xc        dr1dr
+               !   v_drho(2) += - -----------------*-------- + -----------------*-------- = 0
+               !                   d|drho| d|drho|   |drho|     d|drho| d|drho|   |drho|
+               !
                !   Last contribution alpha
                !                  d e_xc    dra1dra   
                !   v_drhoa += + ----------*-----------
@@ -3701,12 +3679,12 @@ CONTAINS
                   CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
                   CALL xc_derivative_get(deriv_att, deriv_data=e_drhoa)
 !$OMP             PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
-!$OMP             SHARED(bo,deriv_data,v_drhoa,norm_drhoa,dra1dra) COLLAPSE(3)
+!$OMP             SHARED(bo,deriv_data,v_drhoa,norm_drhoa,dra1dra,drho_cutoff) COLLAPSE(3)
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
                            v_drhoa (1)%cr3d(i, j, k) = v_drhoa (1)%cr3d(i, j, k) + &
-                           deriv_data(i, j, k)*dra1dra(i, j, k)/norm_drhoa(i, j, k)**2
+                           deriv_data(i, j, k)*dra1dra(i, j, k)/MAX(norm_drhoa(i, j, k),drho_cutoff)
                         END DO
                      END DO
                   END DO
@@ -3721,41 +3699,49 @@ CONTAINS
                   CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
                   CALL xc_derivative_get(deriv_att, deriv_data=e_drhob)
 !$OMP             PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
-!$OMP             SHARED(bo,deriv_data,v_drhob,norm_drhob,drb1drb) COLLAPSE(3)
+!$OMP             SHARED(bo,deriv_data,v_drhob,norm_drhob,drb1drb,drho_cutoff) COLLAPSE(3)
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
                            v_drhob (2)%cr3d(i, j, k) = v_drhob (2)%cr3d(i, j, k) - &
-                           deriv_data(i, j, k)*drb1drb(i, j, k)/norm_drhob(i, j, k)**2
+                           deriv_data(i, j, k)*drb1drb(i, j, k)/MAX(norm_drhob(i, j, k),drho_cutoff)
                         END DO
                      END DO
                   END DO
 !$OMP             END PARALLEL DO
                END IF
-               deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drho])
-               IF (ASSOCIATED(deriv_att)) THEN
-                  CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
-                  CALL xc_derivative_get(deriv_att, deriv_data=e_drho)
-!$OMP             PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
-!$OMP             SHARED(bo,deriv_data,v_drho,norm_drho,dra1dra,drb1drb) COLLAPSE(3)
-                  DO k = bo(1, 3), bo(2, 3)
-                     DO j = bo(1, 2), bo(2, 2)
-                        DO i = bo(1, 1), bo(2, 1)
-                           v_drho (1)%cr3d(i, j, k) = v_drho (1)%cr3d(i, j, k) + &
-                           deriv_data(i, j, k)*dra1dra(i, j, k)/norm_drho(i, j, k)**2
-                           v_drho (2)%cr3d(i, j, k) = v_drho (2)%cr3d(i, j, k) - &
-                           deriv_data(i, j, k)*drb1drb(i, j, k)/norm_drho(i, j, k)**2
-                        END DO
-                     END DO
-                  END DO
-!$OMP             END PARALLEL DO
-               END IF
+               !   Last contribution spinless
+               !                    d e_xc    dr1dr
+               !   v_drho(1) += + ---------*----------
+               !                   d|drho|   |drho|^2 
+               !
+               !                   d e_xc     dr1dr
+               !   v_drho(2) += - ---------*----------
+               !                   d|drho|   |drho|^2 
+!               deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drho])
+!               IF (ASSOCIATED(deriv_att)) THEN
+!                  CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
+!                  CALL xc_derivative_get(deriv_att, deriv_data=e_drho)
+!!$OMP             PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
+!!$OMP             SHARED(bo,deriv_data,v_drho,norm_drho,dr1dr,drho_cutoff) COLLAPSE(3)
+!                  DO k = bo(1, 3), bo(2, 3)
+!                     DO j = bo(1, 2), bo(2, 2)
+!                        DO i = bo(1, 1), bo(2, 1)
+!                           v_drho (1)%cr3d(i, j, k) = v_drho (1)%cr3d(i, j, k) + &
+!                           deriv_data(i, j, k)*dr1dr(i, j, k)/MAX(norm_drho(i, j, k),drho_cutoff)
+!                           v_drho (2)%cr3d(i, j, k) = v_drho (2)%cr3d(i, j, k) - &
+!                           deriv_data(i, j, k)*dr1dr(i, j, k)/MAX(norm_drho(i, j, k),drho_cutoff)
+!                        END DO
+!                     END DO
+!                  END DO
+!!$OMP             END PARALLEL DO
+!               END IF
 
             END IF
 
          ELSE
 
-            ! Analytic third derivative for colsed-shel
+            ! Analytic third derivative for colsed-shell
             CPABORT("Exchange-correlation's analytic third derivative not implemented")
 
          END IF
@@ -3766,83 +3752,100 @@ CONTAINS
             DO idir = 1, 3
 
                ! GGA contributions to the spin-flip xcKernel
+               !
+               !                     v_drhoa(:)*drhoa(:)*rhoa1
+               !   v_drho_r(:,1) =  ---------------------------
+               !                           rhoa - drhob
+               !
+               !                     v_drhob(:)*drhoa(:)*rhoa1
+               !   v_drho_r(:,2) =  ---------------------------
+               !                           rhoa - drhob
                IF (do_spinflip) THEN
 !$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP             SHARED(bo,v_drho_r,v_drhoa,v_drhob,v_drho,rhoa,rhob,drhoa,drhob,drho,rho1a,idir) COLLAPSE(3)
+!$OMP             SHARED(bo,v_drho_r,v_drhoa,v_drhob,v_drho,rhoa,rhob,drhoa,drhob,drho,rho1a,idir,S_THRESH) COLLAPSE(3)
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
                            s = rhoa(i,j,k) - rhob(i,j,k)
-                           IF (ABS(s).GT.1.E-4) THEN
+                           IF (ABS(s).GT.S_THRESH) THEN
                               v_drho_r(idir, 1)%cr3d(i, j, k) = v_drho_r(idir, 1)%cr3d(i, j, k) + &
                                  v_drhoa(1)%cr3d(i, j, k)*drhoa(idir)%array(i, j, k)*rho1a(i, j, k)/s
                               v_drho_r(idir, 2)%cr3d(i, j, k) = v_drho_r(idir, 2)%cr3d(i, j, k) + &
                                  v_drhob(2)%cr3d(i, j, k)*drhob(idir)%array(i, j, k)*rho1a(i, j, k)/s
-                           ELSE
-                              v_drho_r(idir, 1)%cr3d(i, j, k) = 0.0
-                              v_drho_r(idir, 2)%cr3d(i, j, k) = 0.0
                            END IF
                         END DO
                      END DO
                   END DO
 !$OMP             END PARALLEL DO
                END IF
+               ! GGA contributions to the spin-flip xcKernel
+               !   Alpha contribution
+               !                       d e_xc     drho1a       rho1a
+               !   v_drho_r(:,1) += - ----------*---------*--------------
+               !                       d|drhoa|   |drhoa|   rhoa - drhob
+               !
                IF (ASSOCIATED(e_drhoa)) THEN
 !$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP             SHARED(bo,v_drho_r,rhoa,rhob,rho1a,drho1a,idir,e_drhoa) COLLAPSE(3)
+!$OMP             SHARED(bo,v_drho_r,rhoa,rhob,rho1a,drho1a,idir,e_drhoa,S_THRESH) COLLAPSE(3)
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
                            s = rhoa(i,j,k) - rhob(i,j,k)
-                           IF (ABS(s).GT.1.E-4) THEN
+                           IF (ABS(s).GT.S_THRESH) THEN
                               v_drho_r(idir, 1)%cr3d(i, j, k) = v_drho_r(idir, 1)%cr3d(i, j, k) - &
                                                     e_drhoa(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
-                           ELSE
-                              v_drho_r(idir, 1)%cr3d(i, j, k) = 0.0
                            END IF
                         END DO
                      END DO
                   END DO
 !$OMP             END PARALLEL DO
                END IF
+               !   Beta contribution
+               !                       d e_xc     drho1a       rho1a
+               !   v_drho_r(:,2) += + ----------*---------*--------------
+               !                       d|drhob|   |drhob|   rhoa - drhob
                IF (nspins /= 1 .AND. ASSOCIATED(e_drhob)) THEN
 !$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP             SHARED(bo,v_drho_r,rhoa,rhob,rho1a,drho1a,idir,e_drhob) COLLAPSE(3)
+!$OMP             SHARED(bo,v_drho_r,rhoa,rhob,rho1a,drho1a,idir,e_drhob,S_THRESH) COLLAPSE(3)
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
                            s = rhoa(i,j,k) - rhob(i,j,k)
-                           IF (ABS(s).GT.1.E-4) THEN
+                           IF (ABS(s).GT.S_THRESH) THEN
                               v_drho_r(idir, 2)%cr3d(i, j, k) = v_drho_r(idir, 2)%cr3d(i, j, k) + &
                                                     e_drhob(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
-                           ELSE
-                              v_drho_r(idir, 1)%cr3d(i, j, k) = 0.0
                            END IF
                         END DO
                      END DO
                   END DO
 !$OMP             END PARALLEL DO
                END IF
-               IF (ASSOCIATED(e_drho)) THEN
-!$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP             SHARED(bo,v_drho_r,rhoa,rhob,rho1a,drho1a,idir,e_drho) COLLAPSE(3)
-                  DO k = bo(1, 3), bo(2, 3)
-                     DO j = bo(1, 2), bo(2, 2)
-                        DO i = bo(1, 1), bo(2, 1)
-                           s = rhoa(i,j,k) - rhob(i,j,k)
-                           IF (ABS(s).GT.1.E-4) THEN
-                              v_drho_r(idir, 1)%cr3d(i, j, k) = v_drho_r(idir, 1)%cr3d(i, j, k) - &
-                                                    e_drho(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
-                              v_drho_r(idir, 2)%cr3d(i, j, k) = v_drho_r(idir, 2)%cr3d(i, j, k) + &
-                                                    e_drho(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
-                           ELSE
-                              v_drho_r(idir, 1)%cr3d(i, j, k) = 0.0
-                           END IF
-                        END DO
-                     END DO
-                  END DO
-!$OMP             END PARALLEL DO
-               END IF
+               !   Spinless contribution
+               !                       d e_xc    drho1a      rho1a
+               !   v_drho_r(:,1) += - ---------*--------*--------------
+               !                       d|drho|   |drho|   rhoa - drhob
+               !
+               !                       d e_xc    drho1a      rho1a
+               !   v_drho_r(:,2) += + ---------*--------*--------------
+               !                       d|drho|   |drho|   rhoa - drhob
+!               IF (ASSOCIATED(e_drho)) THEN
+!!$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
+!!$OMP             SHARED(bo,v_drho_r,rhoa,rhob,rho1a,drho1a,idir,e_drho,S_THRESH) COLLAPSE(3)
+!                  DO k = bo(1, 3), bo(2, 3)
+!                     DO j = bo(1, 2), bo(2, 2)
+!                        DO i = bo(1, 1), bo(2, 1)
+!                           s = rhoa(i,j,k) - rhob(i,j,k)
+!                           IF (ABS(s).GT.S_THRESH) THEN
+!                              v_drho_r(idir, 1)%cr3d(i, j, k) = v_drho_r(idir, 1)%cr3d(i, j, k) - &
+!                                                    e_drho(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
+!                              v_drho_r(idir, 2)%cr3d(i, j, k) = v_drho_r(idir, 2)%cr3d(i, j, k) + &
+!                                                    e_drho(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
+!                           END IF
+!                        END DO
+!                     END DO
+!                  END DO
+!!$OMP             END PARALLEL DO
+!               END IF
             END DO
 
             ! partial integration: v_xc = v_xc - \nabla \cdot vdrho_r
@@ -3883,6 +3886,14 @@ CONTAINS
          END DO
          DEALLOCATE (v_drho, v_drho_r)
 
+      END IF
+      
+      IF (ASSOCIATED(tmp_g%pw_grid) .AND. ASSOCIATED(pw_pool)) THEN
+         CALL pw_pool%give_back_pw(tmp_g)
+      END IF
+
+      IF (ASSOCIATED(vxc_g%pw_grid) .AND. ASSOCIATED(pw_pool)) THEN
+         CALL pw_pool%give_back_pw(vxc_g)
       END IF
 
       CALL timestop(handle)
