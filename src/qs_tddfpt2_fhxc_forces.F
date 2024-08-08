@@ -1299,7 +1299,7 @@ CONTAINS
                                             cpmos(ispin), norb(ispin), alpha=focc, beta=1.0_dp)
                CALL cp_dbcsr_sm_fm_multiply(matrix_hfx_asymm(spin)%matrix, evect(spin), &
                !BUGFIX changed focc to -focc to correctly calculate Transpose(fock)*X. Having possitive focc correspond to fock*X
-                                            cpmos(ispin), norb(ispin), alpha=-focc, beta=1.0_dp) 
+                                            cpmos(ispin), norb(ispin), alpha=focc, beta=1.0_dp) 
             END IF
 
             ! For spin-flip excitations this is the only contribution to the beta response vector
