@@ -1192,7 +1192,7 @@ CONTAINS
          mult = 3
       END IF
 
-      CALL tddfpt_energies(qs_env, nspins, nstates, work_matrices, tddfpt_control, logger, &
+      CALL tddfpt_energies(qs_env, nstates, nspins, work_matrices, tddfpt_control, logger, &
                            tddfpt_print_section, evects_mult, evals_mult, &
                            gs_mos, tddfpt_section, S_evects, matrix_s, &
                            kernel_env, matrix_ks, sub_env, ostrength_mult, &
@@ -1247,7 +1247,7 @@ CONTAINS
          mult = 1
       END IF
 
-      CALL tddfpt_energies(qs_env, nspins, nstates, work_matrices, tddfpt_control, logger, &
+      CALL tddfpt_energies(qs_env, nstates, nspins, work_matrices, tddfpt_control, logger, &
                            tddfpt_print_section, evects, evals, &
                            gs_mos, tddfpt_section, S_evects, matrix_s, &
                            kernel_env, matrix_ks, sub_env, ostrength, &
