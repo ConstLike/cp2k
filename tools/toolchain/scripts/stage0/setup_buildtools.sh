@@ -24,20 +24,13 @@ done
 if [ "${with_intel}" != "__DONTUSE__" ]; then
   CFLAGS="-O2 -fPIC -fp-model=precise -funroll-loops -g -qopenmp -qopenmp-simd -traceback"
   if [ "${TARGET_CPU}" = "native" ]; then
-    CFLAGS="${CFLAGS}"
-  elif [ "${TARGET_CPU}" = "generic" ]; then
-    CFLAGS="${CFLAGS} -mtune=${TARGET_CPU}"
+    CFLAGS="${CFLAGS} -xHost"
   else
-    CFLAGS="${CFLAGS} -march=${TARGET_CPU} -mtune=${TARGET_CPU}"
+    CFLAGS="${CFLAGS} -mtune=${TARGET_CPU}"
   fi
   FFLAGS="${CFLAGS}"
 else
-  CFLAGS="-O2 -fPIC -fno-omit-frame-pointer -fopenmp -g"
-  if [ "${TARGET_CPU}" = "generic" ]; then
-    CFLAGS="${CFLAGS} -mtune=generic ${TSANFLAGS}"
-  else
-    CFLAGS="${CFLAGS} -march=${TARGET_CPU} -mtune=${TARGET_CPU} ${TSANFLAGS}"
-  fi
+  CFLAGS="-O2 -fPIC -fno-omit-frame-pointer -fopenmp -g -mtune=${TARGET_CPU} ${TSANFLAGS}"
   FFLAGS="${CFLAGS} -fbacktrace"
 fi
 CXXFLAGS="${CFLAGS}"
