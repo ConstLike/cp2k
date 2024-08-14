@@ -296,7 +296,7 @@ CONTAINS
       TYPE(qs_rho_type), POINTER                         :: rho0_struct, rho1_struct
       TYPE(section_vals_type), POINTER                   :: xc_section
       TYPE(pw_pool_type), POINTER                        :: pw_pool
-      TYPE(pw_type), DIMENSION(:), POINTER               :: fxc_rho, fxc_tau, gxc_rho, gxc_tau
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: fxc_rho, fxc_tau, gxc_rho, gxc_tau
       LOGICAL, INTENT(IN), OPTIONAL                      :: spinflip
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'qs_fgxc_analytic'
@@ -305,8 +305,8 @@ CONTAINS
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: lsd, do_sf
       REAL(KIND=dp)                                      :: fac
-      TYPE(pw_type), DIMENSION(:), POINTER               :: rho0_g, rho0_r, tau0_r
-      TYPE(pw_type), DIMENSION(:), POINTER               :: rho1_g, rho1_r, tau1_r
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho0_r, tau0_r, rho1_r, tau1_r
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho0_g, rho1_g
       TYPE(section_vals_type), POINTER                   :: xc_fun_section
       TYPE(xc_derivative_set_type)                       :: deriv_set
       TYPE(xc_rho_cflags_type)                           :: needs
@@ -351,15 +351,11 @@ CONTAINS
       ! Create fields for the kernel and kernel derivative
       ALLOCATE (fxc_rho(spindim),gxc_rho(nspins))
       DO ispin = 1, spindim
-         CALL pw_pool%create_pw(fxc_rho(ispin), &
-                                use_data=REALDATA3D, &
-                                in_space=REALSPACE)
+         CALL pw_pool%create_pw(fxc_rho(ispin))
          CALL pw_zero(fxc_rho(ispin))
       END DO
       DO ispin = 1, nspins
-         CALL pw_pool%create_pw(gxc_rho(ispin), &
-                                use_data=REALDATA3D, &
-                                in_space=REALSPACE)
+         CALL pw_pool%create_pw(gxc_rho(ispin))
          CALL pw_zero(gxc_rho(ispin))
       END DO
       ! Create fields for mGGA functionals. This implementation is not ready yet!
@@ -368,15 +364,11 @@ CONTAINS
             CPABORT("Tau-dependent functionals requires allocated kinetic energy density grid")
          ALLOCATE (fxc_tau(spindim),gxc_tau(nspins))
          DO ispin = 1, spindim
-            CALL pw_pool%create_pw(fxc_tau(ispin), &
-                                   use_data=REALDATA3D, &
-                                   in_space=REALSPACE)
+            CALL pw_pool%create_pw(fxc_tau(ispin))
             CALL pw_zero(fxc_tau(ispin))
          END DO
          DO ispin = 1, nspins
-            CALL pw_pool%create_pw(gxc_tau(ispin), &
-                                   use_data=REALDATA3D, &
-                                   in_space=REALSPACE)
+            CALL pw_pool%create_pw(gxc_tau(ispin))
             CALL pw_zero(gxc_tau(ispin))
          END DO
       END IF

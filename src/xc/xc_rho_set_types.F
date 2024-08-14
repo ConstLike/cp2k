@@ -612,10 +612,13 @@ CONTAINS
             LOGICAL                                            :: gradient_f, my_rho_g_local, &
                                                                   needs_laplace, needs_rho_g, do_sf
             REAL(kind=dp)                                      :: rho_cutoff
-            TYPE(pw_type), DIMENSION(2)                      :: laplace_rho_r
-            TYPE(pw_type), DIMENSION(3, 2)                   :: drho_r
-            TYPE(pw_type)                                      :: my_rho_g, tmp_g
-            TYPE(pw_type), DIMENSION(2)                        :: my_rho_r
+            TYPE(pw_r3d_rs_type), DIMENSION(2)                      :: laplace_rho_r
+            TYPE(pw_r3d_rs_type), DIMENSION(3, 2)                   :: drho_r
+            TYPE(pw_c1d_gs_type)                                      :: my_rho_g, tmp_g
+            TYPE(pw_r3d_rs_type), DIMENSION(2)                        :: my_rho_r
+
+            do_sf = .FALSE.
+            IF (PRESENT(spinflip)) do_sf = spinflip
 
             IF (ANY(rho_set%local_bounds /= pw_pool%pw_grid%bounds_local)) &
                CPABORT("pw_pool cr3d have different size than expected")
@@ -627,13 +630,20 @@ CONTAINS
             ! some checks
             SELECT CASE (nspins)
             CASE (1)
-               CPASSERT(rho_r(1)%in_use == REALDATA3D)
-               CPASSERT(.NOT. needs%rho_spin)
-               CPASSERT(.NOT. needs%drho_spin)
-               CPASSERT(.NOT. needs%norm_drho_spin)
-               CPASSERT(.NOT. needs%rho_spin_1_3)
-               CPASSERT(.NOT. needs%tau_spin)
-               CPASSERT(.NOT. needs%laplace_rho_spin)
+               IF (.NOT.do_sf) THEN
+                  CPASSERT(.NOT. needs%rho_spin)
+                  CPASSERT(.NOT. needs%drho_spin)
+                  CPASSERT(.NOT. needs%norm_drho_spin)
+                  CPASSERT(.NOT. needs%rho_spin_1_3)
+                  CPASSERT(.NOT. needs%tau_spin)
+                  CPASSERT(.NOT. needs%laplace_rho_spin)
+               ELSE
+                  CPASSERT(.NOT. needs%rho)
+                  CPASSERT(.NOT. needs%drho)
+                  CPASSERT(.NOT. needs%rho_1_3)
+                  CPASSERT(.NOT. needs%tau)
+                  CPASSERT(.NOT. needs%laplace_rho)
+               END IF
             CASE (2)
                CPASSERT(.NOT. needs%rho)
                CPASSERT(.NOT. needs%drho)

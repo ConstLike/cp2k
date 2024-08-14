@@ -786,7 +786,6 @@ CONTAINS
       nspins = SIZE(evects,1)
       nstates = tddfpt_control%nstates
       nstates_total = tddfpt_total_number_of_states(tddfpt_control, gs_mos)
-      do_hfx = tddfpt_control%do_hfx
 
       IF (debug_this_module) THEN
          CPASSERT(SIZE(evects, 1) == nspins)

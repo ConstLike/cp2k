@@ -2694,7 +2694,7 @@ CONTAINS
       IF (my_compute_virial) THEN
          CPASSERT(PRESENT(virial_xc))
       END IF
-      S_THRESH = 0.0
+      S_THRESH = 1.0E-10
 
       CALL section_vals_val_get(xc_section, "XC_GRID%XC_DERIV", &
                                 i_val=xc_deriv_method_id)
@@ -2837,10 +2837,10 @@ CONTAINS
                         DO i = bo(1, 1), bo(2, 1)
                            s = rhoa(i,j,k) - rhob(i,j,k)
                            IF (ABS(s).GT.S_THRESH) THEN
-                             v_xc(1)%cr3d(i,j,k) = v_xc(1)%cr3d(i,j,k) + &
+                             v_xc(1)%array(i,j,k) = v_xc(1)%array(i,j,k) + &
                              (deriv_data(i,j,k) - deriv_data2(i,j,k))*rho1a(i,j,k)/s
                            ELSE
-                             v_xc(1)%cr3d(i,j,k) = 0.0
+                             v_xc(1)%array(i,j,k) = 0.0
                            END IF
                         END DO
                      END DO
@@ -2862,11 +2862,11 @@ CONTAINS
                         DO i = bo(1, 1), bo(2, 1)
                            s = rhoa(i,j,k) - rhob(i,j,k)
                            IF (ABS(s).GT.S_THRESH) THEN
-                              v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
+                              v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
                               (deriv_data(i, j, k)*dra1dra(i, j, k) - &
                               deriv_data2(i, j, k)*drb1drb(i, j, k))/s
                            ELSE
-                              v_xc (1)%cr3d(i, j, k) = 0.0
+                              v_xc (1)%array(i, j, k) = 0.0
                            END IF
                         END DO
                      END DO
@@ -2885,10 +2885,10 @@ CONTAINS
                      DO i = bo(1, 1), bo(2, 1)
                         s = rhoa(i,j,k) - rhob(i,j,k)
                         IF (ABS(s).GT.S_THRESH) THEN
-                           v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
+                           v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
                            deriv_data(i, j, k)*(dra1dra(i, j, k) - drb1drb(i, j, k))/s
                         ELSE
-                           v_xc (1)%cr3d(i, j, k) = 0.0
+                           v_xc (1)%array(i, j, k) = 0.0
                         END IF
                      END DO
                   END DO
@@ -3186,7 +3186,7 @@ CONTAINS
    SUBROUTINE xc_calc_3rd_deriv_analytical(v_xc, v_xc_tau, deriv_set, rho_set, rho1_set, &
                                            pw_pool, xc_section, spinflip)
 
-      TYPE(pw_type), DIMENSION(:), POINTER               :: v_xc, v_xc_tau
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: v_xc, v_xc_tau
       TYPE(xc_derivative_set_type)                       :: deriv_set
       TYPE(xc_rho_set_type), INTENT(IN)                  :: rho_set, rho1_set
       TYPE(pw_pool_type), POINTER                        :: pw_pool
@@ -3207,9 +3207,9 @@ CONTAINS
                                                             norm_drhob, rho1a, rho1b, &
                                                             rhoa, rhob
       TYPE(cp_3d_r_cp_type), DIMENSION(3)                :: drho, drho1, drho1a, drho1b, drhoa, drhob
-      TYPE(pw_type), DIMENSION(:), ALLOCATABLE         :: v_drhoa, v_drhob, v_drho
-      TYPE(pw_type), DIMENSION(:, :), ALLOCATABLE      :: v_drho_r
-      TYPE(pw_type)                                      :: tmp_g, vxc_g
+      TYPE(pw_r3d_rs_type), DIMENSION(:), ALLOCATABLE    :: v_drhoa, v_drhob, v_drho
+      TYPE(pw_r3d_rs_type), DIMENSION(:, :), ALLOCATABLE :: v_drho_r
+      TYPE(pw_c1d_gs_type)                               :: tmp_g, vxc_g
       TYPE(xc_derivative_type), POINTER                  :: deriv_att
 
       CALL timeset(routineN, handle)
@@ -3235,12 +3235,12 @@ CONTAINS
       !
       CALL xc_rho_set_get(rho1_set, drho_cutoff=drho_cutoff)
       !
-      S_THRESH = 0.0
-      S_THRESH2= 0.0
+      S_THRESH  = 1.0E-10
+      S_THRESH2 = 1.0E-10
 
       ! Initialize potential
       DO ispin = 1, nspins
-         v_xc(ispin)%cr3d = 0.0_dp
+         v_xc(ispin)%array = 0.0_dp
       END DO
 
       ! Create GGA fields
@@ -3255,10 +3255,8 @@ CONTAINS
 
          IF (xc_requires_tmp_g(xc_deriv_method_id)) THEN
             IF (ASSOCIATED(pw_pool)) THEN
-               CALL pw_pool%create_pw(tmp_g, &
-                                      use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
-               CALL pw_pool%create_pw(vxc_g, &
-                                      use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+               CALL pw_pool%create_pw(tmp_g)
+               CALL pw_pool%create_pw(vxc_g)
             ELSE
                ! remember to refix for gapw
                CPABORT("XC_DERIV method is not implemented in GAPW")
@@ -3271,7 +3269,7 @@ CONTAINS
       IF (tau_f) THEN
          CPASSERT(ASSOCIATED(v_xc_tau))
          DO ispin = 1, nspins
-            v_xc_tau(ispin)%cr3d = 0.0_dp
+            v_xc_tau(ispin)%array = 0.0_dp
          END DO
       END IF
 
@@ -3357,7 +3355,7 @@ CONTAINS
                            DO i = bo(1, 1), bo(2, 1)
                               s = (rhoa(i,j,k) - rhob(i,j,k))**2
                               IF (s.GT.S_THRESH2) THEN
-                                v_xc(1)%cr3d(i,j,k) = v_xc(1)%cr3d(i,j,k) + &
+                                v_xc(1)%array(i,j,k) = v_xc(1)%array(i,j,k) + &
                                 (deriv_data(i,j,k) - deriv_data2(i,j,k))*rho1a(i,j,k)**2/s
                               END IF
                            END DO
@@ -3383,7 +3381,7 @@ CONTAINS
                            DO i = bo(1, 1), bo(2, 1)
                               s = (rhoa(i,j,k) - rhob(i,j,k))**2
                               IF (s.GT.S_THRESH2) THEN
-                                 v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
+                                 v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
                                  (deriv_data(i, j, k) *dra1dra(i, j, k) - deriv_data2(i, j, k)*drb1drb(i, j, k)) &
                                   *rho1a(i,j,k)/s
                               END IF
@@ -3403,7 +3401,7 @@ CONTAINS
 !                        DO i = bo(1, 1), bo(2, 1)
 !                           s = (rhoa(i,j,k) - rhob(i,j,k))**2
 !                           IF (s.GT.S_THRESH2) THEN
-!                              v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
+!                              v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
 !                              deriv_data(i, j, k)*(dra1dra(i, j, k) - drb1drb(i, j, k))rho1a(i,j,k)/s
 !                           END IF
 !                        END DO
@@ -3417,7 +3415,7 @@ CONTAINS
                DO k = bo(1, 3), bo(2, 3)
                   DO j = bo(1, 2), bo(2, 2)
                      DO i = bo(1, 1), bo(2, 1)
-                        v_xc(2)%cr3d(i,j,k) = - v_xc(1)%cr3d(i,j,k)
+                        v_xc(2)%array(i,j,k) = - v_xc(1)%array(i,j,k)
                      END DO
                   END DO
                END DO
@@ -3442,7 +3440,7 @@ CONTAINS
                            DO i = bo(1, 1), bo(2, 1)
                               s = rhoa(i,j,k) - rhob(i,j,k)
                               IF (ABS(s).GT.S_THRESH) THEN
-                                 v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
+                                 v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
                                  rho1a(i, j, k)**2*(deriv_data(i, j, k) - deriv_data2(i, j, k))/s
                               END IF
                            END DO
@@ -3464,7 +3462,7 @@ CONTAINS
                            DO i = bo(1, 1), bo(2, 1)
                               s = rhoa(i,j,k) - rhob(i,j,k)
                               IF (ABS(s).GT.S_THRESH) THEN
-                                 v_xc (2)%cr3d(i, j, k) = v_xc (2)%cr3d(i, j, k) + &
+                                 v_xc (2)%array(i, j, k) = v_xc (2)%array(i, j, k) + &
                                  rho1a(i, j, k)**2*(deriv_data2(i, j, k) - deriv_data(i, j, k))/s
                               END IF
                            END DO
@@ -3490,7 +3488,7 @@ CONTAINS
                            DO i = bo(1, 1), bo(2, 1)
                               s = rhoa(i,j,k) - rhob(i,j,k)
                               IF (ABS(s).GT.S_THRESH) THEN
-                                 v_xc (1)%cr3d(i, j, k) = v_xc (1)%cr3d(i, j, k) + &
+                                 v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
                                  (deriv_data(i, j, k)*dra1dra(i, j, k) - deriv_data2(i, j, k)*drb1drb(i, j, k)) &
                                  *rho1a(i, j, k)/s
                               END IF
@@ -3517,7 +3515,7 @@ CONTAINS
                            DO i = bo(1, 1), bo(2, 1)
                               s = rhoa(i,j,k) - rhob(i,j,k)
                               IF (ABS(s).GT.S_THRESH) THEN
-                                 v_xc (2)%cr3d(i, j, k) = v_xc (2)%cr3d(i, j, k) + &
+                                 v_xc (2)%array(i, j, k) = v_xc (2)%array(i, j, k) + &
                                  (deriv_data2(i, j, k)*dra1dra(i, j, k) - &
                                   deriv_data (i, j, k)*drb1drb(i, j, k))*rho1a(i, j, k)/s
                               END IF
@@ -3551,7 +3549,7 @@ CONTAINS
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
-                              v_drhoa (1)%cr3d(i, j, k) = v_drhoa (1)%cr3d(i, j, k) - &
+                              v_drhoa (1)%array(i, j, k) = v_drhoa (1)%array(i, j, k) - &
                               (deriv_data(i, j, k) - deriv_data2(i, j, k))*rho1a(i, j, k)
                            END DO
                         END DO
@@ -3574,7 +3572,7 @@ CONTAINS
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
-                              v_drhob (2)%cr3d(i, j, k) = v_drhob (2)%cr3d(i, j, k) - &
+                              v_drhob (2)%array(i, j, k) = v_drhob (2)%array(i, j, k) - &
                               (deriv_data2(i, j, k) - deriv_data(i, j, k))*rho1a(i, j, k)
                            END DO
                         END DO
@@ -3601,9 +3599,9 @@ CONTAINS
 !                     DO k = bo(1, 3), bo(2, 3)
 !                        DO j = bo(1, 2), bo(2, 2)
 !                           DO i = bo(1, 1), bo(2, 1)
-!                              v_drho(1)%cr3d(i, j, k) = v_drho(1)%cr3d(i, j, k) - &
+!                              v_drho(1)%array(i, j, k) = v_drho(1)%array(i, j, k) - &
 !                              (deriv_data(i, j, k) - deriv_data2(i, j, k))*rho1a(i, j, k)
-!                              v_drho(2)%cr3d(i, j, k) = v_drho(2)%cr3d(i, j, k) - &
+!                              v_drho(2)%array(i, j, k) = v_drho(2)%array(i, j, k) - &
 !                              (deriv_data(i, j, k) - deriv_data2(i, j, k))*rho1a(i, j, k)
 !                           END DO
 !                        END DO
@@ -3626,7 +3624,7 @@ CONTAINS
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
-                              v_drhoa (1)%cr3d(i, j, k) = v_drhoa (1)%cr3d(i, j, k) - &
+                              v_drhoa (1)%array(i, j, k) = v_drhoa (1)%array(i, j, k) - &
                               deriv_data (i, j, k)*dra1dra(i, j, k)/MAX(norm_drhoa(i, j, k),drho_cutoff) + &
                               deriv_data2(i, j, k)*drb1drb(i, j, k)/MAX(norm_drhob(i, j, k),drho_cutoff)
                            END DO
@@ -3646,7 +3644,7 @@ CONTAINS
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
-                              v_drhob (2)%cr3d(i, j, k) = v_drhob (2)%cr3d(i, j, k) - &
+                              v_drhob (2)%array(i, j, k) = v_drhob (2)%array(i, j, k) - &
                               deriv_data2(i, j, k)*dra1dra(i, j, k)/MAX(norm_drhoa(i, j, k),drho_cutoff) + &
                               deriv_data (i, j, k)*drb1drb(i, j, k)/MAX(norm_drhob(i, j, k),drho_cutoff)
                            END DO
@@ -3677,7 +3675,7 @@ CONTAINS
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
-                           v_drhoa (1)%cr3d(i, j, k) = v_drhoa (1)%cr3d(i, j, k) + &
+                           v_drhoa (1)%array(i, j, k) = v_drhoa (1)%array(i, j, k) + &
                            deriv_data(i, j, k)*dra1dra(i, j, k)/MAX(norm_drhoa(i, j, k),drho_cutoff)
                         END DO
                      END DO
@@ -3697,7 +3695,7 @@ CONTAINS
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
-                           v_drhob (2)%cr3d(i, j, k) = v_drhob (2)%cr3d(i, j, k) - &
+                           v_drhob (2)%array(i, j, k) = v_drhob (2)%array(i, j, k) - &
                            deriv_data(i, j, k)*drb1drb(i, j, k)/MAX(norm_drhob(i, j, k),drho_cutoff)
                         END DO
                      END DO
@@ -3721,9 +3719,9 @@ CONTAINS
 !                  DO k = bo(1, 3), bo(2, 3)
 !                     DO j = bo(1, 2), bo(2, 2)
 !                        DO i = bo(1, 1), bo(2, 1)
-!                           v_drho (1)%cr3d(i, j, k) = v_drho (1)%cr3d(i, j, k) + &
+!                           v_drho (1)%array(i, j, k) = v_drho (1)%array(i, j, k) + &
 !                           deriv_data(i, j, k)*dr1dr(i, j, k)/MAX(norm_drho(i, j, k),drho_cutoff)
-!                           v_drho (2)%cr3d(i, j, k) = v_drho (2)%cr3d(i, j, k) - &
+!                           v_drho (2)%array(i, j, k) = v_drho (2)%array(i, j, k) - &
 !                           deriv_data(i, j, k)*dr1dr(i, j, k)/MAX(norm_drho(i, j, k),drho_cutoff)
 !                        END DO
 !                     END DO
@@ -3762,10 +3760,10 @@ CONTAINS
                         DO i = bo(1, 1), bo(2, 1)
                            s = rhoa(i,j,k) - rhob(i,j,k)
                            IF (ABS(s).GT.S_THRESH) THEN
-                              v_drho_r(idir, 1)%cr3d(i, j, k) = v_drho_r(idir, 1)%cr3d(i, j, k) + &
-                                 v_drhoa(1)%cr3d(i, j, k)*drhoa(idir)%array(i, j, k)*rho1a(i, j, k)/s
-                              v_drho_r(idir, 2)%cr3d(i, j, k) = v_drho_r(idir, 2)%cr3d(i, j, k) + &
-                                 v_drhob(2)%cr3d(i, j, k)*drhob(idir)%array(i, j, k)*rho1a(i, j, k)/s
+                              v_drho_r(idir, 1)%array(i, j, k) = v_drho_r(idir, 1)%array(i, j, k) + &
+                                 v_drhoa(1)%array(i, j, k)*drhoa(idir)%array(i, j, k)*rho1a(i, j, k)/s
+                              v_drho_r(idir, 2)%array(i, j, k) = v_drho_r(idir, 2)%array(i, j, k) + &
+                                 v_drhob(2)%array(i, j, k)*drhob(idir)%array(i, j, k)*rho1a(i, j, k)/s
                            END IF
                         END DO
                      END DO
@@ -3786,7 +3784,7 @@ CONTAINS
                         DO i = bo(1, 1), bo(2, 1)
                            s = rhoa(i,j,k) - rhob(i,j,k)
                            IF (ABS(s).GT.S_THRESH) THEN
-                              v_drho_r(idir, 1)%cr3d(i, j, k) = v_drho_r(idir, 1)%cr3d(i, j, k) - &
+                              v_drho_r(idir, 1)%array(i, j, k) = v_drho_r(idir, 1)%array(i, j, k) - &
                                                     e_drhoa(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
                            END IF
                         END DO
@@ -3806,7 +3804,7 @@ CONTAINS
                         DO i = bo(1, 1), bo(2, 1)
                            s = rhoa(i,j,k) - rhob(i,j,k)
                            IF (ABS(s).GT.S_THRESH) THEN
-                              v_drho_r(idir, 2)%cr3d(i, j, k) = v_drho_r(idir, 2)%cr3d(i, j, k) + &
+                              v_drho_r(idir, 2)%array(i, j, k) = v_drho_r(idir, 2)%array(i, j, k) + &
                                                     e_drhob(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
                            END IF
                         END DO
@@ -3830,9 +3828,9 @@ CONTAINS
 !                        DO i = bo(1, 1), bo(2, 1)
 !                           s = rhoa(i,j,k) - rhob(i,j,k)
 !                           IF (ABS(s).GT.S_THRESH) THEN
-!                              v_drho_r(idir, 1)%cr3d(i, j, k) = v_drho_r(idir, 1)%cr3d(i, j, k) - &
+!                              v_drho_r(idir, 1)%array(i, j, k) = v_drho_r(idir, 1)%array(i, j, k) - &
 !                                                    e_drho(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
-!                              v_drho_r(idir, 2)%cr3d(i, j, k) = v_drho_r(idir, 2)%cr3d(i, j, k) + &
+!                              v_drho_r(idir, 2)%array(i, j, k) = v_drho_r(idir, 2)%array(i, j, k) + &
 !                                                    e_drho(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
 !                           END IF
 !                        END DO
@@ -4120,17 +4118,18 @@ CONTAINS
 
       TYPE(xc_derivative_set_type)                       :: deriv_set
       TYPE(xc_rho_set_type)                              :: rho_set
-      TYPE(pw_type), DIMENSION(:), POINTER               :: rho_r
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER               :: rho_r
       TYPE(pw_pool_type), POINTER                        :: pw_pool
       TYPE(section_vals_type), POINTER                   :: xc_section
-      TYPE(pw_type), DIMENSION(:), OPTIONAL, POINTER     :: tau_r
+      TYPE(pw_r3d_rs_type), DIMENSION(:), OPTIONAL, POINTER     :: tau_r
       LOGICAL, OPTIONAL                                  :: do_sf
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'xc_prep_3rd_deriv'
 
       INTEGER                                            :: handle, nspins
       LOGICAL                                            :: lsd, my_do_sf
-      TYPE(pw_type), DIMENSION(:), POINTER               :: rho_g, tau
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_g
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: tau
 
       CALL timeset(routineN, handle)
 
