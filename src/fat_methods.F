@@ -857,7 +857,7 @@ contains
     character(len=*), parameter :: routinen = "fat_vemb_frag"
 
     character(len=default_string_length) :: label
-    integer :: i, output_unit
+    integer :: output_unit
     integer, pointer :: stride(:)
     type(particle_list_type), pointer :: particle_list
     type(pw_type), pointer :: rho(:), vemb_tsna, vemb_xcna, vemb_ee, vemb_ne, weights
