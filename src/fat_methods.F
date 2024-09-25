@@ -771,12 +771,7 @@ contains
     character(len=*), parameter :: routinen = "fat_vemb_e_frag"
 
     integer :: i
-    real(dp) :: e
-    type(pw_env_type), pointer :: pw_env
-    type(pw_poisson_type), pointer :: poisson_env
-    type(pw_pool_type), pointer :: pw_pool
-    type(pw_type), pointer :: rho(:), rho_g(:), v, v_g(:), v_sum
-    type(qs_environment_type), pointer :: qs_env
+    type(pw_type), pointer :: v, v_sum
 
     if (is_debug) then
        print *, "DBG| ", modulen//"::"//routinen
@@ -847,6 +842,10 @@ contains
   
 ! **************************************************************************************************
 !> \brief Calculate embedding potential for one fragment in the freeze-and-thaw environment
+!> \param fat_env The freeze-and-thaw environment
+!> \param vemb The embedding potential (output)
+!> \param i_frag The index of the current fragment
+!> \param to_file Boolean flag to determine if the potential should be written to a file
 ! **************************************************************************************************
   subroutine fat_vemb_frag(fat_env, vemb, i_frag, to_file)
     type(fat_env_type), pointer :: fat_env
@@ -868,31 +867,43 @@ contains
        print *, "DBG| ", modulen//"::"//routinen
     end if
 
+    ! Get the electron density for the current fragment
     call fat_rho_frag(fat_env, rho, i_frag)
 
+    ! Calculate and add the non-additive kinetic embedding potential
     call fat_pw_create_frag(fat_env, vemb_tsna, i_frag)
     call fat_vemb_tsna_frag(fat_env, vemb_tsna, i_frag)
     call pw_axpy(vemb_tsna, vemb)
     call fat_pw_release_frag(fat_env, vemb_tsna, i_frag)
 
+    ! Calculate and add the non-additive exchange-correlation embedding potential
     call fat_pw_create_frag(fat_env, vemb_xcna, i_frag)
     call fat_vemb_xcna_frag(fat_env, vemb_xcna, i_frag)
     call pw_axpy(vemb_xcna, vemb)
     call fat_pw_release_frag(fat_env, vemb_xcna, i_frag)
 
+    ! Calculate and add the electron-electron embedding potential
     call fat_pw_create_frag(fat_env, vemb_ee, i_frag)
     call fat_vemb_e_frag(fat_env, vemb_ee, i_frag)
     call pw_axpy(vemb_ee, vemb)
     call fat_pw_release_frag(fat_env, vemb_ee, i_frag)
 
+    ! Calculate and add the nuclear-electron embedding potential
     call fat_pw_create_frag(fat_env, vemb_ne, i_frag)
     call fat_vemb_n_frag(fat_env, vemb_ne, i_frag)
     call pw_axpy(vemb_ne, vemb)
     call fat_pw_release_frag(fat_env, vemb_ne, i_frag)
 
+    ! If requested, write the embedding potential to files
     if (to_file) then
+       ! Convert fragment index to string for file naming
        call integer_to_string(i_frag, label)
 
+       ! Write embedding potential to a cube file
+        if (is_debug) then
+          print *, "DBG| ", modulen//"::"//routinen
+          print *, "KKK| write CUBE file"
+        end if
        call open_file( &
             "vemb_"//trim(label)//".cube", file_status="REPLACE",&
             & file_action="WRITE", unit_number=output_unit)
@@ -904,11 +915,14 @@ contains
        call cp_pw_to_cube(vemb, output_unit, "vemb_"//trim(label), particle_list, stride=stride)
        deallocate(stride)
 
+       ! Write embedding potential to a dat file (simple volumetric format)
        call open_file( &
             "vemb_"//trim(label)//".dat", file_status="REPLACE", &
             file_action="WRITE", unit_number=output_unit)
        call fat_pw_create_frag(fat_env, weights, i_frag)
+       ! Set weights to the volume element of the grid
        call pw_set(weights, vemb%pw_grid%dr(1) * vemb%pw_grid%dr(2) * vemb%pw_grid%dr(3))
+       ! Write the potential values along with their weights
        call pw_to_simple_volumetric(weights, output_unit, [1, 1, 1], vemb)
        call fat_pw_release_frag(fat_env, weights, i_frag)
     end if
