@@ -2674,7 +2674,7 @@ CONTAINS
       INTEGER                                            :: handle, i, ia, idir, ir, ispin, j, jdir, &
                                                             k, nspins, xc_deriv_method_id
       INTEGER, DIMENSION(2, 3)                           :: bo
-      LOGICAL                                            :: gradient_f, lsd, my_compute_virial, &
+      LOGICAL                                            :: gradient_f, lsd, my_compute_virial, alda0, &
                                                             my_gapw, tau_f, laplace_f, rho_f, do_spinflip
       REAL(KIND=dp)                                      :: fac, gradient_cut, tmp, factor2, s, S_THRESH
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: dr1dr, dra1dra, drb1drb
@@ -2694,6 +2694,8 @@ CONTAINS
 
       NULLIFY (e_drhoa, e_drhob, e_drho)
 
+      alda0 = .true.
+
       my_gapw = .FALSE.
       IF (PRESENT(gapw)) my_gapw = gapw
 
@@ -2708,7 +2710,7 @@ CONTAINS
       IF (my_compute_virial) THEN
          CPASSERT(PRESENT(virial_xc))
       END IF
-      S_THRESH = 1.0E-20
+      S_THRESH = 0.0
 
       CALL section_vals_val_get(xc_section, "XC_GRID%XC_DERIV", &
                                 i_val=xc_deriv_method_id)
@@ -2889,6 +2891,7 @@ CONTAINS
                END IF
             END IF
             ! GGA contributions to the spin-flip xcKernel
+            IF (.NOT.alda0) THEN
             deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drhoa])
             IF (ASSOCIATED(deriv_att)) THEN
                CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
@@ -2931,6 +2934,7 @@ CONTAINS
 !gga               END DO
 !gga!$OMP          END PARALLEL DO
 !gga            END IF
+            END IF
 
          ELSE IF (nspins /= 1) THEN
 
@@ -3239,7 +3243,7 @@ CONTAINS
       INTEGER                                            :: handle, i, idir, ispin, j, &
                                                             k, nspins, xc_deriv_method_id
       INTEGER, DIMENSION(2, 3)                           :: bo
-      LOGICAL                                            :: lsd, do_spinflip, &
+      LOGICAL                                            :: lsd, do_spinflip, alda0, &
                                                             rho_f, gradient_f, tau_f, laplace_f
       REAL(KIND=dp)                                      :: s, S_THRESH, S_THRESH2, drho_cutoff
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: dr1dr, dra1dra, drb1drb
@@ -3263,6 +3267,7 @@ CONTAINS
       ! Initialize parameters
       CALL section_vals_val_get(xc_section, "XC_GRID%XC_DERIV", &
                                 i_val=xc_deriv_method_id)
+      alda0 = .true.
       !
       nspins = SIZE(v_xc)
       lsd = ASSOCIATED(rho_set%rhoa)
@@ -3276,8 +3281,8 @@ CONTAINS
       !
       CALL xc_rho_set_get(rho1_set, drho_cutoff=drho_cutoff)
       !
-      S_THRESH = 1.0E-20
-      S_THRESH2 = 1.E-9
+      S_THRESH = 0.0
+      S_THRESH2 = 0.0
 
       ! Initialize potential
       DO ispin = 1, nspins
@@ -3411,6 +3416,7 @@ CONTAINS
                !             |  d e_xc               d e_xc          |       rho1a      
                !   vxca += + |----------*dra1dra - ----------*drb1drb|*----------------- 
                !             | d|drhoa|             d|drhob|         |  (rhoa - rhob)^2
+               IF (.NOT.alda0) THEN
                deriv_att => xc_dset_get_derivative(deriv_set, [deriv_norm_drhoa])
                IF (ASSOCIATED(deriv_att)) THEN
                   CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
@@ -3454,6 +3460,7 @@ CONTAINS
 !spinless                  END DO
 !spinless!$OMP             END PARALLEL DO
 !spinless               END IF
+               END IF
                !     Beta contribution = - alpha
 !$OMP          PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
 !$OMP          SHARED(bo,v_xc) COLLAPSE(3)
@@ -3524,6 +3531,7 @@ CONTAINS
                !            |    d^2 e_xc                   d^2 e_xc            |     rho1a    
                !   vxca +=  |----------------*dra1dra - ----------------*drb1drb|*------------- 
                !            | drhoa d|drhoa|             drhoa d|drhob|         |  rhoa - rhob
+               IF (.NOT.alda0) THEN
                deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhoa, deriv_norm_drhob])
                IF (ASSOCIATED(deriv_att)) THEN
                   CALL xc_derivative_get(deriv_att, deriv_data=deriv_data2)
@@ -3780,6 +3788,7 @@ CONTAINS
 !!$OMP             END PARALLEL DO
 !               END IF
 
+               END IF
             END IF
 
          ELSE
@@ -3790,6 +3799,7 @@ CONTAINS
          END IF
 
          IF (gradient_f) THEN
+            IF (.NOT.alda0) THEN
 
             ! partial integration
             DO idir = 1, 3
@@ -3895,6 +3905,7 @@ CONTAINS
             DO ispin = 1, nspins
                CALL xc_pw_divergence(xc_deriv_method_id, v_drho_r(:, ispin), tmp_g, vxc_g, v_xc(ispin))
             END DO ! ispin
+            END IF ! ALDA0
 
             DO idir = 1, 3
                DEALLOCATE (drho(idir)%array)
