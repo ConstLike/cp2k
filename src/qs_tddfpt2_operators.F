@@ -262,14 +262,16 @@ CONTAINS
       LOGICAL, INTENT(in)                                :: is_rks_triplets
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc, work_v_xc_tau
-      INTEGER, INTENT(in)                                :: spinflip
+      INTEGER, INTENT(in), OPTIONAL                      :: spinflip
 
-      INTEGER                                            :: ispin, nspins
+      INTEGER                                            :: ispin, nspins, my_spinflip
 
       nspins = SIZE(A_ia_rspace)
+      my_spinflip = 0
+      IF (PRESENT(spinflip)) my_spinflip = spinflip
 
       IF (kernel_env%deriv2_analytic) THEN
-         CALL tddfpt_apply_xc_analytic(kernel_env, rho_ia_struct, is_rks_triplets, spinflip, &
+         CALL tddfpt_apply_xc_analytic(kernel_env, rho_ia_struct, is_rks_triplets, my_spinflip, &
                                        nspins, pw_env, work_v_xc, work_v_xc_tau)
       ELSE
          CALL tddfpt_apply_xc_fd(kernel_env, rho_ia_struct, is_rks_triplets, nspins, &

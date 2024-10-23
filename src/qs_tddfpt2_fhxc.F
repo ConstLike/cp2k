@@ -302,12 +302,12 @@ CONTAINS
                         CALL dbcsr_set(A_xc_munu_sub(ispin)%matrix, 0.0_dp)
                      END DO
 
-                  CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
-                  ALLOCATE (V_rspace_sub(nspins))
-                  DO ispin = 1, nspins
-                     CALL auxbas_pw_pool%create_pw(V_rspace_sub(ispin))
-                     CALL pw_zero(V_rspace_sub(ispin))
-                  END DO
+                     CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
+                     ALLOCATE (V_rspace_sub(nspins))
+                     DO ispin = 1, nspins
+                        CALL auxbas_pw_pool%create_pw(V_rspace_sub(ispin))
+                        CALL pw_zero(V_rspace_sub(ispin))
+                     END DO
 
                      IF (admm_env%do_gapw) THEN
                         basis_type = "AUX_FIT_SOFT"
@@ -382,8 +382,7 @@ CONTAINS
                                           rho_ia_struct=work_matrices%rho_aux_fit_struct_sub, &
                                           is_rks_triplets=is_rks_triplets, pw_env=sub_env%pw_env, &
                                           work_v_xc=work_matrices%wpw_rspace_sub, &
-                                          work_v_xc_tau=work_matrices%wpw_tau_rspace_sub, &
-                                          spinflip=spinflip)
+                                          work_v_xc_tau=work_matrices%wpw_tau_rspace_sub)
                      IF (admm_env%do_gapw) THEN
                         CPWARN("GAPW/ADMM needs symmetric ADMM kernel")
                         CPABORT("GAPW/ADMM@TDDFT")
