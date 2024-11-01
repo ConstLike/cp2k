@@ -1,34 +1,34 @@
 module fat_methods
-  use atomic_kind_types
-  use cp_control_types
-  use cp_files
-  use cp_log_handling
-  use cp_realspace_grid_cube
-  use dbcsr_api
-  use fat_types
-  use force_env_types
-  use input_section_types
-  use kinds
-  use particle_list_types
-  use particle_types
-  use physcon
-  use pw_env_types
-  use pw_poisson_methods
-  use pw_poisson_types
-  use pw_pool_types
-  use pw_methods
-  use pw_types
-  use qs_collocate_density
-  use qs_energy_types
-  use qs_environment_types
-  use qs_force
-  use qs_force_types
-  use qs_rho_types
-  use qs_subsys_types
-  use realspace_grid_cube
-  use string_utilities
-  use xc
-  use pw_grid_types
+  use atomic_kind_types, only: atomic_kind_type, get_atomic_kind, get_atomic_kind_set
+  use cp_control_types, only: dft_control_type
+  use cp_files, only: open_file, close_file
+  use cp_log_handling, only: cp_logger_type, cp_logger_get_default_io_unit, cp_get_default_logger
+  use cp_realspace_grid_cube, only: cp_pw_to_cube, cp_cube_to_pw
+  use dbcsr_api, only: dbcsr_p_type
+  use fat_types, only: fat_env_type
+  use force_env_types, only: force_env_type
+  use input_section_types, only: section_vals_type, section_vals_val_get, section_vals_get_subs_vals
+  use kinds, only: dp, default_string_length
+  use particle_list_types, only: particle_list_type
+  use particle_types, only: particle_type
+  use pw_env_types, only: pw_env_type, pw_env_get
+  use pw_grid_types, only: pw_grid_type, HALFSPACE, PW_MODE_DISTRIBUTED
+  use pw_methods, only: pw_axpy, pw_integral_ab, pw_transfer, pw_set, pw_zero
+  use pw_poisson_methods, only: pw_poisson_solve
+  use pw_poisson_types, only: pw_poisson_type
+  use pw_pool_types, only: pw_pool_type
+  use pw_types, only: pw_type, pw_p_type, REALDATA3D, COMPLEXDATA1D, REALSPACE, RECIPROCALSPACE
+  use qs_collocate_density, only: calculate_drho_elec_dR, calculate_drho_core
+  use qs_energy_types, only: qs_energy_type
+  use qs_environment_types, only: qs_environment_type, get_qs_env, set_qs_env
+  use qs_force, only: qs_calc_energy_force
+  use qs_force_types, only: qs_force_type
+  use qs_rho_types, only: qs_rho_type, qs_rho_get
+  use qs_subsys_types, only: qs_subsys_type, qs_subsys_get
+  use realspace_grid_cube, only: pw_to_simple_volumetric
+  use string_utilities, only: integer_to_string
+  use xc, only: xc_vxc_pw_create
+! use physcon
 
 #include "./base/base_uses.f90"
 
@@ -1091,7 +1091,7 @@ contains
     print *, "KKK| vemb_xc allow_noncompatible_grids=False"
     call pw_axpy(vemb_xcna, vemb)
     call fat_pw_release_frag(fat_env, vemb_xcna, i_frag)
-
+ 
     ! Calculate and add the electron-electron embedding potential
     call fat_pw_create_frag(fat_env, vemb_ee, i_frag)
     call fat_vemb_e_frag(fat_env, vemb_ee, i_frag)
@@ -1099,7 +1099,7 @@ contains
     print *, "KKK| vemb_xc allow_noncompatible_grids=False"
     call pw_axpy(vemb_ee, vemb)
     call fat_pw_release_frag(fat_env, vemb_ee, i_frag)
-
+ 
     ! Calculate and add the nuclear-electron embedding potential
     call fat_pw_create_frag(fat_env, vemb_ne, i_frag)
     call fat_vemb_n_frag(fat_env, vemb_ne, i_frag)
@@ -1390,7 +1390,7 @@ contains
        e = e + e_ee_total
        fat_env%eee = e_ee_total
        print *, "KKK| Total EE interaction energy:", e_ee_total
-
+ 
        ! Nuclear-electron interaction
        do i = 1, fat_env%n_frag
           do j = 1, fat_env%n_frag

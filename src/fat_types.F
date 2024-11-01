@@ -1,10 +1,8 @@
 module fat_types
-  use force_env_types
-  use kinds
-  use pw_env_types
-  use pw_pool_types
-  use pw_types
-  use qs_environment_types
+  use force_env_types, only: force_env_type, force_env_p_type
+  use kinds, only: dp
+  use pw_pool_types, only: pw_pool_type, pw_pool_p_type
+  use pw_types, only: pw_type
 
 #include "./base/base_uses.f90"
 
