@@ -1212,6 +1212,7 @@ CONTAINS
       IF (nspins == 2) focc = 1.0_dp
 
       ! Initialize mos and dimensions of occupied space
+      ! In the following comments mos is refer as Ca and mos2 as Cb
       spin = 1
       mos => gs_mos(1)%mos_occ
       CALL cp_fm_get_info(mos, ncol_global=norb(1))
@@ -1261,31 +1262,41 @@ CONTAINS
             ! XC Kernel contributions
             ! For spin-flip excitations this is the only contribution to the alpha response vector
             IF (.NOT.(do_sf.AND.(ispin.EQ.2))) THEN
+               ! F*X
                CALL cp_dbcsr_sm_fm_multiply(matrix_fx(spin)%matrix, evect(spin), &
                                             cpmos(ispin), norb(ispin), alpha=focc, beta=1.0_dp)
             END IF
             ! For spin-flip excitations this is the only contribution to the beta response vector
             IF (.NOT.(do_sf.AND.(ispin.EQ.1))) THEN
+               ! F*Cb
                CALL cp_dbcsr_sm_fm_multiply(matrix_fx(spin)%matrix, mos2, vcvec, norb(ispin), alpha=1.0_dp, beta=0.0_dp)
+               ! Ca^T*F*Cb
                CALL parallel_gemm("T", "N", norb(spin), norb(ispin), nao, 1.0_dp, mos, vcvec, 0.0_dp, cvcmat)
+               ! X*Ca^T*F*Cb
                CALL parallel_gemm("N", "N", nao, norb(ispin), norb(spin), 1.0_dp, evect(spin), cvcmat, 0.0_dp, vcvec)
+               ! -S*X*Ca^T*F*Cb
                CALL cp_dbcsr_sm_fm_multiply(matrix_s(1)%matrix, vcvec, cpmos(ispin), &
                                             norb(ispin), alpha=-focc, beta=1.0_dp)
                ! Add contributions to the \Lambda_munu for the perturbed overlab matrix term, third term of Eq. 51
+               ! 2X*Ca^T*F*Cb*Cb^T
                CALL cp_dbcsr_plus_fm_fm_t(matrix_wx1(ispin)%matrix, matrix_v=vcvec, matrix_g=gs_mos(ispin)%mos_occ, &
                                           ncol=norb(ispin), alpha=2.0_dp, symmetry_mode=1)
             END IF
             !
 
             ! XC g (third functional derivative) contributions
+            ! g*Ca*focc
             CALL cp_dbcsr_sm_fm_multiply(matrix_gx(ispin)%matrix, gs_mos(ispin)%mos_occ, &
                                          cpmos(ispin), norb(ispin), alpha=focc, beta=1.0_dp)
             ! Add contributions to the \Lambda_munu for the perturbed overlab matrix term, third term of Eq. 51
+            ! g*Ca
             CALL cp_dbcsr_sm_fm_multiply(matrix_gx(ispin)%matrix, gs_mos(ispin)%mos_occ, vcvec, norb(ispin), &
                                          alpha=1.0_dp, beta=0.0_dp)
+            ! Ca^T*g*Ca
             CALL parallel_gemm("T", "N", norb(ispin), norb(ispin), nao, 1.0_dp, gs_mos(ispin)%mos_occ, vcvec, 0.0_dp, cvcmat)
+            ! Ca*Ca^T*g*Ca
             CALL parallel_gemm("N", "N", nao, norb(ispin), norb(ispin), 1.0_dp, gs_mos(ispin)%mos_occ, cvcmat, 0.0_dp, vcvec)
-            !BUGFIX changed order of matrix_v and matrix_g arguments
+            ! Ca*Ca^T*g*Ca*Ca^T
             CALL cp_dbcsr_plus_fm_fm_t(matrix_wx1(ispin)%matrix, matrix_v=vcvec, matrix_g=gs_mos(ispin)%mos_occ, &
                                        ncol=norb(ispin), alpha=1.0_dp, symmetry_mode=1)
             !
@@ -1294,8 +1305,10 @@ CONTAINS
          IF (do_hfx) THEN
             ! For spin-flip excitations this is the only contribution to the alpha response vector
             IF (.NOT.(do_sf.AND.(ispin.EQ.2))) THEN
+               ! F^sym*X
                CALL cp_dbcsr_sm_fm_multiply(matrix_hfx(spin)%matrix, evect(spin), &
                                             cpmos(ispin), norb(ispin), alpha=focc, beta=1.0_dp)
+               ! F^asym*X
                CALL cp_dbcsr_sm_fm_multiply(matrix_hfx_asymm(spin)%matrix, evect(spin), &
                !BUGFIX changed focc to -focc to correctly calculate Transpose(fock)*X. Having possitive focc correspond to fock*X
                                             cpmos(ispin), norb(ispin), alpha=focc, beta=1.0_dp) 
@@ -1303,15 +1316,20 @@ CONTAINS
 
             ! For spin-flip excitations this is the only contribution to the beta response vector
             IF (.NOT.(do_sf.AND.(ispin.EQ.1))) THEN
+               ! F^sym*Cb
                CALL cp_dbcsr_sm_fm_multiply(matrix_hfx(spin)%matrix, mos2, vcvec, norb(ispin), alpha=1.0_dp, beta=0.0_dp)
+               ! -F^asym*Cb
                CALL cp_dbcsr_sm_fm_multiply(matrix_hfx_asymm(spin)%matrix, mos2, vcvec, norb(ispin), &
                                             alpha=1.0_dp, beta=1.0_dp)
+               ! Ca^T*F*Cb
                CALL parallel_gemm("T", "N", norb(spin), norb(ispin), nao, 1.0_dp, mos, vcvec, 0.0_dp, cvcmat)
+               ! X*Ca^T*F*Cb
                CALL parallel_gemm("N", "N", nao, norb(ispin), norb(spin), 1.0_dp, evect(spin), cvcmat, 0.0_dp, vcvec)
+               ! -S*X*Ca^T*F*Cb
                CALL cp_dbcsr_sm_fm_multiply(matrix_s(1)%matrix, vcvec, cpmos(ispin), &
                                             norb(ispin), alpha=-focc, beta=1.0_dp)
                ! Add contributions to the \Lambda_munu for the perturbed overlab matrix term, third term of Eq. 51
-               !BUGFIX changed order of matrix_v and matrix_g arguments
+               ! 2X*Ca^T*F*Cb*Cb^T
                CALL cp_dbcsr_plus_fm_fm_t(matrix_wx1(ispin)%matrix, matrix_v=vcvec, matrix_g=mos2, &
                                           ncol=norb(ispin), alpha=2.0_dp, symmetry_mode=1)
             END IF
