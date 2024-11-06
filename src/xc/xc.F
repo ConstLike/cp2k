@@ -2676,7 +2676,7 @@ CONTAINS
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: gradient_f, lsd, my_compute_virial, alda0, &
                                                             my_gapw, tau_f, laplace_f, rho_f, do_spinflip
-      REAL(KIND=dp)                                      :: fac, gradient_cut, tmp, factor2, s, S_THRESH
+      REAL(KIND=dp)                                      :: fac, gradient_cut, tmp, factor2, s, S_THRESH, pi
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: dr1dr, dra1dra, drb1drb
       REAL(kind=dp), DIMENSION(:, :, :), POINTER         :: deriv_data, deriv_data2, deriv_data3, &
                                                             e_drhoa, e_drhob, e_drho, norm_drho, norm_drhoa, &
@@ -2694,7 +2694,7 @@ CONTAINS
 
       NULLIFY (e_drhoa, e_drhob, e_drho)
 
-      alda0 = .true.
+      pi = 4.0_dp*DATAN(1.0_dp)
 
       my_gapw = .FALSE.
       IF (PRESENT(gapw)) my_gapw = gapw
@@ -2710,7 +2710,8 @@ CONTAINS
       IF (my_compute_virial) THEN
          CPASSERT(PRESENT(virial_xc))
       END IF
-      S_THRESH = 0.0
+      alda0 = .false.
+      S_THRESH = 1.0E-12
 
       CALL section_vals_val_get(xc_section, "XC_GRID%XC_DERIV", &
                                 i_val=xc_deriv_method_id)
@@ -2851,11 +2852,9 @@ CONTAINS
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
-                           s = ABS(rhoa(i,j,k) - rhob(i,j,k))
-                           IF (s.GT.S_THRESH) THEN
-                             v_xc(1)%array(i,j,k) = v_xc(1)%array(i,j,k) + &
-                             (deriv_data(i,j,k) - deriv_data2(i,j,k))*rho1a(i,j,k)/s
-                           END IF
+                           s = MAX(ABS(rhoa(i,j,k) - rhob(i,j,k)),S_THRESH)
+                           v_xc(1)%array(i,j,k) = v_xc(1)%array(i,j,k) + &
+                           (deriv_data(i,j,k) - deriv_data2(i,j,k))*rho1a(i,j,k)/s
                         END DO
                      END DO
                   END DO
@@ -2875,15 +2874,16 @@ CONTAINS
                   deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhoa,deriv_rhob])
                   CALL xc_derivative_get(deriv_att, deriv_data = deriv_data3)
 !$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP             SHARED(bo,v_xc,deriv_data,deriv_data2,deriv_data3,rho1a,rhoa,rhob,S_THRESH) COLLAPSE(3)
+!$OMP             SHARED(bo,v_xc,deriv_data,deriv_data2,deriv_data3,rho1a,rhoa,rhob,S_THRESH,pi) COLLAPSE(3)
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
                            s = ABS(rhoa(i,j,k) - rhob(i,j,k))
-                           IF (s.LE.S_THRESH) THEN
-                             v_xc(1)%array(i,j,k) = v_xc(1)%array(i,j,k) + &
-                             (deriv_data(i,j,k) + deriv_data2(i,j,k) - 2.0*deriv_data3(i,j,k))*rho1a(i,j,k)/4.0
-                           END IF
+!                           IF (s.LE.S_THRESH) THEN
+!                             v_xc(1)%array(i,j,k) = v_xc(1)%array(i,j,k) + &
+!                             COS(s*pi/(2.0*S_THRESH))**2* &
+!                             (deriv_data(i,j,k) + deriv_data2(i,j,k) - 2.0*deriv_data3(i,j,k))*rho1a(i,j,k)/4.0
+!                           END IF
                         END DO
                      END DO
                   END DO
@@ -2903,12 +2903,10 @@ CONTAINS
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
-                           s = ABS(rhoa(i,j,k) - rhob(i,j,k))
-                           IF (s.GT.S_THRESH) THEN
-                              v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
-                              (deriv_data(i, j, k)*dra1dra(i, j, k) - &
-                              deriv_data2(i, j, k)*drb1drb(i, j, k))/s
-                           END IF
+                           s = MAX(ABS(rhoa(i,j,k) - rhob(i,j,k)),S_THRESH)
+                           v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
+                           (deriv_data(i, j, k)*dra1dra(i, j, k) - &
+                           deriv_data2(i, j, k)*drb1drb(i, j, k))/s
                         END DO
                      END DO
                   END DO
@@ -3245,7 +3243,7 @@ CONTAINS
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: lsd, do_spinflip, alda0, &
                                                             rho_f, gradient_f, tau_f, laplace_f
-      REAL(KIND=dp)                                      :: s, S_THRESH, S_THRESH2, drho_cutoff
+      REAL(KIND=dp)                                      :: s, S_THRESH, S_THRESH2, drho_cutoff, pi
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: dr1dr, dra1dra, drb1drb
       REAL(kind=dp), DIMENSION(:, :, :), POINTER         :: deriv_data, deriv_data2, e_drhoa, e_drhob, &
                                                             e_drho, norm_drho, norm_drhoa, &
@@ -3267,7 +3265,7 @@ CONTAINS
       ! Initialize parameters
       CALL section_vals_val_get(xc_section, "XC_GRID%XC_DERIV", &
                                 i_val=xc_deriv_method_id)
-      alda0 = .true.
+      pi = 4.0_dp*DATAN(1.0_dp)
       !
       nspins = SIZE(v_xc)
       lsd = ASSOCIATED(rho_set%rhoa)
@@ -3281,8 +3279,10 @@ CONTAINS
       !
       CALL xc_rho_set_get(rho1_set, drho_cutoff=drho_cutoff)
       !
-      S_THRESH = 0.0
-      S_THRESH2 = 0.0
+      !S_THRESH has to be the same as S_THRESH in xc_calc_2nd_deriv_analytical
+      alda0 = .false.
+      S_THRESH = 1.0E-12
+      S_THRESH2 = 1.0E-12
 
       ! Initialize potential
       DO ispin = 1, nspins
@@ -3401,11 +3401,9 @@ CONTAINS
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
                               s = rhoa(i,j,k) - rhob(i,j,k)
-                              s = SIGN(s**2,s)
-                              IF (ABS(s).GT.S_THRESH2) THEN
-                                v_xc(1)%array(i,j,k) = v_xc(1)%array(i,j,k) + &
-                                (deriv_data(i,j,k) - deriv_data2(i,j,k))*rho1a(i,j,k)**2/s
-                              END IF
+                              s = -SIGN(MAX(s**2,S_THRESH2),s)
+                              v_xc(1)%array(i,j,k) = v_xc(1)%array(i,j,k) + &
+                              (deriv_data(i,j,k) - deriv_data2(i,j,k))*rho1a(i,j,k)**2/s
                            END DO
                         END DO
                      END DO
@@ -3429,12 +3427,10 @@ CONTAINS
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
                               s = rhoa(i,j,k) - rhob(i,j,k)
-                              s = SIGN(s**2,s)
-                              IF (ABS(s).GT.S_THRESH2) THEN
-                                 v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
-                                 (deriv_data(i, j, k) *dra1dra(i, j, k) - deriv_data2(i, j, k)*drb1drb(i, j, k)) &
-                                  *rho1a(i,j,k)/s
-                              END IF
+                              s = -SIGN(MAX(s**2,S_THRESH2),s)
+                              v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
+                              (deriv_data(i, j, k) *dra1dra(i, j, k) - deriv_data2(i, j, k)*drb1drb(i, j, k)) &
+                               *rho1a(i,j,k)/s
                            END DO
                         END DO
                      END DO
@@ -3450,7 +3446,7 @@ CONTAINS
 !spinless                     DO j = bo(1, 2), bo(2, 2)
 !spinless                        DO i = bo(1, 1), bo(2, 1)
 !spinless                           s = rhoa(i,j,k) - rhob(i,j,k)
-!spinless                           s = SIGN(s**2,s)
+!spinless                           s = -SIGN(s**2,s)
 !spinless                           IF (ABS(s).GT.S_THRESH2) THEN
 !spinless                              v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
 !spinless                              deriv_data(i, j, k)*(dra1dra(i, j, k) - drb1drb(i, j, k))*rho1a(i,j,k)/s
@@ -3490,11 +3486,9 @@ CONTAINS
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
-                              s = ABS(rhoa(i,j,k) - rhob(i,j,k))
-                              IF (s.GT.S_THRESH) THEN
-                                 v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
-                                 rho1a(i, j, k)**2*(deriv_data(i, j, k) - deriv_data2(i, j, k))/s
-                              END IF
+                              s = MAX(ABS(rhoa(i,j,k) - rhob(i,j,k)),S_THRESH)
+                              v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
+                              rho1a(i, j, k)**2*(deriv_data(i, j, k) - deriv_data2(i, j, k))/s
                            END DO
                         END DO
                      END DO
@@ -3516,11 +3510,9 @@ CONTAINS
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
-                              s = ABS(rhoa(i,j,k) - rhob(i,j,k))
-                              IF (s.GT.S_THRESH) THEN
-                                 v_xc (2)%array(i, j, k) = v_xc (2)%array(i, j, k) + &
-                                 rho1a(i, j, k)**2*(deriv_data(i, j, k) - deriv_data2(i, j, k))/s
-                              END IF
+                              s = MAX(ABS(rhoa(i,j,k) - rhob(i,j,k)),S_THRESH)
+                              v_xc (2)%array(i, j, k) = v_xc (2)%array(i, j, k) + &
+                              rho1a(i, j, k)**2*(deriv_data(i, j, k) - deriv_data2(i, j, k))/s
                            END DO
                         END DO
                      END DO
@@ -3543,12 +3535,10 @@ CONTAINS
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
-                              s = ABS(rhoa(i,j,k) - rhob(i,j,k))
-                              IF (s.GT.S_THRESH) THEN
-                                 v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
-                                 (deriv_data(i, j, k)*dra1dra(i, j, k) - deriv_data2(i, j, k)*drb1drb(i, j, k)) &
-                                 *rho1a(i, j, k)/s
-                              END IF
+                              s = MAX(ABS(rhoa(i,j,k) - rhob(i,j,k)),S_THRESH)
+                              v_xc (1)%array(i, j, k) = v_xc (1)%array(i, j, k) + &
+                              (deriv_data(i, j, k)*dra1dra(i, j, k) - deriv_data2(i, j, k)*drb1drb(i, j, k)) &
+                              *rho1a(i, j, k)/s
                            END DO
                         END DO
                      END DO
@@ -3570,12 +3560,10 @@ CONTAINS
                      DO k = bo(1, 3), bo(2, 3)
                         DO j = bo(1, 2), bo(2, 2)
                            DO i = bo(1, 1), bo(2, 1)
-                              s = ABS(rhoa(i,j,k) - rhob(i,j,k))
-                              IF (s.GT.S_THRESH) THEN
-                                 v_xc (2)%array(i, j, k) = v_xc (2)%array(i, j, k) + &
-                                 (deriv_data2(i, j, k)*dra1dra(i, j, k) - &
-                                  deriv_data (i, j, k)*drb1drb(i, j, k))*rho1a(i, j, k)/s
-                              END IF
+                              s = MAX(ABS(rhoa(i,j,k) - rhob(i,j,k)),S_THRESH)
+                              v_xc (2)%array(i, j, k) = v_xc (2)%array(i, j, k) + &
+                              (deriv_data2(i, j, k)*dra1dra(i, j, k) - &
+                               deriv_data (i, j, k)*drb1drb(i, j, k))*rho1a(i, j, k)/s
                            END DO
                         END DO
                      END DO
@@ -3819,13 +3807,11 @@ CONTAINS
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
-                           s = ABS(rhoa(i,j,k) - rhob(i,j,k))
-                           IF (s.GT.S_THRESH) THEN
-                              v_drho_r(idir, 1)%array(i, j, k) = v_drho_r(idir, 1)%array(i, j, k) + &
-                                 v_drhoa(1)%array(i, j, k)*drhoa(idir)%array(i, j, k)*rho1a(i, j, k)/s
-                              v_drho_r(idir, 2)%array(i, j, k) = v_drho_r(idir, 2)%array(i, j, k) + &
-                                 v_drhob(2)%array(i, j, k)*drhob(idir)%array(i, j, k)*rho1a(i, j, k)/s
-                           END IF
+                           s = MAX(ABS(rhoa(i,j,k) - rhob(i,j,k)),S_THRESH)
+                           v_drho_r(idir, 1)%array(i, j, k) = v_drho_r(idir, 1)%array(i, j, k) + &
+                              v_drhoa(1)%array(i, j, k)*drhoa(idir)%array(i, j, k)*rho1a(i, j, k)/s
+                           v_drho_r(idir, 2)%array(i, j, k) = v_drho_r(idir, 2)%array(i, j, k) + &
+                              v_drhob(2)%array(i, j, k)*drhob(idir)%array(i, j, k)*rho1a(i, j, k)/s
                         END DO
                      END DO
                   END DO
@@ -3843,11 +3829,9 @@ CONTAINS
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
-                           s = ABS(rhoa(i,j,k) - rhob(i,j,k))
-                           IF (s.GT.S_THRESH) THEN
-                              v_drho_r(idir, 1)%array(i, j, k) = v_drho_r(idir, 1)%array(i, j, k) - &
-                                                    e_drhoa(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
-                           END IF
+                           s = MAX(ABS(rhoa(i,j,k) - rhob(i,j,k)),S_THRESH)
+                           v_drho_r(idir, 1)%array(i, j, k) = v_drho_r(idir, 1)%array(i, j, k) - &
+                                                 e_drhoa(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
                         END DO
                      END DO
                   END DO
@@ -3863,11 +3847,9 @@ CONTAINS
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)
-                           s = ABS(rhoa(i,j,k) - rhob(i,j,k))
-                           IF (s.GT.S_THRESH) THEN
-                              v_drho_r(idir, 2)%array(i, j, k) = v_drho_r(idir, 2)%array(i, j, k) + &
-                                                    e_drhob(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
-                           END IF
+                           s = MAX(ABS(rhoa(i,j,k) - rhob(i,j,k)),S_THRESH)
+                           v_drho_r(idir, 2)%array(i, j, k) = v_drho_r(idir, 2)%array(i, j, k) + &
+                                                 e_drhob(i, j, k)*drho1a(idir)%array(i, j, k)*rho1a(i, j, k)/s
                         END DO
                      END DO
                   END DO

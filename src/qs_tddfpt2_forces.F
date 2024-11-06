@@ -567,9 +567,12 @@ CONTAINS
       ! that was calculated in tddfpt_kernel_force,
       !  force%overlap = 0.5C*H[T]*C^T
       IF (ASSOCIATED(matrix_wx1)) THEN
-         IF (nspins == 2) THEN
+         IF (nspins == 2.AND..NOT.do_sf) THEN
             CALL dbcsr_add(matrix_wx1(1)%matrix, matrix_wx1(2)%matrix, &
                            alpha_scalar=0.5_dp, beta_scalar=0.5_dp)
+         ELSE IF (nspins == 2.AND.do_sf) THEN
+            CALL dbcsr_add(matrix_wx1(1)%matrix, matrix_wx1(2)%matrix, &
+                           alpha_scalar=1.0_dp, beta_scalar=1.0_dp)
          END IF
          NULLIFY (scrm)
          IF (debug_forces) fodeb(1:3) = force(1)%overlap(1:3, 1)
