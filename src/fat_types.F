@@ -17,8 +17,9 @@ module fat_types
        fat_env_create, &
        fat_env_release
 
-  logical, private, parameter :: is_debug = .true.
   character(len=*), private, parameter :: modulen = "fat_types"
+
+  logical, private, parameter :: is_debug = .true.
 
   type fat_env_type
      type(force_env_type), pointer   :: force_env_ref
