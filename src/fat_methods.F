@@ -267,7 +267,6 @@ contains
 
     character(len=default_string_length) :: label
     logical :: my_rspace
-    integer :: in_space, use_data
     type(pw_type), pointer :: rho_tmp
     type(qs_environment_type), pointer :: qs_env
     type(qs_rho_type), pointer :: qs_rho
@@ -280,14 +279,8 @@ contains
        my_rspace = .true.
     end if
 
-    if (my_rspace) then
-       use_data = realdata3d
-       in_space = realspace
-    else
-       use_data = complexdata1d
-       in_space = reciprocalspace
-    end if
-
+    ! Initialize rho with correct data structure and grid mappings
+    ! This is required even for external density to ensure proper parallel setup
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call get_qs_env(qs_env, rho=qs_rho)
     if (my_rspace) then
@@ -296,6 +289,7 @@ contains
        call qs_rho_get(qs_rho, rho_g=rho)
     end if
 
+    ! We map external density into the properly initialized rho
     if (fat_env%extern(i_frag)) then
        call integer_to_string(i_frag, label)
        if (my_rspace) then
@@ -308,16 +302,15 @@ contains
        end if
     end if
 
-    if (is_debug) call print_pw_statistics(rho(1), "rho", i_frag)
+!   if (is_debug) call print_pw_statistics(rho(1), "rho", i_frag)
 
   end subroutine fat_rho_frag
 
 
-  subroutine write_pw_r_to_cube(fat_env, pw, name, i_frag)
+  subroutine write_pw_r_to_cube(fat_env, pw, filename)
     type(fat_env_type), intent(in) :: fat_env
     type(pw_type), intent(in) :: pw
-    character(len=*), intent(in) :: name
-    integer, intent(in) :: i_frag
+    character(len=*), intent(in) :: filename
 
     integer :: unit_nr
     type(cp_logger_type), pointer :: logger
@@ -329,15 +322,13 @@ contains
     type(qs_subsys_type), pointer :: subsys
     type(pw_pool_type), pointer :: pw_pool
     integer, pointer :: stride(:)
-    character(len=100) :: filename
 
     logger => cp_get_default_logger()
     unit_nr = cp_logger_get_default_io_unit(logger)
     log_counter = log_counter + 1
 
-    if (log_counter>25) return
+    if (log_counter>6) return
 
-    write(filename, '(A,A,A,I0,A,I0,A)') 'kkk_', trim(name),'_frag', i_frag, '_', log_counter, '.cube'
     print *, "KKK| write CUBE file number:", filename
 
     if (unit_nr > 0) then
@@ -359,10 +350,10 @@ contains
     end if
   end subroutine write_pw_r_to_cube
 
-  subroutine write_pw_g_to_cube(fat_env, pw, name, i_frag)
+  subroutine write_pw_g_to_cube(fat_env, pw, filename, i_frag)
     type(fat_env_type), intent(in) :: fat_env
     type(pw_type), intent(in) :: pw
-    character(len=*), intent(in) :: name
+    character(len=*), intent(in) :: filename
     integer, intent(in) :: i_frag
 
     type(pw_type), pointer :: pw_real
@@ -400,7 +391,7 @@ contains
     ! Transfer data from reciprocal to real space
     call pw_transfer(pw, pw_real)
 
-    call write_pw_r_to_cube(fat_env, pw_real, name, i_frag)
+    call write_pw_r_to_cube(fat_env, pw_real, filename)
 
     ! Release the temporary real space pw_type
     call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(pw_real)
@@ -525,9 +516,7 @@ contains
 
     type(qs_environment_type), pointer :: qs_env
 
-    if (is_debug) then
-       print *, "DBG| ", modulen//"::"//routinen
-    end if
+    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call get_qs_env(qs_env=qs_env, rho_core=rhon)
@@ -547,9 +536,7 @@ contains
 
     type(qs_environment_type), pointer :: qs_env
 
-    if (is_debug) then
-       print *, "DBG| ", modulen//"::"//routinen
-    end if
+    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call calculate_drho_core(drhon, qs_env, i_dir, i_nuc)
@@ -572,9 +559,7 @@ contains
     type(qs_environment_type), pointer :: qs_env
     type(qs_rho_type), pointer :: rho
 
-    if (is_debug) then
-       print *, "DBG| ", modulen//"::"//routinen
-    end if
+    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call get_qs_env(qs_env, rho=rho)
@@ -598,9 +583,7 @@ contains
     integer :: i, j
     type(pw_type), pointer :: pw_tmp(:)
 
-    if (is_debug) then
-       print *, "DBG| ", modulen//"::"//routinen
-    end if
+    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     do i = 1, fat_env%n_frag
        call fat_rho_frag(fat_env, pw_tmp, i)
@@ -689,9 +672,7 @@ contains
     type(qs_environment_type), pointer :: qs_env
     type(section_vals_type), pointer :: input, section
 
-    if (is_debug) then
-       print *, "DBG| ", modulen//"::"//routinen
-    end if
+    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, input=input)
@@ -724,17 +705,30 @@ contains
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
+    ! Get QS environment and sections
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, input=input)
     section => section_vals_get_subs_vals(input, "DFT%XC")
+
+    ! Get PW environment and pool
     call get_qs_env(qs_env, pw_env=pw_env)
     call pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
 
+    ! Create and initialize density arrays
+    nullify(rho_g, tau)
     call fat_pws_create_ref(fat_env, rho_r, 1)
     call fat_rho_ref(fat_env, rho_r)
+
+    ! Initialize output arrays
     nullify(v, v_tau)
+
+    ! Calculate XC potential and energy
     call xc_vxc_pw_create(v, v_tau, e, rho_r, rho_g, tau, section, pw_pool, .false., virial)
+
+    ! Store reference XC energy
     fat_env%exc_ref = e
+
+    ! Cleanup
     call fat_pws_release_ref(fat_env, rho_r)
 
   end subroutine fat_v_xc_ref
@@ -760,10 +754,10 @@ contains
     nullify(rho_g)
     call fat_rho_frag(fat_env, rho_g, i_frag, .false.)
 
-    if (is_debug) then
-       call print_pw_statistics(rho_g(1), "rho", i_frag)
+!   if (is_debug) then
+!      call print_pw_statistics(rho_g(1), "rho", i_frag)
 !      call write_pw_g_to_cube(fat_env, rho_g(1), "rho", i_frag)
-    end if
+!   end if
 
     allocate(v_g(1))
     call fat_env%pw_pool_sub(i_frag)%pool%create_pw(v_g(1), use_data=complexdata1d, in_space=reciprocalspace)
@@ -774,10 +768,9 @@ contains
     call pw_env_get(pw_env, poisson_env=poisson_env)
     call pw_poisson_solve(poisson_env, rho_g(1), e, v_g(1))
 
-    if (is_debug) then
+    if (is_debug) &
        print *, "DBG| Electron-Electron Functional Energy (", i_frag, "): ", e
-    end if
-    if (is_debug) call print_pw_statistics(v_g(1), "v_ee", i_frag)
+!   if (is_debug) call print_pw_statistics(v_g(1), "v_ee", i_frag)
 
     call pw_transfer(v_g(1), v)
 
@@ -808,11 +801,12 @@ contains
     call get_qs_env(qs_env, rho_core=rho_core)
     rho_g(1) = rho_core
 
-    if (is_debug) call print_pw_statistics(rho_g(1), "rho_core", i_frag)
+!   if (is_debug) call print_pw_statistics(rho_g(1), "rho_core", i_frag)
 !   if (is_debug) call write_pw_g_to_cube(fat_env, rho_g(1), "rho_core", i_frag)
 
     allocate(v_g(1))
-    call fat_env%pw_pool_sub(i_frag)%pool%create_pw(v_g(1), use_data=complexdata1d, in_space=reciprocalspace)
+    call fat_env%pw_pool_sub(i_frag)%pool%create_pw(v_g(1), &
+            use_data=complexdata1d, in_space=reciprocalspace)
     call pw_zero(v_g(1))
 
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
@@ -820,9 +814,8 @@ contains
     call pw_env_get(pw_env, poisson_env=poisson_env)
     call pw_poisson_solve(poisson_env, rho_g(1), e, v_g(1))
 
-    if (is_debug) then
+    if (is_debug) &
        print *, "DBG| Nuclear-Electron Functional Energy (", i_frag, "): ", e
-    end if
 
     call pw_transfer(v_g(1), v)
     call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(v_g(1))
@@ -851,14 +844,14 @@ contains
     ! total
     nullify(v)
     call fat_v_ts_ref(fat_env, v)
-    if (is_debug) call print_pw_statistics(v(1), "v_emb Kin tot", 0)
+!   if (is_debug) call print_pw_statistics(v(1), "v_emb Kin tot", 0)
     call pw_axpy(v(1), vemb, allow_noncompatible_grids=.true.)
     call fat_pws_release_ref(fat_env, v)
 
     ! fragment
     nullify(v)
     call fat_v_ts_frag(fat_env, v, i_frag)
-    if (is_debug) call print_pw_statistics(v(1), "v_emb Kin", i_frag)
+!   if (is_debug) call print_pw_statistics(v(1), "v_emb Kin", i_frag)
     call pw_axpy(v(1), vemb, -1.0_dp, allow_noncompatible_grids=.true.)
     call fat_pws_release_frag(fat_env, v, i_frag)
 
@@ -884,14 +877,14 @@ contains
     ! total
     nullify(v)
     call fat_v_xc_ref(fat_env, v)
-    if (is_debug) call print_pw_statistics(v(1), "v_emb XC tot", 0)
+!   if (is_debug) call print_pw_statistics(v(1), "v_emb XC tot", 0)
     call pw_axpy(v(1), vemb, allow_noncompatible_grids=.true.)
     call fat_pws_release_ref(fat_env, v)
 
     ! fragment
     nullify(v)
     call fat_v_xc_frag(fat_env, v, i_frag)
-    if (is_debug) call print_pw_statistics(v(1), "v_emb XC", i_frag)
+!   if (is_debug) call print_pw_statistics(v(1), "v_emb XC", i_frag)
     call pw_axpy(v(1), vemb, -1.0_dp, allow_noncompatible_grids=.true.)
     call fat_pws_release_frag(fat_env, v, i_frag)
 
@@ -927,8 +920,8 @@ contains
 
        integral_value = pw_integral_ab(v, v)
        if (is_debug) print *, "KKK| Integral of vemb_ee frag", i, ": ", integral_value
-       if (is_debug) call print_pw_statistics(v, "vemb_ee", i_frag)
-!      if (is_debug) call write_pw_r_to_cube(fat_env, v, "vemb_ee", i_frag)
+!      if (is_debug) call print_pw_statistics(v, "vemb_ee", i_frag)
+!      if (is_debug) call write_pw_r_to_cube(fat_env, v, "vemb_ee")
 
        if (is_debug) print *, "KKK| vemb_ee allow_noncompatible_grids=True"
        call pw_axpy(v, v_sum, allow_noncompatible_grids=.true.)
@@ -937,11 +930,6 @@ contains
     end do
 
     call pw_transfer(v_sum, vemb)
-
-    integral_value = pw_integral_ab(vemb, vemb)
-    if (is_debug) then
-       print *, "DBG| Integral of final vemb_ee (frag1 + frag2):", integral_value
-    end if
 
     call fat_pw_release_frag(fat_env, v_sum, i_frag)
 
@@ -978,8 +966,8 @@ contains
 
        integral_value = pw_integral_ab(v, v)
        if (is_debug) print *, "KKK| Integral of vemb_ne frag", i, ": ", integral_value
-       if (is_debug) call print_pw_statistics(v, "vemb_ne", i_frag)
-!      if (is_debug) call write_pw_r_to_cube(fat_env, v, "vemb_ne", i_frag)
+!      if (is_debug) call print_pw_statistics(v, "vemb_ne", i_frag)
+!      if (is_debug) call write_pw_r_to_cube(fat_env, v, "vemb_ne")
 
        if (is_debug) print *, "KKK| vemb_ne allow_noncompatible_grids=True"
        call pw_axpy(v, v_sum, allow_noncompatible_grids=.true.)
@@ -988,11 +976,6 @@ contains
     end do
 
     call pw_transfer(v_sum, vemb)
-
-    integral_value = pw_integral_ab(vemb, vemb)
-    if (is_debug) then
-       print *, "DBG| Integral of final vemb_ne (frag1 + frag2):", integral_value
-    end if
 
     call fat_pw_release_frag(fat_env, v_sum, i_frag)
 
@@ -1026,51 +1009,51 @@ contains
 
     ! Get the electron density for the current fragment
     call fat_rho_frag(fat_env, rho, i_frag)
-    if (is_debug) call print_pw_statistics(rho(1), "rho", i_frag)
+!   if (is_debug) call print_pw_statistics(rho(1), "rho", i_frag)
 
     ! Calculate and add the non-additive kinetic embedding potential
     call fat_pw_create_frag(fat_env, vemb_tsna, i_frag)
     call fat_vemb_tsna_frag(fat_env, vemb_tsna, i_frag)
-    if(is_debug) then
-      call print_pw_statistics(vemb_tsna, "v_emb Kin", i_frag)
-      print *, "KKK| vemb_kin allow_noncompatible_grids=False"
-    end if
+!   if(is_debug) call print_pw_statistics(vemb_tsna, "v_emb Kin", i_frag)
     call pw_axpy(vemb_tsna, vemb)
     call fat_pw_release_frag(fat_env, vemb_tsna, i_frag)
 
     ! Calculate and add the non-additive exchange-correlation embedding potential
     call fat_pw_create_frag(fat_env, vemb_xcna, i_frag)
     call fat_vemb_xcna_frag(fat_env, vemb_xcna, i_frag)
-    if(is_debug) then
-      call print_pw_statistics(vemb_xcna, "v_emb XC", i_frag)
-      print *, "KKK| vemb_xc allow_noncompatible_grids=False"
-    end if
+!   if(is_debug) call print_pw_statistics(vemb_xcna, "v_emb XC", i_frag)
     call pw_axpy(vemb_xcna, vemb)
     call fat_pw_release_frag(fat_env, vemb_xcna, i_frag)
+
+!   ! TODO: Calculate and add the non-additive exact exchange embedding potential
+!   IF (fat_env(i_frag)%use_hfx) THEN
+!      call fat_pw_create_frag(fat_env, vemb_hfx, i_frag)
+!      call fat_vemb_hfx_frag(fat_env, vemb_hfx, i_frag)
+!      if(is_debug) call print_pw_statistics(vemb_xcna, "v_emb XC", i_frag)
+!      call pw_axpy(vemb_hfx, vemb)
+!      call fat_pw_release_frag(fat_env, vemb_hfx, i_frag)
+!   END IF
 
     ! Calculate and add the electron-electron embedding potential
     call fat_pw_create_frag(fat_env, vemb_ee, i_frag)
     call fat_vemb_e_frag(fat_env, vemb_ee, i_frag)
-    if(is_debug) then
-      call print_pw_statistics(vemb_ee, "v_emb EE", i_frag)
-      print *, "KKK| vemb_xc allow_noncompatible_grids=False"
-    end if
+!   if(is_debug) call print_pw_statistics(vemb_ee, "v_emb EE", i_frag)
     call pw_axpy(vemb_ee, vemb)
     call fat_pw_release_frag(fat_env, vemb_ee, i_frag)
 
     ! Calculate and add the nuclear-electron embedding potential
     call fat_pw_create_frag(fat_env, vemb_ne, i_frag)
     call fat_vemb_n_frag(fat_env, vemb_ne, i_frag)
-    if(is_debug) call print_pw_statistics(vemb_ne, "v_emb NE", i_frag)
+!   if(is_debug) call print_pw_statistics(vemb_ne, "v_emb NE", i_frag)
     call pw_axpy(vemb_ne, vemb)
     call fat_pw_release_frag(fat_env, vemb_ne, i_frag)
 
-    ! if requested, write the embedding potential to files
+    ! If requested, write the embedding potential to files
     if (to_file) then
-       ! convert fragment index to string for file naming
+       ! Convert fragment index to string for file naming
        call integer_to_string(i_frag, label)
 
-       ! write embedding potential to a cube file
+       ! Write embedding potential to a cube file
         if (is_debug) then
           print *, "DBG| ", modulen//"::"//routinen
         end if
@@ -1085,14 +1068,14 @@ contains
        call cp_pw_to_cube(vemb, output_unit, "vemb_"//trim(label), particle_list, stride=stride)
        deallocate(stride)
 
-       ! write embedding potential to a dat file (simple volumetric format)
+       ! Write embedding potential to a dat file (simple volumetric format)
        call open_file( &
             "vemb_"//trim(label)//".dat", file_status="REPLACE", &
             file_action="WRITE", unit_number=output_unit)
        call fat_pw_create_frag(fat_env, weights, i_frag)
-       ! set weights to the volume element of the grid
+       ! Set weights to the volume element of the grid
        call pw_set(weights, vemb%pw_grid%dr(1) * vemb%pw_grid%dr(2) * vemb%pw_grid%dr(3))
-       ! write the potential values along with their weights
+       ! Write the potential values along with their weights
        call pw_to_simple_volumetric(weights, output_unit, [1, 1, 1], vemb)
        call fat_pw_release_frag(fat_env, weights, i_frag)
     end if
@@ -1187,10 +1170,6 @@ contains
     call fat_pw_release_frag(fat_env, v_ee, i)
     call fat_pw_release_frag(fat_env, rho, i)
 
-    if (is_debug) then
-       print *, "DBG| Electron-Electron interaction fragment energy (", i, j," )", e
-    end if
-
   end function fat_eint_ee
 
 ! **************************************************************************************************
@@ -1219,10 +1198,6 @@ contains
     call fat_pw_release_frag(fat_env, v, i)
     call fat_pw_release_frag(fat_env, rho, i)
 
-    if (is_debug) then
-       print *, "DBG| Nuclear-electron interaction fragment energy (", i, j," )", e
-    end if
-
   end function fat_eint_ne
 
 ! **************************************************************************************************
@@ -1250,10 +1225,6 @@ contains
 
     call fat_pw_release_frag(fat_env, v, i)
     call fat_pw_release_frag(fat_env, rho, i)
-
-    if (is_debug) then
-       print *, "DBG| Nuclear-Nuclear interaction fragment energy (", i, j," )", e
-    end if
 
   end function fat_eint_nn
 
@@ -1416,6 +1387,7 @@ contains
     type(pw_type), pointer :: rho(:), vemb, weights, rho_tmp
     type(qs_energy_type), pointer :: energy
     type(qs_environment_type), pointer :: qs_env_tmp
+    character(len=100) :: filename
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen, " for frag:", i_frag
 
@@ -1449,6 +1421,7 @@ contains
 
     ! Handle external fragment calculations if configured
     if (fat_env%extern(i_frag)) then
+
        if (is_debug) print *, "KKK| Using extern for fragment ", i_frag
 
        call integer_to_string(i_frag, label)
@@ -1472,8 +1445,9 @@ contains
        call execute_command_line("sh extern_"//trim(label)//".sh", .true., exitstat, cmdstat, cmdmsg)
        if (cmdstat /= 0) CPABORT("External command did not execute successfully")
 
-       ! Get energy from DFT calculation
+!      ! Get energy from DFT calculation
 !      call get_qs_env(qs_env_tmp, energy=energy)
+!      if (is_debug) print *, "KKK| IT IS ENERGY in fat_iterate_frag:", energy%total
 
        ! Get energy from external calculation
        call open_file( &
@@ -1483,23 +1457,23 @@ contains
        ! Get electron density from external calculation
        call fat_rho_frag(fat_env, rho, i_frag)
 
-       ! Create temporary pw for density
-       call fat_pw_create_frag(fat_env, rho_tmp, i_frag)
-       call pw_transfer(rho(1), rho_tmp)
-       ! Write density to cube file
-       if (is_debug) then
-         if(fat_env%n_iter<1) call write_pw_r_to_cube(fat_env, rho_tmp, "rho0", i_frag)
-       end if
-       ! Deallocate
-       call fat_pw_release_frag(fat_env, rho_tmp, i_frag)
-
        ! Calculate embedding energy for current fragment:
        ! Integrate the density * embedding potential
-       ! TODO replace it with get_embed_potential_energy()
        fat_env%e_emb(i_frag) = pw_integral_ab(vemb, rho(1))
 
+!      if (is_debug) then
+!         ! Create temporary pw for density
+!         call fat_pw_create_frag(fat_env, rho_tmp, i_frag)
+!         call pw_transfer(rho(1), rho_tmp)
+!         ! Write density to cube file
+!         write(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
+!         call write_pw_r_to_cube(fat_env, rho_tmp, filename)
+!         ! Deallocate
+!         call fat_pw_release_frag(fat_env, rho_tmp, i_frag)
+!      end if
+
        if(is_debug) &
-         print *, "KKK| Embedding energy from current fragment ", i_frag, fat_env%e_emb(i_frag)
+         print *, "KKK| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
 
     else
 
@@ -1518,24 +1492,25 @@ contains
        fat_env%e_emb(i_frag) = energy%embed_corr
 
        if(is_debug) &
-         print *, "KKK| Embedding energy from current fragment ", i_frag, fat_env%e_emb(i_frag)
+         print *, "KKK| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
 
        ! Get electron density from internal calculation
        call fat_rho_frag(fat_env, rho, i_frag)
-       ! Create temporary pw for density
-       call fat_pw_create_frag(fat_env, rho_tmp, i_frag)
-       call pw_transfer(rho(1), rho_tmp)
-       ! Write density to cube file
-       if (is_debug) then
-         if(fat_env%n_iter<1) call write_pw_r_to_cube(fat_env, rho_tmp, "rho0", i_frag)
-       end if
-       ! Deallocate
-       call fat_pw_release_frag(fat_env, rho_tmp, i_frag)
 
+!      if (is_debug) then
+!         ! Create temporary pw for density
+!         call fat_pw_create_frag(fat_env, rho_tmp, i_frag)
+!         call pw_transfer(rho(1), rho_tmp)
+!         ! Write density to cube file
+!         write(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
+!         call write_pw_r_to_cube(fat_env, rho_tmp, filename)
+!         ! Deallocate
+!         call fat_pw_release_frag(fat_env, rho_tmp, i_frag)
+!      end if
 
     end if
 
-    if (is_debug) then 
+    if (is_debug) then
        print *, "KKK| Total subsystem (", i_frag, ") energy:", fat_env%e_sub(i_frag)
     end if
 
@@ -1610,6 +1585,7 @@ contains
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     is_done = fat_env%i_iter > fat_env%n_iter .or. fat_is_converged(fat_env)
+
   end function
 
 ! **************************************************************************************************
