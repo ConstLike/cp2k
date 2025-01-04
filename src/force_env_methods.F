@@ -62,8 +62,6 @@ MODULE force_env_methods
    USE embed_types,                     ONLY: embed_env_type,&
                                               opt_dmfet_pot_type,&
                                               opt_embed_pot_type
-   USE extern_methods,                  ONLY: extern_calc_energy_force
-   USE extern_types,                    ONLY: extern_env_type
    USE external_potential_methods,      ONLY: add_external_potential
    USE fat_methods,                     ONLY: fat_finalize,&
                                               fat_is_done,&
@@ -77,7 +75,7 @@ MODULE force_env_methods
    USE fist_force,                      ONLY: fist_calc_energy_force
    USE force_env_types,                 ONLY: &
         force_env_get, force_env_get_natom, force_env_p_type, force_env_set, force_env_type, &
-        use_eip_force, use_embed, use_extern, use_fist_force, use_mixed_force, use_nnp_force, use_prog_name, &
+        use_eip_force, use_embed, use_fist_force, use_mixed_force, use_nnp_force, use_prog_name, &
         use_pwdft_force, use_qmmm, use_qmmmx, use_qs_force
    USE force_env_utils,                 ONLY: rescale_forces,&
                                               write_atener,&
@@ -132,7 +130,7 @@ MODULE force_env_methods
         get_prev_density, init_embed_pot, make_subsys_embed_pot, max_dens_diff, opt_embed_step, &
         prepare_embed_opt, print_emb_opt_info, print_embed_restart, print_pot_simple_grid, &
         print_rho_diff, print_rho_spin_diff, read_embed_pot, release_opt_embed, step_control, &
-        understand_spin_states, make_frozen_embed_pot
+        understand_spin_states
    USE particle_list_types,             ONLY: particle_list_p_type,&
                                               particle_list_type
    USE physcon,                         ONLY: debye
@@ -303,9 +301,6 @@ CONTAINS
                                        calculate_forces)
          CASE (use_embed)
             CALL embed_energy(force_env)
-
-         CASE (use_extern)
-            CALL extern_calc_energy_force(force_env, calculate_forces)
 
          CASE default
             CPABORT("")
@@ -765,14 +760,13 @@ CONTAINS
 !> \param mixed_env ...
 !> \param embed_env ...
 !> \param nnp_env ...
-!> \param extern_env ...
 !> \par History
 !>      04.2003 created [fawzi]
 !> \author fawzi
 ! **************************************************************************************************
    SUBROUTINE force_env_create(force_env, root_section, para_env, globenv, fist_env, &
                                qs_env, meta_env, sub_force_env, qmmm_env, qmmmx_env, eip_env, pwdft_env, force_env_section, &
-                               mixed_env, embed_env, nnp_env, extern_env)
+                               mixed_env, embed_env, nnp_env)
 
       TYPE(force_env_type), POINTER                      :: force_env
       TYPE(section_vals_type), POINTER                   :: root_section
@@ -791,7 +785,6 @@ CONTAINS
       TYPE(mixed_environment_type), OPTIONAL, POINTER    :: mixed_env
       TYPE(embed_env_type), OPTIONAL, POINTER            :: embed_env
       TYPE(nnp_type), OPTIONAL, POINTER                  :: nnp_env
-      TYPE(extern_env_type), OPTIONAL, POINTER           :: extern_env
 
       ALLOCATE (force_env)
       NULLIFY (force_env%fist_env, force_env%qs_env, &
@@ -800,7 +793,7 @@ CONTAINS
                force_env%qmmm_env, force_env%qmmmx_env, force_env%fp_env, &
                force_env%force_env_section, force_env%eip_env, force_env%mixed_env, &
                force_env%embed_env, force_env%pwdft_env, force_env%nnp_env, &
-               force_env%extern_env, force_env%root_section)
+               force_env%root_section)
       last_force_env_id = last_force_env_id + 1
       force_env%ref_count = 1
       force_env%in_use = 0
@@ -871,12 +864,6 @@ CONTAINS
          CPASSERT(force_env%in_use == 0)
          force_env%in_use = use_nnp_force
          force_env%nnp_env => nnp_env
-      END IF
-      IF (PRESENT(extern_env)) THEN
-         CPASSERT(ASSOCIATED(extern_env))
-         CPASSERT(force_env%in_use == 0)
-         force_env%in_use = use_extern
-         force_env%extern_env => extern_env
       END IF
       CPASSERT(force_env%in_use /= 0)
 
@@ -1614,7 +1601,7 @@ CONTAINS
          CALL dmfet_embedding(force_env, ref_subsys_number, energies, converged_embed)
       CASE (fat)
          ! Density matrix embedding theory
-         CALL fat_embedding(force_env, ref_subsys_number, energies, converged_embed)
+         CALL fat_embedding(force_env, ref_subsys_number, converged_embed)
       END SELECT
 
    END SUBROUTINE dft_embedding
@@ -2169,10 +2156,9 @@ CONTAINS
 !> \param converged_embed true if the optimization has converged
 !> \author Lukas Schreder
 ! **************************************************************************************************
-   subroutine fat_embedding(force_env, ref_subsys_number, energies, converged)
+   subroutine fat_embedding(force_env, ref_subsys_number, converged)
       type(force_env_type), pointer                      :: force_env
       integer                                            :: ref_subsys_number
-      real(kind=dp), dimension(:), pointer               :: energies
       logical                                            :: converged
 
       character(len=*), parameter                        :: routinen = 'fat_embedding'

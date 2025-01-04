@@ -218,13 +218,12 @@ contains
 
     character(len=*), parameter :: routinen = "fat_pws_release_frag"
 
-    integer :: i, n
     type(pw_type), pointer :: pw_tmp
+    integer :: i
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
-    n = size(pws)
-    do i = 1, n
+    do i = 1, size(pws)
        pw_tmp => pws(i)
        call fat_pw_release_frag(fat_env, pw_tmp, i_frag)
     end do
@@ -242,12 +241,11 @@ contains
 
     character(len=*), parameter :: routinen = "fat_pws_release_ref"
 
-    integer :: i, n
+    integer :: i
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
-    n = size(pws)
-    do i = 1, n
+    do i = 1, size(pws)
        call fat_pw_release_ref(fat_env, pws(i))
     end do
     DEALLOCATE(pws)
@@ -408,10 +406,8 @@ contains
     integer, intent(in) :: i_frag
 
     real(dp) :: mean, std_dev, min_val, max_val, sum_val, norm_2
-
     integer :: count, i
     type(pw_grid_type), pointer :: grid
-
     logical :: print_grid = .true.
 
     grid => pw%pw_grid
@@ -505,6 +501,27 @@ contains
       print *, "KKK|   Max G^2:               ", maxval(grid%gsq)
     end if
 
+!#if defined(__parallel)
+!    print *, "KKK|  MPI Information:"
+!    print *, "KKK|   MPI Mode:               ", merge("DISTRIBUTED","LOCAL      ", &
+!             grid%para%mode == PW_MODE_DISTRIBUTED) 
+!    print *, "KKK|   MPI Group Handle:       ", grid%para%group%get_handle()
+!    print *, "KKK|   MPI Group Size:         ", grid%para%group_size
+!    print *, "KKK|   MPI Position:           ", grid%para%my_pos
+!    print *, "KKK|   MPI Dims:               ", grid%para%rs_dims
+!    print *, "KKK|   MPI Ray Distribution:   ", grid%para%ray_distribution
+!    print *, "KKK|   MPI Blocked:            ", grid%para%blocked
+!    print *, "KKK|   MPI Task Rank:          ", grid%para%rs_dims
+!    print *, "KKK|   Real Space Group:       ", grid%para%rs_group%get_handle()
+!    print *, "KKK|   Real Space Position:    ", grid%para%rs_pos
+!    print *, "KKK|   Real Space MPO:         ", grid%para%rs_mpo
+!    print *, "KKK|   Has Bounds Array:       ", ALLOCATED(grid%para%bo)
+!    if (ALLOCATED(grid%para%bo)) then
+!      print *, "KKK|   Bounds Array Shape:     ", SHAPE(grid%para%bo)
+!    endif
+!    print *, "KKK|   Has YZ Ray Array:       ", ALLOCATED(grid%para%yzp)
+!    print *, "KKK|   Has YZ Count Array:     ", ALLOCATED(grid%para%nyzray)
+!#endif
   end subroutine print_pw_statistics
 ! **************************************************************************************************
 !> \brief Gets the nuclear density for one fragment in the freeze-and-thaw environment
@@ -780,8 +797,10 @@ contains
     ! Initialize rho_g if needed for GGA
     nullify(rho_g, tau)
     if (use_gga) then
-       call fat_pws_create_ref(fat_env, rho_g, 1, rspace=.false.)
+       allocate(rho_g(size(rho_r)))
        do i = 1, size(rho_r)
+          call fat_env%pw_pool_sub(i_frag)%pool%create_pw(rho_g(i), &
+                                use_data=complexdata1d, in_space=reciprocalspace)
           call pw_transfer(rho_r(i), rho_g(i))
        end do
     end if
@@ -804,10 +823,11 @@ contains
                             compute_virial=.false., virial_xc=virial)
         fat_env%exc_sub(i_frag) = fat_env%exc_sub(i_frag) + e
 
-       ! Cleanup rho_g
-       if (use_gga) then
-         call fat_pws_release_ref(fat_env, rho_g)
-       end if
+        ! Cleanup rho_g
+        do i = 1, size(rho_g)
+            call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(rho_g(i))
+        end do
+        deallocate(rho_g)
     end if
 
   end subroutine fat_v_xc_frag
@@ -854,8 +874,10 @@ contains
     ! Initialize rho_g if needed for GGA
     nullify(rho_g, tau)
     if (use_gga) then
-       call fat_pws_create_ref(fat_env, rho_g, 1, rspace=.false.)
+       allocate(rho_g(size(rho_r)))
        do i = 1, size(rho_r)
+          call fat_env%pw_pool_ref%create_pw(rho_g(i), &
+                      use_data=complexdata1d, in_space=reciprocalspace)
           call pw_transfer(rho_r(i), rho_g(i))
        end do
     end if
@@ -881,9 +903,10 @@ contains
        fat_env%exc_ref = fat_env%exc_ref + e
 
        ! Cleanup rho_g
-       if (use_gga) then
-         call fat_pws_release_ref(fat_env, rho_g)
-       end if
+       do i = 1, size(rho_g)
+           call fat_env%pw_pool_ref%give_back_pw(rho_g(i))
+       end do
+       deallocate(rho_g)
     end if
 
     ! Cleanup
@@ -1054,12 +1077,12 @@ contains
     ! Fragment
     nullify(v, v_gga)
     call fat_v_xc_frag(fat_env, v, v_gga, i_frag)
-    if (is_debug) then
-      call print_pw_statistics(v(1), "v_emb XC LDA", i_frag)
-      if (associated(v_gga)) then
-        call print_pw_statistics(v_gga(1), "v_emb XC GGA", i_frag)
-      endif
-    endif
+!   if (is_debug) then
+!     call print_pw_statistics(v(1), "v_emb XC LDA", i_frag)
+!     if (associated(v_gga)) then
+!       call print_pw_statistics(v_gga(1), "v_emb XC GGA", i_frag)
+!     endif
+!   endif
     call pw_axpy(v(1), vemb, -1.0_dp, allow_noncompatible_grids=.true.)
     call fat_pws_release_frag(fat_env, v, i_frag)
     if (associated(v_gga)) then
@@ -1229,34 +1252,35 @@ contains
 
     ! If requested, write the embedding potential to files
     if (to_file) then
-       ! Convert fragment index to string for file naming
-       call integer_to_string(i_frag, label)
+      IF (fat_env%force_env_ref%para_env%is_source()) THEN
+        ! Convert fragment index to string for file naming
+        call integer_to_string(i_frag, label)
 
-       ! Write embedding potential to a cube file
-        if (is_debug) then
-          print *, "DBG| ", modulen//"::"//routinen
-        end if
-       call open_file( &
-            "vemb_"//trim(label)//".cube", file_status="replace",&
-            & file_action="write", unit_number=output_unit)
-       qs_env => fat_env%force_env_ref%qs_env
-       call get_qs_env(qs_env, subsys=subsys)
-       call qs_subsys_get(subsys, particles=particle_list)
-       allocate(stride(3))
-       stride = [1, 1, 1]
-       call cp_pw_to_cube(vemb, output_unit, "vemb_"//trim(label), particle_list, stride=stride)
-       deallocate(stride)
+        ! Write embedding potential to a cube file
+        if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
-       ! Write embedding potential to a dat file (simple volumetric format)
-       call open_file( &
-            "vemb_"//trim(label)//".dat", file_status="REPLACE", &
-            file_action="WRITE", unit_number=output_unit)
-       call fat_pw_create_frag(fat_env, weights, i_frag)
-       ! Set weights to the volume element of the grid
-       call pw_set(weights, vemb%pw_grid%dr(1) * vemb%pw_grid%dr(2) * vemb%pw_grid%dr(3))
-       ! Write the potential values along with their weights
-       call pw_to_simple_volumetric(weights, output_unit, [1, 1, 1], vemb)
-       call fat_pw_release_frag(fat_env, weights, i_frag)
+        call open_file( &
+             "vemb_"//trim(label)//".cube", file_status="replace",&
+             & file_action="write", unit_number=output_unit)
+        qs_env => fat_env%force_env_ref%qs_env
+        call get_qs_env(qs_env, subsys=subsys)
+        call qs_subsys_get(subsys, particles=particle_list)
+        allocate(stride(3))
+        stride = [1, 1, 1]
+        call cp_pw_to_cube(vemb, output_unit, "vemb_"//trim(label), particle_list, stride=stride)
+        deallocate(stride)
+
+        ! Write embedding potential to a dat file (simple volumetric format)
+        call open_file( &
+             "vemb_"//trim(label)//".dat", file_status="REPLACE", &
+             file_action="WRITE", unit_number=output_unit)
+        call fat_pw_create_frag(fat_env, weights, i_frag)
+        ! Set weights to the volume element of the grid
+        call pw_set(weights, vemb%pw_grid%dr(1) * vemb%pw_grid%dr(2) * vemb%pw_grid%dr(3))
+        ! Write the potential values along with their weights
+        call pw_to_simple_volumetric(weights, output_unit, [1, 1, 1], vemb)
+        call fat_pw_release_frag(fat_env, weights, i_frag)
+      end if
     end if
 
   end subroutine fat_vemb_frag
@@ -1398,6 +1422,8 @@ contains
 
     call fat_pw_create_frag(fat_env, rho, i)
     call fat_rhon_frag(fat_env, rho_tmp, j)
+!   if (is_debug) call print_pw_statistics(rho, "rho", i)
+!   if (is_debug) call print_pw_statistics(rho_tmp, "rho_tmp", j)
 
     call pw_transfer(rho_tmp, rho)
     e = pw_integral_ab(v, rho)
@@ -1523,13 +1549,17 @@ contains
 
     character(len=*), parameter :: routinen = "fat_status"
 
+    LOGICAL :: ionode
     real(dp) :: e_tot
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
+    ionode = (fat_env%force_env_ref%para_env%mepos == fat_env%force_env_ref%para_env%source)
+
     e_tot = fat_e_tot(fat_env)
 
-    write (fat_env%output_unit, fmt=fat_data_fmt) &
+    if (ionode .and. fat_env%output_unit > 0) &
+      write (fat_env%output_unit, fmt=fat_data_fmt) &
          fat_env%i_iter, &
          fat_env%n_iter, &
          i_frag, &
@@ -1920,7 +1950,7 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: v, drho
+    type(pw_type), pointer :: vemb, drho
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -1928,10 +1958,10 @@ contains
     do i = 1, fat_env%n_frag  ! fragments
 
       ! Create embedding potential
-       call fat_pw_create_frag(fat_env, v, i)
+       call fat_pw_create_frag(fat_env, vemb, i)
 
        ! Calculate total embedding potential (includes both LDA and GGA if present)
-       call fat_vemb_xcna_frag(fat_env=fat_env, vemb=v, i_frag=i)
+       call fat_vemb_xcna_frag(fat_env=fat_env, vemb=vemb, i_frag=i)
 
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
@@ -1943,14 +1973,14 @@ contains
              call fat_drho_frag(fat_env, drho, i, j, a)
 
              ! Total force contribution (LDA + GGA if present)
-             forces(k, a) = pw_integral_ab(v, drho)
+             forces(k, a) = pw_integral_ab(vemb, drho)
 
              call fat_pw_release_frag(fat_env, drho, i)
           end do
        end do
 
        ! Release potential
-       call fat_pw_release_frag(fat_env, v, i)
+       call fat_pw_release_frag(fat_env, vemb, i)
 
     end do
 
@@ -2356,6 +2386,8 @@ contains
     type(pw_env_type), pointer :: pw_env_tmp
     type(qs_environment_type), pointer :: qs_env_tmp
     type(section_vals_type), pointer :: input
+    TYPE(cp_logger_type), POINTER :: logger
+    logical :: ionode
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2371,8 +2403,14 @@ contains
     ! Count fragments
     fat_env%n_frag = size(force_env%sub_force_env) - 1
 
-    ! Initialize output unit
-    fat_env%output_unit = cp_logger_get_default_io_unit()
+    ! Get logger and initialize output unit only for I/O node
+    ionode = force_env%para_env%mepos == force_env%para_env%source
+    IF (ionode) then
+       logger => cp_get_default_logger()
+       fat_env%output_unit = cp_logger_get_default_io_unit(logger)
+    else
+       fat_env%output_unit = -1
+    end if
 
     ! Allocate and setup force environments for each fragment
     allocate(fat_env%force_env_sub(fat_env%n_frag))
@@ -2465,7 +2503,8 @@ contains
     fat_env%eps = eps
 
     ! Setup header for status output
-    write (fat_env%output_unit, fmt=fat_title_fmt) &
+    if (ionode) &
+      write (fat_env%output_unit, fmt=fat_title_fmt) &
          "i_iter", &
          "n_iter", &
          "i_frag", &
