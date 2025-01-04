@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -14,6 +14,9 @@ MODULE rt_propagator_init
    USE arnoldi_api,                     ONLY: arnoldi_extremal
    USE cp_control_types,                ONLY: dft_control_type,&
                                               rtp_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_filter, dbcsr_multiply, &
+        dbcsr_p_type, dbcsr_scale, dbcsr_set, dbcsr_type
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
                                               cp_dbcsr_plus_fm_fm_t
@@ -30,14 +33,12 @@ MODULE rt_propagator_init
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_get_default_unit_nr,&
                                               cp_logger_type
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_filter, dbcsr_multiply, &
-        dbcsr_p_type, dbcsr_scale, dbcsr_set, dbcsr_type
    USE input_constants,                 ONLY: do_arnoldi,&
                                               do_bch,&
                                               do_cn,&
                                               do_em,&
                                               do_etrs,&
+                                              do_exact,&
                                               do_pade,&
                                               do_taylor
    USE iterate_matrix,                  ONLY: matrix_sqrt_Newton_Schulz
@@ -160,7 +161,7 @@ CONTAINS
             DO imat = 1, SIZE(mos_new)
                CALL cp_fm_to_fm(mos_new(imat), mos_next(imat))
             END DO
-         ELSEIF (rtp_control%mat_exp == do_bch) THEN
+         ELSEIF (rtp_control%mat_exp == do_bch .OR. rtp_control%mat_exp == do_exact) THEN
          ELSE
             IF (rtp%linear_scaling) THEN
                CALL compute_exponential_sparse(exp_H_new, propagator_matrix, rtp_control, rtp)

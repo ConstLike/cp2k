@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -49,7 +49,8 @@ MODULE atom_energy
                                               dp
    USE mathconstants,                   ONLY: dfac,&
                                               gamma1,&
-                                              pi
+                                              pi,&
+                                              rootpi
    USE periodic_table,                  ONLY: nelem,&
                                               ptable
    USE physcon,                         ONLY: bohr
@@ -583,7 +584,7 @@ CONTAINS
          WRITE (iw, '(/,A,I0,A,I0,A)') "             Exponent     Coef.(Quickstep Normalization), first ", &
             n - nder, " valence ", nder, " response"
          expzet = 0.25_dp*REAL(2*l + 3, dp)
-         prefac = SQRT(SQRT(pi)/2._dp**(l + 2)*dfac(2*l + 1))
+         prefac = SQRT(rootpi/2._dp**(l + 2)*dfac(2*l + 1))
          DO i = 1, m
             zeta = (2._dp*atom%basis%am(i, l))**expzet
             WRITE (iw, '(4X,F20.10,4X,15ES20.6)') atom%basis%am(i, l), ((prefac*rbasis(i, k, l)/zeta), k=1, n)

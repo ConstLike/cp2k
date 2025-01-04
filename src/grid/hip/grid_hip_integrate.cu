@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2025 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -750,5 +750,5 @@ void context_info::compute_hab_coefficients() {
            this->main_stream>>>(params);
   }
 }
-};     // namespace rocm_backend
+}; // namespace rocm_backend
 #endif // defined(__OFFLOAD_HIP) && !defined(__NO_OFFLOAD_GRID)

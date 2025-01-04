@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2025 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -14,6 +14,7 @@
 #include "../offload/offload_library.h"
 #include "../offload/offload_runtime.h"
 #include "dbm_mempool.h"
+#include "dbm_mpi.h"
 
 /*******************************************************************************
  * \brief Private routine for actually allocating system memory.
@@ -34,7 +35,7 @@ static void *actual_malloc(const size_t size, const bool on_device) {
   (void)on_device; // mark used
 #endif
 
-  void *memory = malloc(size);
+  void *memory = dbm_mpi_alloc_mem(size);
   assert(memory != NULL);
   return memory;
 }
@@ -58,7 +59,7 @@ static void actual_free(void *memory, const bool on_device) {
   (void)on_device; // mark used
 #endif
 
-  free(memory);
+  dbm_mpi_free_mem(memory);
 }
 
 /*******************************************************************************
@@ -114,6 +115,7 @@ static void *internal_mempool_malloc(const size_t size, const bool on_device) {
     // If no chunk was found, allocate a new one.
     if (chunk == NULL) {
       chunk = malloc(sizeof(dbm_memchunk_t));
+      assert(chunk != NULL);
       chunk->on_device = on_device;
       chunk->size = 0;
       chunk->mem = NULL;

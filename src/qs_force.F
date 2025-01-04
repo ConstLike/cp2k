@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,6 +13,9 @@ MODULE qs_force
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind_set
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set
    USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
    USE cp_dbcsr_output,                 ONLY: cp_dbcsr_write_sparse_matrix
@@ -23,9 +26,6 @@ MODULE qs_force
                                               cp_print_key_finished_output,&
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
-   USE dbcsr_api,                       ONLY: dbcsr_copy,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set
    USE dft_plus_u,                      ONLY: plus_u
    USE ec_env_types,                    ONLY: energy_correction_type
    USE efield_utils,                    ONLY: calculate_ecore_efield,&
@@ -287,8 +287,7 @@ CONTAINS
          CALL calculate_dftb_dispersion(qs_env=qs_env, para_env=para_env, &
                                         calculate_forces=.TRUE.)
       ELSEIF (dft_control%qs_control%xtb) THEN
-         CALL build_xtb_matrices(qs_env=qs_env, para_env=para_env, &
-                                 calculate_forces=.TRUE.)
+         CALL build_xtb_matrices(qs_env=qs_env, calculate_forces=.TRUE.)
       ELSEIF (perform_ec) THEN
          ! Calculates core and grid based forces
          CALL energy_correction(qs_env, ec_init=.FALSE., calculate_forces=.TRUE.)
@@ -360,7 +359,11 @@ CONTAINS
                                   t3=dummy_real)
             END IF
          END IF
-      ELSEIF (.NOT. perform_ec) THEN
+      ELSEIF (perform_ec) THEN
+         ! energy correction forces postponed
+      ELSEIF (qs_env%harris_method) THEN
+         ! Harris method forces already done in harris_energy_correction
+      ELSE
          ! Compute grid-based forces
          CALL qs_ks_update_qs_env(qs_env, calculate_forces=.TRUE.)
       END IF

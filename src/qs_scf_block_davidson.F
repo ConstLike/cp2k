@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -17,6 +17,10 @@
 ! **************************************************************************************************
 MODULE qs_scf_block_davidson
 
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_get_diag, dbcsr_get_info, dbcsr_init_p, &
+        dbcsr_multiply, dbcsr_norm, dbcsr_norm_column, dbcsr_release_p, dbcsr_scale_by_vector, &
+        dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_real_default, dbcsr_type_symmetric
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
                                               cp_dbcsr_m_by_n_from_row_template,&
@@ -43,10 +47,6 @@ MODULE qs_scf_block_davidson
                                               cp_fm_to_fm_submat,&
                                               cp_fm_type,&
                                               cp_fm_vectorsnorm
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_get_diag, dbcsr_get_info, dbcsr_init_p, &
-        dbcsr_multiply, dbcsr_norm, dbcsr_norm_column, dbcsr_release_p, dbcsr_scale_by_vector, &
-        dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_real_default, dbcsr_type_symmetric
    USE kinds,                           ONLY: dp
    USE machine,                         ONLY: m_walltime
    USE parallel_gemm_api,               ONLY: parallel_gemm

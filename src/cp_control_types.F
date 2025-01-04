@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,7 +12,10 @@
 MODULE cp_control_types
    USE cp_fm_types,                     ONLY: cp_fm_release,&
                                               cp_fm_type
-   USE input_constants,                 ONLY: do_full_density
+   USE eeq_input,                       ONLY: eeq_solver_type
+   USE input_constants,                 ONLY: do_full_density,&
+                                              rtp_bse_ham_G0W0,&
+                                              rtp_method_tddft
    USE kinds,                           ONLY: default_path_length,&
                                               default_string_length,&
                                               dp
@@ -21,6 +24,9 @@ MODULE cp_control_types
    USE qs_cdft_types,                   ONLY: cdft_control_create,&
                                               cdft_control_release,&
                                               cdft_control_type
+   USE smeagol_control_types,           ONLY: smeagol_control_create,&
+                                              smeagol_control_release,&
+                                              smeagol_control_type
    USE xas_control,                     ONLY: xas_control_release,&
                                               xas_control_type
 #include "./base/base_uses.f90"
@@ -38,14 +44,17 @@ MODULE cp_control_types
       INTEGER, DIMENSION(2)                :: distribution_layout = 0
       INTEGER                              :: blocked = 0
    END TYPE pw_grid_option
+
 ! **************************************************************************************************
 ! \brief parameters for EMD/RTP calculations involving MO projections
 ! **************************************************************************************************
    TYPE proj_mo_type
       INTEGER, DIMENSION(:), ALLOCATABLE         :: ref_mo_index
       INTEGER                                    :: ref_mo_spin = 1
+      INTEGER                                    :: ref_nlumo = 0
       LOGICAL                                    :: sum_on_all_ref = .FALSE.
       INTEGER, DIMENSION(:), ALLOCATABLE         :: td_mo_index
+      REAL(dp), DIMENSION(:), ALLOCATABLE        :: td_mo_occ
       INTEGER                                    :: td_mo_spin = 1
       LOGICAL                                    :: sum_on_all_td = .FALSE.
       CHARACTER(LEN=default_path_length)         :: ref_mo_file_name = ""
@@ -57,6 +66,7 @@ MODULE cp_control_types
    TYPE proj_mo_p_type
       TYPE(proj_mo_type), POINTER                :: proj_mo => NULL()
    END TYPE proj_mo_p_type
+
 ! **************************************************************************************************
 ! \brief Control parameters for REAL_TIME_PROPAGATION calculations
 ! **************************************************************************************************
@@ -67,6 +77,8 @@ MODULE cp_control_types
       INTEGER                              :: mat_exp = 0
       INTEGER                              :: propagator = 0
       LOGICAL                              :: fixed_ions = .FALSE.
+      INTEGER                              :: rtp_method = rtp_method_tddft
+      INTEGER                              :: rtbse_ham = rtp_bse_ham_G0W0
       INTEGER                              :: initial_wfn = 0
       REAL(dp)                             :: eps_exp = 0.0_dp
       LOGICAL                              :: initial_step = .FALSE.
@@ -85,12 +97,14 @@ MODULE cp_control_types
       INTEGER, DIMENSION(3)                :: delta_pulse_direction = 0
       REAL(KIND=dp)                        :: delta_pulse_scale = 0.0_dp
       LOGICAL                              :: velocity_gauge = .FALSE.
+      REAL(KIND=dp), DIMENSION(3)          :: field = 0.0_dp
       REAL(KIND=dp), DIMENSION(3)          :: vec_pot = 0.0_dp
       LOGICAL                              :: nl_gauge_transform = .FALSE.
       LOGICAL                              :: is_proj_mo = .FALSE.
       TYPE(proj_mo_p_type), DIMENSION(:), &
          POINTER                :: proj_mo_list => NULL()
    END TYPE rtp_control_type
+
 ! **************************************************************************************************
 ! \brief Control parameters for DFTB calculations
 ! **************************************************************************************************
@@ -123,11 +137,14 @@ MODULE cp_control_types
 ! **************************************************************************************************
    TYPE xtb_control_type
       !
+      INTEGER                              :: gfn_type = 1
+      !
       LOGICAL                              :: do_ewald = .FALSE.
       !
       INTEGER                              :: sto_ng = 0
       INTEGER                              :: h_sto_ng = 0
       !
+      INTEGER                              :: vdw_type = -1
       CHARACTER(LEN=default_path_length)   :: parameter_file_path = ""
       CHARACTER(LEN=default_path_length)   :: parameter_file_name = ""
       !
@@ -141,7 +158,10 @@ MODULE cp_control_types
       REAL(KIND=dp)                        :: kg = 0.0_dp, kf = 0.0_dp
       REAL(KIND=dp)                        :: kcns = 0.0_dp, kcnp = 0.0_dp, kcnd = 0.0_dp
       REAL(KIND=dp)                        :: ken = 0.0_dp
+      REAL(KIND=dp)                        :: ksen = 0.0_dp, kpen = 0.0_dp, kden = 0.0_dp
+      REAL(KIND=dp)                        :: ben = 0.0_dp
       REAL(KIND=dp)                        :: kxr = 0.0_dp, kx2 = 0.0_dp
+      REAL(KIND=dp)                        :: enscale = 0.0_dp
       !
       LOGICAL                              :: xb_interaction = .FALSE.
       LOGICAL                              :: do_nonbonded = .FALSE.
@@ -149,7 +169,6 @@ MODULE cp_control_types
       LOGICAL                              :: coulomb_lr = .FALSE.
       LOGICAL                              :: tb3_interaction = .FALSE.
       LOGICAL                              :: check_atomic_charges = .FALSE.
-      LOGICAL                              :: old_coulomb_damping = .FALSE.
       !
       REAL(KIND=dp)                        :: xb_radius = 0.0_dp
       REAL(KIND=dp)                        :: coulomb_sr_cut = 0.0_dp
@@ -162,6 +181,17 @@ MODULE cp_control_types
       REAL, DIMENSION(:), POINTER          :: kab_vals => NULL()
       !
       TYPE(pair_potential_p_type), POINTER :: nonbonded => NULL()
+      REAL(KIND=dp)                        :: eps_pair = 0.0_dp
+      REAL(KIND=dp), DIMENSION(:, :), &
+         POINTER                           :: rcpair => NULL()
+      !
+      ! SRB terms
+      REAL(KIND=dp)                        :: ksrb = 0.0_dp, esrb = 0.0_dp, gscal = 0.0_dp
+      REAL(KIND=dp)                        :: c1srb = 0.0_dp, c2srb = 0.0_dp, shift = 0.0_dp
+      !
+      ! EN shift in EEQ (molecular=1 or crystaline=2)
+      INTEGER                              :: enshift_type = 1
+      TYPE(eeq_solver_type)                :: eeq_sparam ! parameters for EEQ solver
    END TYPE xtb_control_type
 
 ! **************************************************************************************************
@@ -211,6 +241,7 @@ MODULE cp_control_types
       REAL(KIND=dp)                        :: alpha0_hard = 0.0_dp
       REAL(KIND=dp)                        :: max_rad_local = 0.0_dp
    END TYPE gapw_control_type
+
 ! **************************************************************************************************
 ! \brief parameters for calculations involving a time dependent electric field
 ! **************************************************************************************************
@@ -229,6 +260,7 @@ MODULE cp_control_types
    TYPE efield_p_type
       TYPE(efield_type), POINTER           :: efield => NULL()
    END TYPE efield_p_type
+
 ! **************************************************************************************************
 ! \brief parameters for calculations involving a time dependent electric field
 ! **************************************************************************************************
@@ -457,6 +489,16 @@ MODULE cp_control_types
    END TYPE stda_control_type
 
 ! **************************************************************************************************
+! \brief Control parameters for smeared occupation
+! \par  ATTRIBUTES
+! \par  NOTES
+! **************************************************************************************************
+   TYPE smeared_type
+      REAL(KIND=dp), DIMENSION(:), POINTER :: fermia => NULL()
+      REAL(KIND=dp), DIMENSION(:, :), POINTER :: fermib => NULL()
+   END TYPE smeared_type
+
+! **************************************************************************************************
 ! \brief Control parameters for a Time-Dependent DFT calculation.
 ! **************************************************************************************************
    TYPE tddfpt2_control_type
@@ -477,8 +519,12 @@ MODULE cp_control_types
       !> for full kernel, do we have HFX/ADMM
       LOGICAL                              :: do_hfx = .FALSE.
       LOGICAL                              :: do_admm = .FALSE.
-      !> for full kernel, do we have long-range HFX and/or Kxc potential
+      !> for full kernel, do we have short-range/long-range HFX and/or Kxc potential
+      LOGICAL                              :: do_hfxsr = .FALSE.
+      LOGICAL                              :: hfxsr_re_int = .TRUE.
+      INTEGER                              :: hfxsr_primbas = 0
       LOGICAL                              :: do_hfxlr = .FALSE.
+      REAL(KIND=dp)                        :: hfxlr_rcut = 0.0_dp, hfxlr_scale = 0.0_dp
       LOGICAL                              :: do_exck = .FALSE.
       !> options used in sTDA calculation (Kernel)
       TYPE(stda_control_type)              :: stda_control = stda_control_type()
@@ -499,6 +545,8 @@ MODULE cp_control_types
       LOGICAL                              :: rks_triplets = .FALSE.
       !> local resolution of identity for Coulomb contribution
       LOGICAL                              :: do_lrigpw = .FALSE.
+      !> smeared occupation
+      LOGICAL                              :: do_smearing = .FALSE.
       ! automatic generation of auxiliary basis for LRI-TDDFT
       INTEGER                              :: auto_basis_p_lri_aux = 1
       !> use symmetric definition of ADMM Kernel correction
@@ -542,6 +590,8 @@ MODULE cp_control_types
       !> manually provided the list of cutoff values for each grid level
       !> (when it is null(), the cutoff values will be assigned automatically)
       REAL(kind=dp), DIMENSION(:), POINTER :: mgrid_e_cutoff => NULL()
+      !> Parameter for smeared occupation TDA
+      TYPE(smeared_type), DIMENSION(:), POINTER :: smeared_occup => NULL()
    END TYPE tddfpt2_control_type
 
 ! **************************************************************************************************
@@ -560,6 +610,7 @@ MODULE cp_control_types
       TYPE(xas_control_type), POINTER      :: xas_control => NULL()
       TYPE(expot_control_type), POINTER    :: expot_control => NULL()
       TYPE(maxwell_control_type), POINTER  :: maxwell_control => NULL()
+      TYPE(smeagol_control_type), POINTER  :: smeagol_control => NULL()
       TYPE(efield_p_type), POINTER, &
          DIMENSION(:)                      :: efield_fields => NULL()
       INTEGER                              :: nspins = 0, &
@@ -637,7 +688,8 @@ MODULE cp_control_types
              expot_control_type, &
              rtp_control_type, &
              sccs_control_type, &
-             stda_control_type
+             stda_control_type, &
+             smeared_type
 
    ! Public subroutines
 
@@ -645,6 +697,7 @@ MODULE cp_control_types
              dft_control_create, &
              tddfpt_control_create, &
              admm_control_create, &
+             admm_control_release, &
              maxwell_control_create, &
              expot_control_create, &
              ddapc_control_create
@@ -767,6 +820,7 @@ CONTAINS
       NULLIFY (dft_control%admm_control)
       NULLIFY (dft_control%expot_control)
       NULLIFY (dft_control%maxwell_control)
+      NULLIFY (dft_control%smeagol_control)
       NULLIFY (dft_control%rtp_control)
       NULLIFY (dft_control%sccs_control)
       dft_control%do_sccs = .FALSE.
@@ -774,6 +828,7 @@ CONTAINS
       dft_control%apply_dmfet_pot = .FALSE.
       CALL qs_control_create(dft_control%qs_control)
       CALL tddfpt2_control_create(dft_control%tddfpt2_control)
+      CALL smeagol_control_create(dft_control%smeagol_control)
    END SUBROUTINE dft_control_create
 
 ! **************************************************************************************************
@@ -796,6 +851,7 @@ CONTAINS
       CALL admm_control_release(dft_control%admm_control)
       CALL expot_control_release(dft_control%expot_control)
       CALL maxwell_control_release(dft_control%maxwell_control)
+      CALL smeagol_control_release(dft_control%smeagol_control)
       CALL efield_fields_release(dft_control%efield_fields)
       IF (ASSOCIATED(dft_control%sccs_control)) DEALLOCATE (dft_control%sccs_control)
       IF (ASSOCIATED(dft_control%period_efield)) THEN
@@ -975,6 +1031,8 @@ CONTAINS
                END IF
                IF (ALLOCATED(proj_mo_list(i)%proj_mo%td_mo_index)) &
                   DEALLOCATE (proj_mo_list(i)%proj_mo%td_mo_index)
+               IF (ALLOCATED(proj_mo_list(i)%proj_mo%td_mo_occ)) &
+                  DEALLOCATE (proj_mo_list(i)%proj_mo%td_mo_occ)
                DEALLOCATE (proj_mo_list(i)%proj_mo)
             END IF
          END DO
@@ -1051,6 +1109,7 @@ CONTAINS
       NULLIFY (xtb_control%kab_vals)
       NULLIFY (xtb_control%kab_types)
       NULLIFY (xtb_control%nonbonded)
+      NULLIFY (xtb_control%rcpair)
 
    END SUBROUTINE xtb_control_create
 
@@ -1070,6 +1129,9 @@ CONTAINS
          END IF
          IF (ASSOCIATED(xtb_control%kab_types)) THEN
             DEALLOCATE (xtb_control%kab_types)
+         END IF
+         IF (ASSOCIATED(xtb_control%rcpair)) THEN
+            DEALLOCATE (xtb_control%rcpair)
          END IF
          IF (ASSOCIATED(xtb_control%nonbonded)) THEN
             CALL pair_potential_p_release(xtb_control%nonbonded)

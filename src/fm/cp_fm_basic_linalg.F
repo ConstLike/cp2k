@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -65,7 +65,9 @@ MODULE cp_fm_basic_linalg
              cp_fm_rot_rows, & ! rotates two rows
              cp_fm_rot_cols, & ! rotates two columns
              cp_fm_cholesky_restore, & ! apply Cholesky decomposition
-             cp_fm_Gram_Schmidt_orthonorm ! Gram-Schmidt orthonormalization of columns of a full matrix
+             cp_fm_Gram_Schmidt_orthonorm, & ! Gram-Schmidt orthonormalization of columns of a full matrix, &
+             cp_fm_det, & ! determinant of a real matrix with correct sign
+             cp_fm_matvec ! matrix-vector multiplication (vector replicated)
 
    REAL(KIND=dp), EXTERNAL :: dlange, pdlange, pdlatra
    REAL(KIND=sp), EXTERNAL :: slange, pslange, pslatra
@@ -87,6 +89,70 @@ MODULE cp_fm_basic_linalg
       MODULE PROCEDURE cp_fm_contracted_trace_a2b2t2_pp
    END INTERFACE cp_fm_contracted_trace
 CONTAINS
+
+! **************************************************************************************************
+!> \brief Computes the determinant (with a correct sign even in parallel environment!) of a real square matrix
+!> \author A. Sinyavskiy (andrey.sinyavskiy@chem.uzh.ch)
+! **************************************************************************************************
+   SUBROUTINE cp_fm_det(matrix_a, det_a)
+
+      TYPE(cp_fm_type), INTENT(IN)             :: matrix_a
+      REAL(KIND=dp), INTENT(OUT)               :: det_a
+      REAL(KIND=dp)                            :: determinant
+      TYPE(cp_fm_type)                         :: matrix_lu
+      REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
+      INTEGER                                  :: n, i, info, P
+      INTEGER, ALLOCATABLE, DIMENSION(:)       :: ipivot
+      REAL(KIND=dp), DIMENSION(:), POINTER     :: diag
+
+#if defined(__parallel)
+      INTEGER                                  :: myprow, nprow, npcol, nrow_local, nrow_block, irow_local
+      INTEGER, DIMENSION(9)                    :: desca
+#endif
+
+      CALL cp_fm_create(matrix=matrix_lu, &
+                        matrix_struct=matrix_a%matrix_struct, &
+                        name="A_lu"//TRIM(ADJUSTL(cp_to_string(1)))//"MATRIX")
+      CALL cp_fm_to_fm(matrix_a, matrix_lu)
+
+      a => matrix_lu%local_data
+      n = matrix_lu%matrix_struct%nrow_global
+      ALLOCATE (ipivot(n))
+      ipivot(:) = 0
+      P = 0
+      ALLOCATE (diag(n))
+      diag(:) = 0.0_dp
+#if defined(__parallel)
+      ! Use LU decomposition
+      desca(:) = matrix_lu%matrix_struct%descriptor(:)
+      CALL pdgetrf(n, n, a, 1, 1, desca, ipivot, info)
+      CALL cp_fm_get_diag(matrix_lu, diag)
+      determinant = PRODUCT(diag)
+      myprow = matrix_lu%matrix_struct%context%mepos(1)
+      nprow = matrix_lu%matrix_struct%context%num_pe(1)
+      npcol = matrix_lu%matrix_struct%context%num_pe(2)
+      nrow_local = matrix_lu%matrix_struct%nrow_locals(myprow)
+      nrow_block = matrix_lu%matrix_struct%nrow_block
+      DO irow_local = 1, nrow_local
+         i = matrix_lu%matrix_struct%row_indices(irow_local)
+         IF (ipivot(irow_local) /= i) P = P + 1
+      END DO
+      CALL matrix_lu%matrix_struct%para_env%sum(P)
+      ! very important fix
+      P = P/npcol
+#else
+      CALL dgetrf(n, n, a, n, ipivot, info)
+      CALL cp_fm_get_diag(matrix_lu, diag)
+      determinant = PRODUCT(diag)
+      DO i = 1, n
+         IF (ipivot(i) /= i) P = P + 1
+      END DO
+#endif
+      DEALLOCATE (ipivot)
+      DEALLOCATE (diag)
+      CALL cp_fm_release(matrix_lu)
+      det_a = determinant*(-2*MOD(P, 2) + 1.0_dp)
+   END SUBROUTINE cp_fm_det
 
 ! **************************************************************************************************
 !> \brief calc A <- alpha*A + beta*B
@@ -175,7 +241,7 @@ CONTAINS
             END IF
 
          ELSE
-#ifdef __SCALAPACK
+#ifdef __parallel
             CPABORT("to do (pdscal,pdcopy,pdaxpy)")
 #else
             CPABORT("")
@@ -213,7 +279,7 @@ CONTAINS
 
       INTEGER :: nrow_global, ncol_global, handle
       REAL(KIND=dp), DIMENSION(:, :), POINTER :: aa, bb
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9) :: desca, descb
 #else
       INTEGER :: ii, jj
@@ -229,7 +295,7 @@ CONTAINS
       aa => matrix_a%local_data
       bb => matrix_b%local_data
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       desca = matrix_a%matrix_struct%descriptor
       descb = matrix_b%matrix_struct%descriptor
       CALL pdgeadd(trans, &
@@ -294,7 +360,7 @@ CONTAINS
       INTEGER, ALLOCATABLE, DIMENSION(:)       :: ipivot
       REAL(KIND=dp)                            :: determinant
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9)                    :: desca
       REAL(KIND=dp), DIMENSION(:), POINTER     :: diag
 #else
@@ -307,7 +373,7 @@ CONTAINS
       n = matrix_a%matrix_struct%nrow_global
       ALLOCATE (ipivot(n + matrix_a%matrix_struct%nrow_block))
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       MARK_USED(correct_sign)
       desca(:) = matrix_a%matrix_struct%descriptor(:)
       CALL pdgetrf(n, n, a, 1, 1, desca, ipivot, info)
@@ -388,7 +454,7 @@ CONTAINS
                                                   j_b, j_c
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a, b, c
       REAL(KIND=sp), DIMENSION(:, :), POINTER  :: a_sp, b_sp, c_sp
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9)                    :: desca, descb, descc
 #else
       INTEGER                                  :: lda, ldb, ldc
@@ -438,7 +504,7 @@ CONTAINS
          j_c = 1
       END IF
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 
       desca(:) = matrix_a%matrix_struct%descriptor(:)
       descb(:) = matrix_b%matrix_struct%descriptor(:)
@@ -519,7 +585,7 @@ CONTAINS
 
       INTEGER                                  :: handle
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a, b, c
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9)                    :: desca, descb, descc
 #else
       INTEGER                                  :: lda, ldb, ldc
@@ -531,7 +597,7 @@ CONTAINS
       b => matrix_b%local_data
       c => matrix_c%local_data
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 
       desca(:) = matrix_a%matrix_struct%descriptor(:)
       descb(:) = matrix_b%matrix_struct%descriptor(:)
@@ -568,7 +634,7 @@ CONTAINS
       INTEGER                                  :: handle, size_a
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
       REAL(KIND=dp), EXTERNAL                  :: DDOT
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       TYPE(mp_comm_type)                       :: group
 #endif
 
@@ -578,7 +644,7 @@ CONTAINS
       a => matrix_a%local_data
       size_a = SIZE(a, 1)*SIZE(a, 2)
       norm = DDOT(size_a, a(1, 1), 1, a(1, 1), 1)
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       group = matrix_a%matrix_struct%para_env
       CALL group%sum(norm)
 #endif
@@ -618,7 +684,7 @@ CONTAINS
 
       INTEGER                                  :: handle, n
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a, c
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9)                    :: desca, descc
 #else
       INTEGER                                  :: lda, ldc
@@ -631,7 +697,7 @@ CONTAINS
       a => matrix_a%local_data
       c => matrix_c%local_data
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 
       desca(:) = matrix_a%matrix_struct%descriptor(:)
       descc(:) = matrix_c%matrix_struct%descriptor(:)
@@ -1101,7 +1167,7 @@ CONTAINS
 
       IF (invert) THEN
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
          CALL pdtrsm(side_char, uplo, transa, unit_diag, m, n, al, &
                      triangular_matrix%local_data(1, 1), 1, 1, &
                      triangular_matrix%matrix_struct%descriptor, &
@@ -1116,7 +1182,7 @@ CONTAINS
 
       ELSE
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
          CALL pdtrmm(side_char, uplo, transa, unit_diag, m, n, al, &
                      triangular_matrix%local_data(1, 1), 1, 1, &
                      triangular_matrix%matrix_struct%descriptor, &
@@ -1180,7 +1246,7 @@ CONTAINS
       INTEGER                                  :: handle, ncol_global, &
                                                   nrow_global, ncol_globalt, nrow_globalt
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a, c
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9)                    :: desca, descc
 #else
       INTEGER                                  :: i, j
@@ -1198,7 +1264,7 @@ CONTAINS
       a => matrix%local_data
       c => matrixt%local_data
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       desca(:) = matrix%matrix_struct%descriptor(:)
       descc(:) = matrixt%matrix_struct%descriptor(:)
       CALL pdtran(ncol_global, nrow_global, 1.0_dp, a(1, 1), 1, 1, desca, 0.0_dp, c(1, 1), 1, 1, descc)
@@ -1234,12 +1300,11 @@ CONTAINS
       REAL(KIND=sp), DIMENSION(:, :), POINTER   :: a_sp
       TYPE(cp_blacs_env_type), POINTER         :: context
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER                                  :: icol_local, irow_local, &
                                                   ncol_block, ncol_local, &
                                                   nrow_block, nrow_local
       INTEGER, DIMENSION(9)                    :: desca, descc
-      INTEGER, EXTERNAL                        :: indxl2g
       REAL(KIND=dp), DIMENSION(:, :), POINTER   :: c
       REAL(KIND=sp), DIMENSION(:, :), POINTER   :: c_sp
 #endif
@@ -1260,7 +1325,7 @@ CONTAINS
       nprow = context%num_pe(1)
       npcol = context%num_pe(2)
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 
       nrow_block = matrix%matrix_struct%nrow_block
       ncol_block = matrix%matrix_struct%ncol_block
@@ -1276,11 +1341,9 @@ CONTAINS
       descc(:) = matrix%matrix_struct%descriptor(:)
 
       DO icol_local = 1, ncol_local
-         icol_global = indxl2g(icol_local, ncol_block, mypcol, &
-                               matrix%matrix_struct%first_p_pos(2), npcol)
+         icol_global = matrix%matrix_struct%col_indices(icol_local)
          DO irow_local = 1, nrow_local
-            irow_global = indxl2g(irow_local, nrow_block, myprow, &
-                                  matrix%matrix_struct%first_p_pos(1), nprow)
+            irow_global = matrix%matrix_struct%row_indices(irow_local)
             IF (irow_global > icol_global) THEN
                IF (matrix%use_sp) THEN
                   c_sp(irow_local, icol_local) = 0.0_sp
@@ -1352,7 +1415,7 @@ CONTAINS
                                                   npcol, nprow
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
       REAL(KIND=sp), DIMENSION(:, :), POINTER  :: a_sp
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER                                  :: icol_global, icol_local, &
                                                   ipcol, iprow, irow_local
 #else
@@ -1375,7 +1438,7 @@ CONTAINS
       END IF
       k = MIN(SIZE(scaling), ncol_global)
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 
       DO icol_global = 1, k
          CALL infog2l(1, icol_global, matrixa%matrix_struct%descriptor, &
@@ -1415,7 +1478,7 @@ CONTAINS
       INTEGER, DIMENSION(:), POINTER           :: row_indices
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
       REAL(KIND=sp), DIMENSION(:, :), POINTER  :: a_sp
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER                                  :: irow_global, icol, irow
 #else
       INTEGER                                  :: j
@@ -1435,7 +1498,7 @@ CONTAINS
          m = SIZE(a, 2)
       END IF
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       DO icol = 1, ncol_local
          IF (matrixa%use_sp) THEN
             DO irow = 1, nrow_local
@@ -1491,7 +1554,7 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
       TYPE(cp_fm_type)                :: matrix_lu
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       TYPE(cp_fm_type)                :: u, vt, sigma, inv_sigma_ut
       TYPE(mp_comm_type) :: group
       INTEGER                                  :: i, info, liwork, lwork, exponent_of_minus_one
@@ -1517,7 +1580,7 @@ CONTAINS
       n = matrix_lu%matrix_struct%nrow_global
       ALLOCATE (ipivot(n + matrix_a%matrix_struct%nrow_block))
       ipivot(:) = 0
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       IF (my_eps_svd .EQ. 0.0_dp) THEN
          ! Use LU decomposition
          lwork = 3*n
@@ -1665,7 +1728,7 @@ CONTAINS
       CHARACTER                                :: unit_diag, uplo
       INTEGER                                  :: handle, info, ncol_global
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9)                    :: desca
 #endif
 
@@ -1679,7 +1742,7 @@ CONTAINS
 
       a => matrix_a%local_data
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 
       desca(:) = matrix_a%matrix_struct%descriptor(:)
 
@@ -1717,7 +1780,7 @@ CONTAINS
       REAL(dp), ALLOCATABLE, DIMENSION(:)      :: tau, work
       REAL(dp), ALLOCATABLE, DIMENSION(:, :)   :: r_mat
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9)                    :: desca
 #endif
 
@@ -1741,7 +1804,7 @@ CONTAINS
 !    ALLOCATE(ipiv(ndim))
       ALLOCATE (tau(ndim))
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 
       desca(:) = matrix_a%matrix_struct%descriptor(:)
 
@@ -1791,10 +1854,10 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_solve'
 
-      INTEGER                                  :: handle, info, n
+      INTEGER                                  :: handle, info, n, nrhs
       INTEGER, ALLOCATABLE, DIMENSION(:)       :: ipivot
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a, a_general
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9)                    :: desca, descb
 #else
       INTEGER                                  :: lda, ldb
@@ -1805,20 +1868,21 @@ CONTAINS
       a => matrix_a%local_data
       a_general => general_a%local_data
       n = matrix_a%matrix_struct%nrow_global
+      nrhs = general_a%matrix_struct%ncol_global
       ALLOCATE (ipivot(n + matrix_a%matrix_struct%nrow_block))
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       desca(:) = matrix_a%matrix_struct%descriptor(:)
       descb(:) = general_a%matrix_struct%descriptor(:)
       CALL pdgetrf(n, n, a, 1, 1, desca, ipivot, info)
-      CALL pdgetrs("N", n, n, a, 1, 1, desca, ipivot, a_general, &
+      CALL pdgetrs("N", n, nrhs, a, 1, 1, desca, ipivot, a_general, &
                    1, 1, descb, info)
 
 #else
       lda = SIZE(a, 1)
       ldb = SIZE(a_general, 1)
       CALL dgetrf(n, n, a, lda, ipivot, info)
-      CALL dgetrs("N", n, n, a, lda, ipivot, a_general, ldb, info)
+      CALL dgetrs("N", n, nrhs, a, lda, ipivot, a_general, ldb, info)
 
 #endif
       ! info is allowed to be zero
@@ -1925,7 +1989,7 @@ CONTAINS
       REAL(KIND=sp), DIMENSION(:, :), POINTER  :: mat_sp
       REAL(KIND=dp), DIMENSION(:), ALLOCATABLE :: work
       REAL(KIND=sp), DIMENSION(:), ALLOCATABLE :: work_sp
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER                                  :: liwork
       INTEGER, DIMENSION(9)                    :: desca
       INTEGER, DIMENSION(:), ALLOCATABLE       :: iwork
@@ -1941,7 +2005,7 @@ CONTAINS
       CPASSERT(nrows_global .EQ. matrix%matrix_struct%ncol_global)
       ALLOCATE (ipivot(nrows_global))
       ! do LU decomposition
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       desca = matrix%matrix_struct%descriptor
       IF (matrix%use_sp) THEN
          CALL psgetrf(nrows_global, nrows_global, &
@@ -1969,7 +2033,7 @@ CONTAINS
       ELSE
          ALLOCATE (work_sp(1))
       END IF
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       ALLOCATE (iwork(1))
       IF (matrix%use_sp) THEN
          CALL psgetri(nrows_global, mat_sp, 1, 1, desca, &
@@ -2055,7 +2119,7 @@ CONTAINS
       REAL(KIND=sp), DIMENSION(:, :), POINTER :: aa_sp
       REAL(KIND=dp), DIMENSION(:), ALLOCATABLE :: work
       REAL(KIND=sp), DIMENSION(:), ALLOCATABLE :: work_sp
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9) :: desca
 #else
       INTEGER :: lda
@@ -2071,7 +2135,7 @@ CONTAINS
       aa => matrix%local_data
       aa_sp => matrix%local_data_sp
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       desca = matrix%matrix_struct%descriptor
       SELECT CASE (mode)
       CASE ('M', 'm')
@@ -2142,7 +2206,7 @@ CONTAINS
       REAL(KIND=sp) :: res_sp
       REAL(KIND=dp), DIMENSION(:, :), POINTER :: aa
       REAL(KIND=sp), DIMENSION(:, :), POINTER :: aa_sp
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9) :: desca
 #else
       INTEGER :: ii
@@ -2156,7 +2220,7 @@ CONTAINS
       aa => matrix%local_data
       aa_sp => matrix%local_data_sp
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       desca = matrix%matrix_struct%descriptor
       IF (matrix%use_sp) THEN
          res_sp = pslatra(nrows, aa_sp, 1, 1, desca)
@@ -2207,7 +2271,7 @@ CONTAINS
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: ipiv
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: a
       REAL(KIND=dp), DIMENSION(:), POINTER               :: work
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9) :: descc
 #else
       INTEGER :: lda
@@ -2221,7 +2285,7 @@ CONTAINS
       ALLOCATE (ipiv(ncol))
       info = 0
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       descc(:) = matrix%matrix_struct%descriptor(:)
       ! Call SCALAPACK routine to get optimal work dimension
       CALL pdgeqpf(nrow, ncol, a, first_row, first_col, descc, ipiv, tau, work, lwork, info)
@@ -2278,7 +2342,7 @@ CONTAINS
       INTEGER                                            :: info, lwork
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: a
       REAL(KIND=dp), DIMENSION(:), POINTER               :: work
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9) :: descc
 #else
       INTEGER :: lda
@@ -2291,7 +2355,7 @@ CONTAINS
       ALLOCATE (work(2*nrow))
       info = 0
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       descc(:) = matrix%matrix_struct%descriptor(:)
 
       CALL pdorgqr(nrow, nrow, nrow, a, first_row, first_col, descc, tau, work, lwork, info)
@@ -2334,7 +2398,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_rot_rows'
       INTEGER                                  :: handle, nrow, ncol
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER                                  :: info, lwork
       INTEGER, DIMENSION(9)                    :: desc
       REAL(dp), DIMENSION(:), ALLOCATABLE      :: work
@@ -2343,7 +2407,7 @@ CONTAINS
       CALL timeset(routineN, handle)
       CALL cp_fm_get_info(matrix, nrow_global=nrow, ncol_global=ncol)
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       lwork = 2*ncol + 1
       ALLOCATE (work(lwork))
       desc(:) = matrix%matrix_struct%descriptor(:)
@@ -2376,7 +2440,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_rot_cols'
       INTEGER                                  :: handle, nrow, ncol
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER                                  :: info, lwork
       INTEGER, DIMENSION(9)                    :: desc
       REAL(dp), DIMENSION(:), ALLOCATABLE      :: work
@@ -2385,7 +2449,7 @@ CONTAINS
       CALL timeset(routineN, handle)
       CALL cp_fm_get_info(matrix, nrow_global=nrow, ncol_global=ncol)
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       lwork = 2*nrow + 1
       ALLOCATE (work(lwork))
       desc(:) = matrix%matrix_struct%descriptor(:)
@@ -2554,13 +2618,13 @@ CONTAINS
       INTEGER                                  :: info
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
       REAL(KIND=sp), DIMENSION(:, :), POINTER  :: a_sp
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9)                    :: desca
 #endif
 
       a => fm_matrix%local_data
       a_sp => fm_matrix%local_data_sp
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       desca(:) = fm_matrix%matrix_struct%descriptor(:)
       IF (fm_matrix%use_sp) THEN
          CALL pspotrf('U', n, a_sp(1, 1), 1, 1, desca, info)
@@ -2591,13 +2655,13 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :), POINTER   :: a
       REAL(KIND=sp), DIMENSION(:, :), POINTER   :: a_sp
       INTEGER                                   :: info
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER, DIMENSION(9)                     :: desca
 #endif
 
       a => fm_matrix%local_data
       a_sp => fm_matrix%local_data_sp
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       desca(:) = fm_matrix%matrix_struct%descriptor(:)
       IF (fm_matrix%use_sp) THEN
          CALL pspotri('U', n, a_sp(1, 1), 1, 1, desca, info)
@@ -2637,7 +2701,7 @@ CONTAINS
       REAL(KIND=sp), DIMENSION(:, :), POINTER        :: a_sp, b_sp, outm_sp
       INTEGER                                        :: n, itype
       REAL(KIND=dp)                                  :: alpha
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER                                        :: i
       INTEGER, DIMENSION(9)                          :: desca, descb, descout
 #endif
@@ -2653,7 +2717,7 @@ CONTAINS
       n = fm_matrix%matrix_struct%nrow_global
       itype = 1
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       desca(:) = fm_matrix%matrix_struct%descriptor(:)
       descb(:) = fm_matrixb%matrix_struct%descriptor(:)
       descout(:) = fm_matrixout%matrix_struct%descriptor(:)
@@ -2703,5 +2767,69 @@ CONTAINS
 #endif
 
    END SUBROUTINE cp_fm_cholesky_restore
+
+! **************************************************************************************************
+!> \brief Calculates
+!>        yv = alpha*amat*xv + beta*yv
+!>        where amat: fm matrix
+!>              xv  : vector replicated
+!>              yv  : vector replicated
+!>        Defaults: alpha = 1, beta = 0
+! **************************************************************************************************
+   SUBROUTINE cp_fm_matvec(amat, xv, yv, alpha, beta)
+      TYPE(cp_fm_type), INTENT(IN)                   :: amat
+      REAL(KIND=dp), DIMENSION(:), INTENT(IN)        :: xv
+      REAL(KIND=dp), DIMENSION(:), INTENT(INOUT)     :: yv
+      REAL(KIND=dp), OPTIONAL, INTENT(IN)            :: alpha, beta
+
+      INTEGER                                        :: na, nc, nx, ny
+      REAL(KIND=dp)                                  :: aval, bval
+#if defined(__parallel)
+      INTEGER                                        :: nrl, ncl, ic, ir
+      INTEGER, DIMENSION(:), POINTER                 :: rind, cind
+      REAL(KIND=dp), DIMENSION(:), ALLOCATABLE       :: xvl, yvl, yvm
+#endif
+
+      IF (amat%use_sp) THEN
+         CPABORT("cp_fm_matvec: SP option not available")
+      END IF
+      aval = 1.0_dp
+      IF (PRESENT(alpha)) aval = alpha
+      bval = 0.0_dp
+      IF (PRESENT(beta)) bval = beta
+
+      CALL cp_fm_get_info(amat, nrow_global=na, ncol_global=nc)
+      nx = SIZE(xv)
+      ny = SIZE(yv)
+      IF ((nx /= ny) .OR. (nc /= nx)) THEN
+         CPABORT("cp_fm_matvec: incompatible dimensions")
+      END IF
+#if defined(__parallel)
+      CALL cp_fm_get_info(amat, nrow_local=nrl, ncol_local=ncl, &
+                          row_indices=rind, col_indices=cind)
+      ALLOCATE (xvl(ncl), yvl(nrl), yvm(ny))
+      DO ic = 1, ncl
+         xvl(ic) = xv(cind(ic))
+      END DO
+      yvl(1:nrl) = MATMUL(amat%local_data, xvl(1:ncl))
+      yvm = 0.0_dp
+      DO ir = 1, nrl
+         yvm(rind(ir)) = yvl(ir)
+      END DO
+      CALL amat%matrix_struct%para_env%sum(yvm)
+      IF (bval == 0.0_dp) THEN
+         yv = aval*yvm
+      ELSE
+         yv = bval*yv + aval*yvm
+      END IF
+#else
+      IF (bval == 0.0_dp) THEN
+         yv = aval*MATMUL(amat%local_data, xv)
+      ELSE
+         yv = bval*yv + aval*MATMUL(amat%local_data, xv)
+      END IF
+#endif
+
+   END SUBROUTINE cp_fm_matvec
 
 END MODULE cp_fm_basic_linalg

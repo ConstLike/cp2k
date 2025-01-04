@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -128,7 +128,7 @@ MODULE qs_kind_types
       INTEGER                                :: max_scf = -1
       REAL(KIND=dp)                          :: eps_u_ramping = 0.0_dp
       REAL(KIND=dp)                          :: eps_scf = HUGE(0.0_dp)
-      REAL(KIND=dp)                          :: u_minus_j_target
+      REAL(KIND=dp)                          :: u_minus_j_target = 0.0_dp
       REAL(KIND=dp)                          :: u_minus_j = 0.0_dp
       REAL(KIND=dp)                          :: u_ramping = 0.0_dp
       REAL(KIND=dp)                          :: U = 0.0_dp
@@ -183,7 +183,7 @@ MODULE qs_kind_types
       TYPE(atom_upfpot_type), POINTER        :: upf_potential => Null()
       !
       TYPE(basis_set_container_type), &
-         DIMENSION(20)                       :: basis_sets
+         DIMENSION(20)                       :: basis_sets = basis_set_container_type()
       ! Atomic radii
       REAL(KIND=dp)                          :: covalent_radius = 0.0_dp
       REAL(KIND=dp)                          :: vdw_radius = 0.0_dp
@@ -219,6 +219,7 @@ MODULE qs_kind_types
       TYPE(qs_atom_dispersion_type), POINTER :: dispersion => Null()
       REAL(KIND=dp), DIMENSION(:, :), POINTER :: reltmat => Null()
       INTEGER                                :: pao_basis_size = -1
+      CHARACTER(LEN=default_path_length)     :: pao_model_file = ""
       TYPE(pao_potential_type), DIMENSION(:), POINTER :: pao_potentials => Null()
       TYPE(pao_descriptor_type), DIMENSION(:), POINTER :: pao_descriptors => Null()
    END TYPE qs_kind_type
@@ -228,7 +229,7 @@ MODULE qs_kind_types
 ! **************************************************************************************************
    TYPE qs_kind_p_type
       TYPE(qs_kind_type), DIMENSION(:), &
-         POINTER                             :: qs_kind_set
+         POINTER                             :: qs_kind_set => NULL()
    END TYPE qs_kind_p_type
 
    ! Public subroutines
@@ -373,6 +374,7 @@ CONTAINS
 !> \param dftb_parameter ...
 !> \param xtb_parameter ...
 !> \param dftb3_param ...
+!> \param zatom ...
 !> \param zeff ...
 !> \param elec_conf ...
 !> \param mao ...
@@ -427,6 +429,7 @@ CONTAINS
 !> \param name ...
 !> \param element_symbol ...
 !> \param pao_basis_size ...
+!> \param pao_model_file ...
 !> \param pao_potentials ...
 !> \param pao_descriptors ...
 !> \param nelec ...
@@ -435,7 +438,7 @@ CONTAINS
                           basis_set, basis_type, ncgf, nsgf, &
                           all_potential, tnadd_potential, gth_potential, sgp_potential, upf_potential, &
                           se_parameter, dftb_parameter, xtb_parameter, &
-                          dftb3_param, zeff, elec_conf, mao, lmax_dftb, &
+                          dftb3_param, zatom, zeff, elec_conf, mao, lmax_dftb, &
                           alpha_core_charge, ccore_charge, core_charge, core_charge_radius, &
                           paw_proj_set, paw_atom, hard_radius, hard0_radius, max_rad_local, &
                           covalent_radius, vdw_radius, &
@@ -447,7 +450,7 @@ CONTAINS
                           bs_occupation, magnetization, no_optimize, addel, laddel, naddel, orbitals, &
                           max_scf, eps_scf, smear, u_ramping, u_minus_j_target, eps_u_ramping, &
                           init_u_ramping_each_scf, reltmat, ghost, floating, name, element_symbol, &
-                          pao_basis_size, pao_potentials, pao_descriptors, nelec)
+                          pao_basis_size, pao_model_file, pao_potentials, pao_descriptors, nelec)
 
       TYPE(qs_kind_type)                                 :: qs_kind
       TYPE(gto_basis_set_type), OPTIONAL, POINTER        :: basis_set
@@ -461,7 +464,9 @@ CONTAINS
       TYPE(semi_empirical_type), OPTIONAL, POINTER       :: se_parameter
       TYPE(qs_dftb_atom_type), OPTIONAL, POINTER         :: dftb_parameter
       TYPE(xtb_atom_type), OPTIONAL, POINTER             :: xtb_parameter
-      REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: dftb3_param, zeff
+      REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: dftb3_param
+      INTEGER, INTENT(OUT), OPTIONAL                     :: zatom
+      REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: zeff
       INTEGER, DIMENSION(:), OPTIONAL, POINTER           :: elec_conf
       INTEGER, INTENT(OUT), OPTIONAL                     :: mao, lmax_dftb
       REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: alpha_core_charge, ccore_charge, &
@@ -498,6 +503,8 @@ CONTAINS
          INTENT(OUT), OPTIONAL                           :: name
       CHARACTER(LEN=2), INTENT(OUT), OPTIONAL            :: element_symbol
       INTEGER, INTENT(OUT), OPTIONAL                     :: pao_basis_size
+      CHARACTER(LEN=default_path_length), INTENT(OUT), &
+         OPTIONAL                                        :: pao_model_file
       TYPE(pao_potential_type), DIMENSION(:), OPTIONAL, &
          POINTER                                         :: pao_potentials
       TYPE(pao_descriptor_type), DIMENSION(:), &
@@ -506,6 +513,7 @@ CONTAINS
 
       CHARACTER(LEN=default_string_length)               :: my_basis_type
       INTEGER                                            :: l
+      LOGICAL                                            :: found
       TYPE(gto_basis_set_type), POINTER                  :: tmp_basis_set
 
       ! Retrieve basis set from the kind container
@@ -619,6 +627,12 @@ CONTAINS
          ELSE
             core_charge = 0.0_dp
          END IF
+      END IF
+
+      IF (PRESENT(zatom)) THEN
+         ! Retrieve information on element
+         CALL get_ptable_info(qs_kind%element_symbol, ielement=zatom, found=found)
+         CPASSERT(found)
       END IF
 
       IF (PRESENT(zeff)) THEN
@@ -812,6 +826,7 @@ CONTAINS
       IF (PRESENT(lmax_dftb)) lmax_dftb = qs_kind%lmax_dftb
 
       IF (PRESENT(pao_basis_size)) pao_basis_size = qs_kind%pao_basis_size
+      IF (PRESENT(pao_model_file)) pao_model_file = qs_kind%pao_model_file
       IF (PRESENT(pao_potentials)) pao_potentials => qs_kind%pao_potentials
       IF (PRESENT(pao_descriptors)) pao_descriptors => qs_kind%pao_descriptors
    END SUBROUTINE get_qs_kind
@@ -852,6 +867,7 @@ CONTAINS
 !> \param basis_rcut ...
 !> \param basis_type ...
 !> \param total_zeff_corr ... [SGh]
+!> \param npgf_seg total number of primitive GTOs in "segmented contraction format"
 ! **************************************************************************************************
    SUBROUTINE get_qs_kind_set(qs_kind_set, &
                               all_potential_present, tnadd_potential_present, gth_potential_present, &
@@ -860,7 +876,7 @@ CONTAINS
                               ncgf, npgf, nset, nsgf, nshell, maxpol, maxlppl, maxlppnl, maxppnl, &
                               nelectron, maxder, max_ngrid_rad, max_sph_harm, maxg_iso_not0, lmax_rho0, &
                               basis_rcut, &
-                              basis_type, total_zeff_corr)
+                              basis_type, total_zeff_corr, npgf_seg)
 
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       LOGICAL, INTENT(OUT), OPTIONAL :: all_potential_present, tnadd_potential_present, &
@@ -874,6 +890,7 @@ CONTAINS
       REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: basis_rcut
       CHARACTER(len=*), OPTIONAL                         :: basis_type
       REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: total_zeff_corr
+      INTEGER, INTENT(OUT), OPTIONAL                     :: npgf_seg
 
       CHARACTER(len=default_string_length)               :: my_basis_type
       INTEGER                                            :: ikind, imax, lmax_rho0_kind, &
@@ -929,6 +946,7 @@ CONTAINS
          IF (PRESENT(lmax_rho0)) lmax_rho0 = 0
          IF (PRESENT(basis_rcut)) basis_rcut = 0.0_dp
          IF (PRESENT(total_zeff_corr)) total_zeff_corr = 0.0_dp
+         IF (PRESENT(npgf_seg)) npgf_seg = 0
 
          nkind = SIZE(qs_kind_set)
          DO ikind = 1, nkind
@@ -1208,6 +1226,13 @@ CONTAINS
                lmax_rho0 = MAX(lmax_rho0, lmax_rho0_kind)
             END IF
 
+            IF (PRESENT(npgf_seg)) THEN
+               IF (ASSOCIATED(tmp_basis_set)) THEN
+                  CALL get_gto_basis_set(gto_basis_set=tmp_basis_set, npgf_seg_sum=n)
+                  npgf_seg = npgf_seg + n*qs_kind_set(ikind)%natom
+               END IF
+            END IF
+
          END DO
       ELSE
          CPABORT("The pointer qs_kind_set is not associated")
@@ -1478,12 +1503,14 @@ CONTAINS
 !> \param force_env_section ...
 !> \param no_fail ...
 !> \param method_id ...
+!> \param silent ...
 !> \par History
 !>      - Creation (09.02.2002,MK)
 !>      - 20.09.2002,gt: adapted for POL/KG use (elp_potential)
 !>      - 05.03.2010: split elp_potential into fist_potential and kg_potential
 ! **************************************************************************************************
-   SUBROUTINE read_qs_kind(qs_kind, kind_section, para_env, force_env_section, no_fail, method_id)
+   SUBROUTINE read_qs_kind(qs_kind, kind_section, para_env, force_env_section, &
+                           no_fail, method_id, silent)
 
       TYPE(qs_kind_type), INTENT(INOUT)                  :: qs_kind
       TYPE(section_vals_type), POINTER                   :: kind_section
@@ -1491,6 +1518,7 @@ CONTAINS
       TYPE(section_vals_type), POINTER                   :: force_env_section
       LOGICAL, INTENT(IN)                                :: no_fail
       INTEGER, INTENT(IN)                                :: method_id
+      LOGICAL, INTENT(IN)                                :: silent
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'read_qs_kind'
       INTEGER, PARAMETER                                 :: maxbas = 20
@@ -1665,9 +1693,15 @@ CONTAINS
             END IF
          END DO
 
-         ! parse PAO_BASIS_SIZE
+         ! parse PAO keywords
          CALL section_vals_val_get(kind_section, keyword_name="PAO_BASIS_SIZE", i_rep_section=k_rep, &
                                    i_val=qs_kind%pao_basis_size)
+         CALL section_vals_val_get(kind_section, keyword_name="PAO_MODEL_FILE", i_rep_section=k_rep, &
+                                   explicit=explicit)
+         IF (explicit) THEN
+            CALL section_vals_val_get(kind_section, keyword_name="PAO_MODEL_FILE", i_rep_section=k_rep, &
+                                      c_val=qs_kind%pao_model_file)
+         END IF
 
          ! parse PAO_POTENTIAL sections
          pao_pot_section => section_vals_get_subs_vals(kind_section, "PAO_POTENTIAL", i_rep_section=k_rep)
@@ -2096,13 +2130,13 @@ CONTAINS
                              zeff=qs_kind%se_parameter%zeff, zeff_correction=zeff_correction)
          qs_kind%se_parameter%zeff = qs_kind%se_parameter%zeff - zeff_correction
 
-         check = ((potential_name /= '') .OR. explicit_potential)
+         check = ((potential_name /= '') .OR. explicit_potential) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding POTENTIAL for KIND <"// &
                          TRIM(qs_kind%name)//"> will be ignored!")
 
-         check = ((k_rep > 0) .OR. explicit_basis)
+         check = ((k_rep > 0) .OR. explicit_basis) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding BASIS for KIND <"// &
@@ -2129,13 +2163,13 @@ CONTAINS
                                zeff_correction=0.0_dp)
          END IF
 
-         check = ((potential_name /= '') .OR. explicit_potential)
+         check = ((potential_name /= '') .OR. explicit_potential) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding POTENTIAL for KIND <"// &
                          TRIM(qs_kind%name)//"> will be ignored!")
 
-         check = ((k_rep > 0) .OR. explicit_basis)
+         check = ((k_rep > 0) .OR. explicit_basis) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding BASIS for KIND <"// &
@@ -2162,13 +2196,13 @@ CONTAINS
                                zeff_correction=0.0_dp)
          END IF
 
-         check = ((potential_name /= '') .OR. explicit_potential)
+         check = ((potential_name /= '') .OR. explicit_potential) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding POTENTIAL for KIND <"// &
                          TRIM(qs_kind%name)//"> will be ignored!")
 
-         check = ((k_rep > 0) .OR. explicit_basis)
+         check = ((k_rep > 0) .OR. explicit_basis) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding BASIS for KIND <"// &
@@ -2204,7 +2238,8 @@ CONTAINS
                END IF
             CASE ("UPF")
                ALLOCATE (qs_kind%upf_potential)
-               CALL atom_read_upf(qs_kind%upf_potential, potential_name, read_header=.TRUE.)
+               qs_kind%upf_potential%zion = 0
+               qs_kind%upf_potential%filename = ADJUSTL(TRIM(potential_name))
                CALL get_qs_kind(qs_kind, elec_conf=elec_conf)
                IF (.NOT. ASSOCIATED(elec_conf)) THEN
                   CALL set_qs_kind(qs_kind, elec_conf=qs_kind%upf_potential%econf)
@@ -2365,7 +2400,7 @@ CONTAINS
                      CPABORT("ECPs are only well tested in their semi-local form")
                      CALL get_qs_kind(qs_kind, basis_set=orb_basis_set)
                      CALL sgp_construction(sgp_pot=sgppot, ecp_pot=ecppot, orb_basis=orb_basis_set, error=error)
-                     IF (iounit > 0) THEN
+                     IF (iounit > 0 .AND. .NOT. silent) THEN
                         WRITE (iounit, "(/,T2,'PP Transformation for ',A)") TRIM(ecppot%pname)
                         IF (sgppot%has_local) THEN
                            WRITE (iounit, "(T8,'Accuracy for local part:',T41,F10.3,'%',T61,F20.12)") error(4), error(1)
@@ -2425,7 +2460,7 @@ CONTAINS
                                      zeff=upfpot%zion, z=z, has_nlcc=upfpot%core_correction)
                   ! convert pp
                   CALL sgp_construction(sgp_pot=sgppot, upf_pot=upfpot, error=error)
-                  IF (iounit > 0) THEN
+                  IF (iounit > 0 .AND. .NOT. silent) THEN
                      WRITE (iounit, "(/,T2,'PP Transformation for ',A)") TRIM(upfpot%pname)
                      IF (sgppot%has_local) THEN
                         WRITE (iounit, "(T8,'Accuracy for local part:',T61,F20.12)") error(1)
@@ -2595,14 +2630,17 @@ CONTAINS
 !> \param kind_section ...
 !> \param para_env ...
 !> \param force_env_section ...
+!> \param silent ...
 ! **************************************************************************************************
-   SUBROUTINE create_qs_kind_set(qs_kind_set, atomic_kind_set, kind_section, para_env, force_env_section)
+   SUBROUTINE create_qs_kind_set(qs_kind_set, atomic_kind_set, kind_section, para_env, &
+                                 force_env_section, silent)
 
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(section_vals_type), POINTER                   :: kind_section
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(section_vals_type), POINTER                   :: force_env_section
+      LOGICAL, INTENT(IN)                                :: silent
 
       CHARACTER(len=*), PARAMETER :: routineN = 'create_qs_kind_set'
 
@@ -2642,7 +2680,8 @@ CONTAINS
          qs_kind_set(ikind)%name = atomic_kind_set(ikind)%name
          qs_kind_set(ikind)%element_symbol = atomic_kind_set(ikind)%element_symbol
          qs_kind_set(ikind)%natom = atomic_kind_set(ikind)%natom
-         CALL read_qs_kind(qs_kind_set(ikind), kind_section, para_env, force_env_section, no_fail, qs_method)
+         CALL read_qs_kind(qs_kind_set(ikind), kind_section, para_env, force_env_section, &
+                           no_fail, qs_method, silent)
       END DO
 
       CALL timestop(handle)
@@ -2662,6 +2701,7 @@ CONTAINS
       TYPE(dft_control_type), INTENT(IN)                 :: dft_control
       TYPE(section_vals_type), POINTER                   :: subsys_section
 
+      INTEGER                                            :: gfn_type
       LOGICAL                                            :: defined
       TYPE(qs_dftb_atom_type), POINTER                   :: dftb_parameter
       TYPE(semi_empirical_type), POINTER                 :: se_parameter
@@ -2682,7 +2722,8 @@ CONTAINS
       ELSE IF (dft_control%qs_control%xtb) THEN
          CALL get_qs_kind(qs_kind, xtb_parameter=xtb_parameter)
          CPASSERT(ASSOCIATED(xtb_parameter))
-         CALL write_xtb_atom_param(xtb_parameter, subsys_section)
+         gfn_type = dft_control%qs_control%xtb_control%gfn_type
+         CALL write_xtb_atom_param(xtb_parameter, gfn_type, subsys_section)
       END IF
 
    END SUBROUTINE check_qs_kind
@@ -3286,6 +3327,7 @@ CONTAINS
       INTEGER, INTENT(IN)                                :: z
       INTEGER, DIMENSION(0:lmat, 10), INTENT(OUT)        :: ncalc, ncore, nelem
 
+      CHARACTER(LEN=default_string_length)               :: message
       INTEGER                                            :: ii, iounit, l, ll, lmin, nc, nn
       INTEGER, DIMENSION(0:lmat)                         :: econfx
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -3404,12 +3446,23 @@ CONTAINS
          ! if there is still no core, check for special cases
          IF (ncore(0, 1) <= 0) THEN
             IF (z >= 58 .AND. z <= 71) THEN
-               ! 4f-in-core PPs Lathanides
+               ! 4f-in-core PPs for lanthanides
                nc = z - SUM(econf)
                ! setup ncore
                ncore = 0
                SELECT CASE (nc)
-               CASE (47)
+               CASE (29:42)
+                  ncore(0, 1) = 2
+                  ncore(0, 2) = 2
+                  ncore(0, 3) = 2
+                  ncore(1, 1) = 6
+                  ncore(1, 2) = 6
+                  ncore(2, 1) = 10
+                  ncore(3, 1) = nc - 28
+                  message = "A small-core pseudopotential with 4f-in-core is used for the lanthanide "// &
+                            TRIM(ptable(z)%symbol)
+                  CPHINT(TRIM(message))
+               CASE (47:60)
                   ncore(0, 1) = 2
                   ncore(0, 2) = 2
                   ncore(0, 3) = 2
@@ -3419,139 +3472,10 @@ CONTAINS
                   ncore(1, 3) = 6
                   ncore(2, 1) = 10
                   ncore(2, 2) = 10
-                  ncore(3, 1) = 1
-               CASE (48)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 2
-               CASE (49)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 3
-               CASE (50)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 4
-               CASE (51)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 5
-               CASE (52)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 6
-               CASE (53)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 7
-               CASE (54)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 8
-               CASE (55)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 9
-               CASE (56)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 10
-               CASE (57)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 11
-               CASE (58)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 12
-               CASE (59)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 13
+                  ncore(3, 1) = nc - 46
+                  message = "A medium-core pseudopotential with 4f-in-core is used for the lanthanide "// &
+                            TRIM(ptable(z)%symbol)
+                  CPHINT(TRIM(message))
                CASE DEFAULT
                   ncore(0, 1) = -1
                END SELECT

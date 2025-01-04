@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -47,6 +47,13 @@
 MODULE qs_scf
    USE atomic_kind_types,               ONLY: atomic_kind_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
+                                              dbcsr_deallocate_matrix,&
+                                              dbcsr_get_info,&
+                                              dbcsr_init_p,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set,&
+                                              dbcsr_type
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               dbcsr_deallocate_matrix_set
    USE cp_files,                        ONLY: close_file
@@ -69,13 +76,6 @@ MODULE qs_scf
    USE cp_result_methods,               ONLY: get_results,&
                                               test_for_result
    USE cp_result_types,                 ONLY: cp_result_type
-   USE dbcsr_api,                       ONLY: dbcsr_copy,&
-                                              dbcsr_deallocate_matrix,&
-                                              dbcsr_get_info,&
-                                              dbcsr_init_p,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set,&
-                                              dbcsr_type
    USE ec_env_types,                    ONLY: energy_correction_type
    USE input_constants,                 ONLY: &
         broyden_type_1, broyden_type_1_explicit, broyden_type_1_explicit_ls, broyden_type_1_ls, &
@@ -162,17 +162,15 @@ MODULE qs_scf
                                               qs_scf_outer_loop_info,&
                                               qs_scf_write_mos
    USE qs_scf_post_scf,                 ONLY: qs_scf_compute_properties
-   USE qs_scf_types,                    ONLY: block_davidson_diag_method_nr,&
-                                              block_krylov_diag_method_nr,&
-                                              filter_matrix_diag_method_nr,&
-                                              general_diag_method_nr,&
-                                              ot_diag_method_nr,&
-                                              ot_method_nr,&
-                                              qs_scf_env_type,&
-                                              special_diag_method_nr
+   USE qs_scf_types,                    ONLY: &
+        block_davidson_diag_method_nr, block_krylov_diag_method_nr, filter_matrix_diag_method_nr, &
+        general_diag_method_nr, ot_diag_method_nr, ot_method_nr, qs_scf_env_type, &
+        smeagol_method_nr, special_diag_method_nr
    USE qs_wf_history_methods,           ONLY: wfi_purge_history,&
                                               wfi_update
    USE scf_control_types,               ONLY: scf_control_type
+   USE smeagol_interface,               ONLY: run_smeagol_bulktrans,&
+                                              run_smeagol_emtrans
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -183,7 +181,7 @@ MODULE qs_scf
    LOGICAL, PRIVATE                     :: reuse_precond = .FALSE.
    LOGICAL, PRIVATE                     :: used_history = .FALSE.
 
-   PUBLIC :: scf, scf_env_cleanup, scf_env_do_scf, cdft_scf
+   PUBLIC :: scf, scf_env_cleanup, scf_env_do_scf, cdft_scf, init_scf_loop
 
 CONTAINS
 
@@ -299,6 +297,14 @@ CONTAINS
 
          ! *** compute properties that depend on the converged wavefunction
          IF (.NOT. (should_stop)) CALL qs_scf_compute_properties(qs_env)
+
+         ! *** SMEAGOL interface ***
+         IF (.NOT. (should_stop)) THEN
+            ! compute properties that depend on the converged wavefunction ..
+            CALL run_smeagol_emtrans(qs_env, last=.TRUE., iter=0)
+            ! .. or save matrices related to bulk leads
+            CALL run_smeagol_bulktrans(qs_env)
+         END IF
 
          ! *** cleanup
          CALL scf_env_cleanup(scf_env)
@@ -703,7 +709,7 @@ CONTAINS
             CALL qs_diis_b_clear(scf_env%scf_diis_buffer)
          END IF
 
-      CASE (general_diag_method_nr, special_diag_method_nr, block_krylov_diag_method_nr)
+      CASE (general_diag_method_nr, special_diag_method_nr, block_krylov_diag_method_nr, smeagol_method_nr)
          IF (.NOT. scf_env%skip_diis) THEN
             IF (do_kpoints) THEN
                IF (.NOT. ASSOCIATED(kpoints%scf_diis_buffer)) THEN
@@ -948,6 +954,8 @@ CONTAINS
       CASE (block_davidson_diag_method_nr)
          CALL block_davidson_deallocate(scf_env%block_davidson_env)
       CASE (filter_matrix_diag_method_nr)
+         !
+      CASE (smeagol_method_nr)
          !
       CASE DEFAULT
          CPABORT("unknown scf method method:"//cp_to_string(scf_env%method))

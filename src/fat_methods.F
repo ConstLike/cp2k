@@ -12,12 +12,12 @@ module fat_methods
   use particle_list_types, only: particle_list_type
   use particle_types, only: particle_type
   use pw_env_types, only: pw_env_type, pw_env_get
-  use pw_grid_types, only: pw_grid_type, HALFSPACE, PW_MODE_DISTRIBUTED
-  use pw_methods, only: pw_axpy, pw_integral_ab, pw_transfer, pw_set, pw_zero
+  USE pw_grid_types, ONLY: pw_grid_type
+  USE pw_methods, ONLY: pw_zero, pw_axpy, pw_transfer, pw_integral_ab
   use pw_poisson_methods, only: pw_poisson_solve
   use pw_poisson_types, only: pw_poisson_type
-  use pw_pool_types, only: pw_pool_type
-  use pw_types, only: pw_type, pw_p_type, REALDATA3D, COMPLEXDATA1D, REALSPACE, RECIPROCALSPACE
+  USE pw_pool_types, ONLY: pw_pool_type, pw_pool_p_type
+  USE pw_types, ONLY: pw_r3d_rs_type, pw_c1d_gs_type
   use qs_collocate_density, only: calculate_drho_elec_dR, calculate_drho_core
   use qs_energy_types, only: qs_energy_type
   use qs_environment_types, only: qs_environment_type, get_qs_env, set_qs_env
@@ -57,450 +57,751 @@ module fat_methods
 contains
 
 ! **************************************************************************************************
-!> \brief Creates a pw for one fragment in the freeze-and-thaw environment
+!> \brief Creates a real space pw type for one fragment in the freeze-and-thaw environment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pw the pw to be created
+!> \param i_frag index of the current fragment
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
 ! **************************************************************************************************
-  subroutine fat_pw_create_frag(fat_env, pw, i_frag, rspace)
-    type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: pw
-    integer :: i_frag
-    logical, optional :: rspace
+   SUBROUTINE fat_pw_rs_create_frag(fat_env, pw, i_frag)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_r3d_rs_type), POINTER                     :: pw
+      INTEGER, INTENT(IN)                               :: i_frag
 
-    character(len=*), parameter :: routinen = "fat_pw_create_frag"
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pw_rs_create_frag'
 
-    integer :: use_data, in_space
-    logical :: my_rspace
+      TYPE(pw_grid_type), POINTER                       :: pw_grid
+      INTEGER                                           :: handle
 
-    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+      CALL timeset(routineN, handle)
 
-    if (present(rspace)) then
-       my_rspace = rspace
-    else
-       my_rspace = .true.
-    end if
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
 
-    if (my_rspace) then
-       use_data = realdata3d
-       in_space = realspace
-    else
-       use_data = complexdata1d
-       in_space = reciprocalspace
-    end if
+      ! Get grid from pool
+      pw_grid => fat_env%pw_pool_sub(i_frag)%pool%pw_grid
 
-    allocate(pw)
-    call fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw, use_data=use_data, in_space=in_space)
-    call pw_zero(pw)
+      ! Create PW object with proper grid
+      ALLOCATE(pw)
+      CALL pw%create(pw_grid)
+      CALL pw_zero(pw)
 
-  end subroutine fat_pw_create_frag
+      CALL timestop(handle)
 
-! **************************************************************************************************
-!> \brief Creates a pw for the reference system in the freeze-and-thaw environment
-! **************************************************************************************************
-  subroutine fat_pw_create_ref(fat_env, pw, rspace)
-    type(fat_env_type), pointer :: fat_env
-    type(pw_type), intent(out) :: pw
-    logical, optional :: rspace
-
-    character(len=*), parameter :: routinen = "fat_pw_create_ref"
-
-    integer :: use_data, in_space
-    logical :: my_rspace
-
-    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
-
-    if (present(rspace)) then
-       my_rspace = rspace
-    else
-       my_rspace = .true.
-    end if
-
-    if (my_rspace) then
-       use_data = realdata3d
-       in_space = realspace
-    else
-       use_data = complexdata1d
-       in_space = reciprocalspace
-    end if
-
-    call fat_env%pw_pool_ref%create_pw(pw, use_data=use_data, in_space=in_space)
-    call pw_zero(pw)
-
-  end subroutine fat_pw_create_ref
+   END SUBROUTINE fat_pw_rs_create_frag
 
 ! **************************************************************************************************
-!> \brief Releases a pw for one fragment in the freeze-and-thaw environment
+!> \brief Creates a g-space pw type for one fragment in the freeze-and-thaw environment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pw the pw to be created
+!> \param i_frag index of the current fragment
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
 ! **************************************************************************************************
-  subroutine fat_pw_release_frag(fat_env, pw, i_frag)
-    type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: pw
-    integer :: i_frag
+   SUBROUTINE fat_pw_gs_create_frag(fat_env, pw, i_frag)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_c1d_gs_type), POINTER                     :: pw
+      INTEGER, INTENT(IN)                               :: i_frag
 
-    character(len=*), parameter :: routinen = "fat_pw_release_frag"
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pw_gs_create_frag'
 
-    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+      TYPE(pw_grid_type), POINTER                       :: pw_grid
+      INTEGER                                           :: handle
 
-    call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(pw)
-    deallocate(pw)
+      CALL timeset(routineN, handle)
 
-    if (is_debug) print *, "DBG| released"
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
 
-  end subroutine fat_pw_release_frag
+      ! Get grid from pool
+      pw_grid => fat_env%pw_pool_sub(i_frag)%pool%pw_grid
 
-! **************************************************************************************************
-!> \brief Releases a pw for the reference system in the freeze-and-thaw environment
-! **************************************************************************************************
-  subroutine fat_pw_release_ref(fat_env, pw)
-    type(fat_env_type), pointer :: fat_env
-    type(pw_type), intent(inout) :: pw
+      ! Create PW object with proper grid
+      ALLOCATE(pw)
+      CALL pw%create(pw_grid)
+      CALL pw_zero(pw)
 
-    character(len=*), parameter :: routinen = "fat_pw_release_ref"
+      CALL timestop(handle)
 
-    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
-
-    call fat_env%pw_pool_ref%give_back_pw(pw)
-
-    if (is_debug) print *, "DBG| released"
-
-  end subroutine fat_pw_release_ref
-
-! **************************************************************************************************
-!> \brief Creates an array of pws for one fragment in the freeze-and-thaw environment
-! **************************************************************************************************
-  subroutine fat_pws_create_frag(fat_env, pws, i_frag, n, rspace)
-    type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: pws(:)
-    integer :: i_frag, n
-    logical, optional :: rspace
-
-    character(len=*), parameter :: routinen = "fat_pws_create_frag"
-
-    integer :: i
-    type(pw_type), pointer :: pw_tmp
-
-    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
-
-    allocate(pws(n))
-    do i = 1, n
-       pw_tmp = pws(i)
-       call fat_pw_create_frag(fat_env, pw_tmp, i_frag, rspace)
-    end do
-
-  end subroutine fat_pws_create_frag
+   END SUBROUTINE fat_pw_gs_create_frag
 
 ! **************************************************************************************************
-!> \brief Creates an array of pws for the reference system in the freeze-and-thaw environment
+!> \brief Releases a real space pw type for one fragment in the freeze-and-thaw environment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pw the pw to be released
+!> \param i_frag index of the current fragment
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
 ! **************************************************************************************************
-  subroutine fat_pws_create_ref(fat_env, pws, n, rspace)
-    type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: pws(:)
-    integer :: n
-    logical, optional :: rspace
+   SUBROUTINE fat_pw_rs_release_frag(fat_env, pw, i_frag)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_r3d_rs_type), POINTER                     :: pw
+      INTEGER, INTENT(IN)                               :: i_frag
 
-    character(len=*), parameter :: routinen = "fat_pws_create_ref"
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pw_rs_release_frag'
 
-    integer :: i
+      INTEGER                                           :: handle
 
-    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+      CALL timeset(routineN, handle)
 
-    allocate(pws(n))
-    do i = 1, n
-       call fat_pw_create_ref(fat_env, pws(i), rspace)
-    end do
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
 
-  end subroutine fat_pws_create_ref
+      CPASSERT(ASSOCIATED(pw))
+      CALL pw%release()
+      DEALLOCATE(pw)
+      NULLIFY(pw)
 
-! **************************************************************************************************
-!> \brief Releases an array of pws for one fragment in the freeze-and-thaw environment
-! **************************************************************************************************
-  subroutine fat_pws_release_frag(fat_env, pws, i_frag)
-    type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: pws(:)
-    integer :: i_frag
+      CALL timestop(handle)
 
-    character(len=*), parameter :: routinen = "fat_pws_release_frag"
-
-    type(pw_type), pointer :: pw_tmp
-    integer :: i
-
-    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
-
-    do i = 1, size(pws)
-       pw_tmp => pws(i)
-       call fat_pw_release_frag(fat_env, pw_tmp, i_frag)
-    end do
-
-    if (is_debug) print *, "DBG| released"
-
-  end subroutine fat_pws_release_frag
+   END SUBROUTINE fat_pw_rs_release_frag
 
 ! **************************************************************************************************
-!> \brief Releases an array of pws for one fragment in the freeze-and-thaw environment
+!> \brief Releases a g-space pw type for one fragment in the freeze-and-thaw environment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pw the pw to be released
+!> \param i_frag index of the current fragment
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
 ! **************************************************************************************************
-  subroutine fat_pws_release_ref(fat_env, pws)
-    type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: pws(:)
+   SUBROUTINE fat_pw_gs_release_frag(fat_env, pw, i_frag)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_c1d_gs_type), POINTER                     :: pw
+      INTEGER, INTENT(IN)                               :: i_frag
 
-    character(len=*), parameter :: routinen = "fat_pws_release_ref"
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pw_gs_release_frag'
+      INTEGER                                           :: handle
 
-    integer :: i
+      CALL timeset(routineN, handle)
 
-    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
 
-    do i = 1, size(pws)
-       call fat_pw_release_ref(fat_env, pws(i))
-    end do
-    DEALLOCATE(pws)
+      CPASSERT(ASSOCIATED(pw))
+      CALL pw%release()
+      DEALLOCATE(pw)
+      NULLIFY(pw)
 
-    if (is_debug) print *, "DBG| released"
+      CALL timestop(handle)
 
-  end subroutine fat_pws_release_ref
+   END SUBROUTINE fat_pw_gs_release_frag
 
 ! **************************************************************************************************
-!> \brief Gets the electron density for one fragment in the freeze-and-thaw environment
+!> \brief Creates an array of real space pw types for one fragment in the freeze-and-thaw environment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pws array of pw's to be created
+!> \param i_frag index of the current fragment
+!> \param n size of array to create
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
 ! **************************************************************************************************
-  subroutine fat_rho_frag(fat_env, rho, i_frag, rspace)
-    type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: rho(:)
-    integer :: i_frag
-    logical, optional :: rspace
+   SUBROUTINE fat_pws_rs_create_frag(fat_env, pws, i_frag, n)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_r3d_rs_type), POINTER                     :: pws(:)
+      INTEGER, INTENT(IN)                               :: i_frag, n
 
-    character(len=*), parameter :: routinen = "fat_rho_frag"
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pws_rs_create_frag'
 
-    character(len=default_string_length) :: label
-    logical :: my_rspace
-    type(pw_type), pointer :: rho_tmp
-    type(qs_environment_type), pointer :: qs_env
-    type(qs_rho_type), pointer :: qs_rho
+      INTEGER                                           :: handle, i
 
-    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+      CALL timeset(routineN, handle)
 
-    if (present(rspace)) then
-       my_rspace = rspace
-    else
-       my_rspace = .true.
-    end if
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
 
-    ! Initialize rho with correct data structure and grid mappings
-    ! This is required even for external density to ensure proper parallel setup
-    qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
-    call get_qs_env(qs_env, rho=qs_rho)
-    if (my_rspace) then
-       call qs_rho_get(qs_rho, rho_r=rho)
-    else
-       call qs_rho_get(qs_rho, rho_g=rho)
-    end if
+      ALLOCATE(pws(n))
+      DO i = 1, n
+         CALL fat_pw_rs_create_frag(fat_env, pws(i), i_frag)
+      END DO
 
-    ! We map external density into the properly initialized rho
-    if (fat_env%extern(i_frag)) then
-       call integer_to_string(i_frag, label)
-       if (my_rspace) then
-          call cp_cube_to_pw(rho(1), "extern_"//trim(label)//".cube", 1.0_dp, .false.)
-       else
-          call fat_pw_create_frag(fat_env, rho_tmp, i_frag)
-          call cp_cube_to_pw(rho_tmp, "extern_"//trim(label)//".cube", 1.0_dp, .false.)
-          call pw_transfer(rho_tmp, rho(1))
-          call fat_pw_release_frag(fat_env, rho_tmp, i_frag)
-       end if
-    end if
+      CALL timestop(handle)
 
-!   if (is_debug) call print_pw_statistics(rho(1), "rho", i_frag)
+   END SUBROUTINE fat_pws_rs_create_frag
 
-  end subroutine fat_rho_frag
+! **************************************************************************************************
+!> \brief Creates an array of g-space pw types for one fragment in the freeze-and-thaw environment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pws array of pw's to be created
+!> \param i_frag index of the current fragment
+!> \param n size of array to create
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
+! **************************************************************************************************
+   SUBROUTINE fat_pws_gs_create_frag(fat_env, pws, i_frag, n)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_c1d_gs_type), POINTER                     :: pws(:)
+      INTEGER, INTENT(IN)                               :: i_frag, n
 
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pws_gs_create_frag'
 
-  subroutine write_pw_r_to_cube(fat_env, pw, filename)
-    type(fat_env_type), intent(in) :: fat_env
-    type(pw_type), intent(in) :: pw
-    character(len=*), intent(in) :: filename
+      INTEGER                                           :: handle, i
 
-    integer :: unit_nr
-    type(cp_logger_type), pointer :: logger
-    TYPE(particle_list_type), POINTER :: particles
-    type(particle_type), dimension(:), pointer :: particle_set
-    type(qs_environment_type), pointer :: qs_env
-    type(dft_control_type), pointer :: dft_control
-    type(pw_env_type), pointer :: pw_env
-    type(qs_subsys_type), pointer :: subsys
-    type(pw_pool_type), pointer :: pw_pool
-    integer, pointer :: stride(:)
+      CALL timeset(routineN, handle)
 
-    logger => cp_get_default_logger()
-    unit_nr = cp_logger_get_default_io_unit(logger)
-    log_counter = log_counter + 1
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
 
-    if (log_counter>6) return
+      ALLOCATE(pws(n))
+      DO i = 1, n
+         CALL fat_pw_gs_create_frag(fat_env, pws(i), i_frag)
+      END DO
 
-    print *, "KKK| write CUBE file number:", filename
+      CALL timestop(handle)
 
-    if (unit_nr > 0) then
-      qs_env => fat_env%force_env_ref%qs_env
+   END SUBROUTINE fat_pws_gs_create_frag
 
-      CALL get_qs_env(qs_env=qs_env, dft_control=dft_control, pw_env=pw_env, &
-                      particle_set=particle_set, subsys=subsys)
-      CALL pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
-      CALL qs_subsys_get(subsys, particles=particles)
+! **************************************************************************************************
+!> \brief Releases an array of real space pw types for one fragment in the freeze-and-thaw environment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pws array of pw's to be released
+!> \param i_frag index of the current fragment
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
+! **************************************************************************************************
+   SUBROUTINE fat_pws_rs_release_frag(fat_env, pws, i_frag)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_r3d_rs_type), POINTER                     :: pws(:)
+      INTEGER, INTENT(IN)                               :: i_frag
 
-      allocate(stride(3))
-      stride = [1, 1, 1]
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pws_rs_release_frag'
 
-      call open_file(file_name=trim(filename), file_status="REPLACE", &
-                     file_action="WRITE", unit_number=unit_nr)
-      call cp_pw_to_cube(pw, unit_nr, trim(filename), particles=particles, stride=stride)
-      call close_file(unit_number=unit_nr)
-      deallocate(stride)
-    end if
-  end subroutine write_pw_r_to_cube
+      INTEGER                                           :: handle, i
 
-  subroutine write_pw_g_to_cube(fat_env, pw, filename, i_frag)
-    type(fat_env_type), intent(in) :: fat_env
-    type(pw_type), intent(in) :: pw
-    character(len=*), intent(in) :: filename
-    integer, intent(in) :: i_frag
+      CALL timeset(routineN, handle)
 
-    type(pw_type), pointer :: pw_real
-    logical :: pool_exists
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
 
-    if (.not. associated(fat_env%pw_pool_sub)) then
-      print *, "Error: pw_pool_sub is not associated in fat_env"
-      return
-    end if
+      CPASSERT(ASSOCIATED(pws))
+      DO i = 1, SIZE(pws)
+         CALL fat_pw_rs_release_frag(fat_env, pws(i), i_frag)
+      END DO
+      DEALLOCATE(pws)
+      NULLIFY(pws)
 
-    if (i_frag < 1 .or. i_frag > size(fat_env%pw_pool_sub)) then
-      print *, "Error: Invalid fragment index", i_frag
-      return
-    end if
+      CALL timestop(handle)
 
-    pool_exists = associated(fat_env%pw_pool_sub(i_frag)%pool)
-    if (.not. pool_exists) then
-      print *, "Error: pw_pool is not associated for fragment", i_frag
-      return
-    end if
+   END SUBROUTINE fat_pws_rs_release_frag
 
-    allocate(pw_real)
+! **************************************************************************************************
+!> \brief Releases an array of g-space pw types for one fragment in the freeze-and-thaw environment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pws array of pw's to be released
+!> \param i_frag index of the current fragment
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
+! **************************************************************************************************
+   SUBROUTINE fat_pws_gs_release_frag(fat_env, pws, i_frag)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_c1d_gs_type), POINTER                     :: pws(:)
+      INTEGER, INTENT(IN)                               :: i_frag
 
-    ! Create a new pw_type in real space
-    call fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw_real, &
-         use_data=realdata3d, in_space=realspace)
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pws_gs_release_frag'
 
-    if (.not. associated(pw_real)) then
-      print *, "Error: pw_real was not created successfully"
-      deallocate(pw_real)
-      return
-    end if
-    call pw_zero(pw_real)
+      INTEGER                                           :: handle, i
 
-    ! Transfer data from reciprocal to real space
-    call pw_transfer(pw, pw_real)
+      CALL timeset(routineN, handle)
 
-    call write_pw_r_to_cube(fat_env, pw_real, filename)
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
 
-    ! Release the temporary real space pw_type
-    call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(pw_real)
+      CPASSERT(ASSOCIATED(pws))
+      DO i = 1, SIZE(pws)
+         CALL fat_pw_gs_release_frag(fat_env, pws(i), i_frag)
+      END DO
+      DEALLOCATE(pws)
+      NULLIFY(pws)
 
-    deallocate(pw_real)
+      CALL timestop(handle)
 
-  end subroutine write_pw_g_to_cube
+   END SUBROUTINE fat_pws_gs_release_frag
 
-  subroutine print_pw_statistics(pw, name, i_frag)
-    type(pw_type), intent(in) :: pw
-    character(len=*), intent(in) :: name
-    integer, intent(in) :: i_frag
+! **************************************************************************************************
+!> \brief Creates an array of real space pw types for the reference system
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pws array of pw's to be created
+!> \param n size of array to create
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
+! **************************************************************************************************
+   SUBROUTINE fat_pws_rs_create_ref(fat_env, pws, n)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_r3d_rs_type), POINTER                     :: pws(:)
+      INTEGER, INTENT(IN)                               :: n
 
-    real(dp) :: mean, std_dev, min_val, max_val, sum_val, norm_2
-    integer :: count, i
-    type(pw_grid_type), pointer :: grid
-    logical :: print_grid = .true.
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pws_rs_create_ref'
 
-    grid => pw%pw_grid
+      INTEGER                                           :: handle, i
 
-    if (pw%in_space == REALSPACE) then
-      sum_val = sum(abs(pw%cr3d))
-      count = size(pw%cr3d)
-      mean = sum_val / count
-      std_dev = sqrt(sum((abs(pw%cr3d) - mean)**2) / count)
-      min_val = minval(abs(pw%cr3d))
-      max_val = maxval(abs(pw%cr3d))
-      norm_2 = sqrt(sum(pw%cr3d**2))
-    else if (pw%in_space == RECIPROCALSPACE) then
-      sum_val = sum(abs(pw%cc))
-      count = size(pw%cc)
-      mean = real(sum_val) / count
-      std_dev = sqrt(sum(abs(pw%cc - mean)**2) / count)
-      min_val = minval(abs(pw%cc))
-      max_val = maxval(abs(pw%cc))
-      norm_2 = sqrt(sum(abs(pw%cc)**2))
-    else
-      print *, "KKK| Error: Unknown space type for PW"
-      return
-    end if
+      CALL timeset(routineN, handle)
 
-    ! PW Type Information
-    print *, "KKK| Statistics for -> ", name, " <-(fragment ", i_frag, "):"
-    print *, "KKK|  PW Type Information:"
-    print *, "KKK|   In use:                ", pw%in_use
-    print *, "KKK|   Space:                 ", merge("REALSPACE      ", &
-      "RECIPROCALSPACE", pw%in_space == REALSPACE)
-    print *, "KKK|  Data Statistics:"
-    print *, "KKK|   Mean(abs):             ", mean
-    print *, "KKK|   Std Dev:               ", std_dev
-    print *, "KKK|   Min(abs):              ", min_val
-    print *, "KKK|   Max(abs):              ", max_val
-    print *, "KKK|   Sum(abs):              ", sum_val
-    print *, "KKK|   Norm-2:                ", norm_2
-    print *, "KKK|   Num of grid p.         ", count
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
 
-    if (print_grid) then
-      print *, "KKK|  Grid Information:"
-      print *, "KKK|   Total Grid Points:     ", grid%ngpts
-      print *, "KKK|   Grid Points in Cutoff: ", grid%ngpts_cut
-      print *, "KKK|   Dimensions:            ", grid%npts
-      print *, "KKK|   Local Grid Points:     ", grid%ngpts_local
-      print *, "KKK|   Local Points in Cutoff:", grid%ngpts_cut_local
-      print *, "KKK|   Grid Bounds:           ", grid%bounds
-      print *, "KKK|   Local Grid Bounds:     ", grid%bounds_local
-      print *, "KKK|   Grid Spacing:          ", grid%dr
-      print *, "KKK|   Cell Matrix:"
-      do i = 1, 3
-        print *, "KKK|                          ", grid%dh(:,i)
-      end do
-      print *, "KKK|   Inverse Cell Matrix:"
-      do i = 1, 3
-        print *, "KKK|                          ", grid%dh_inv(:,i)
-      end do
-      print *, "KKK|   Orthorhombic:          ", grid%orthorhombic
-      print *, "KKK|   Volume Element:        ", grid%dvol
-      print *, "KKK|   Total Volume:          ", grid%vol
-      print *, "KKK|   Cutoff:                ", grid%cutoff
-      print *, "KKK|   Grid Span:             ", merge("HALFSPACE", &
-        "FULLSPACE", grid%grid_span == HALFSPACE)
-      print *, "KKK|   Has G=0:               ", grid%have_g0
-      print *, "KKK|   First G≠0 index:       ", grid%first_gne0
-      print *, "KKK|   Grid ID:               ", grid%id_nr
-      print *, "KKK|   Reference Count:       ", grid%ref_count
-      print *, "KKK|   Spherical Cutoff:      ", grid%spherical
-      print *, "KKK|  Parallel Information:"
-      print *, "KKK|   Mode:                  ", merge("Distributed", &
-        "Local      ", grid%para%mode == PW_MODE_DISTRIBUTED)
-      print *, "KKK|   Ray Distribution:      ", grid%para%ray_distribution
-      print *, "KKK|   Blocked:               ", grid%para%blocked
-      print *, "KKK|   Group Size:            ", grid%para%group_size
-      print *, "KKK|   My Position:           ", grid%para%my_pos
-      print *, "KKK|   Group Head:            ", grid%para%group_head
-      print *, "KKK|   Group Head ID:         ", grid%para%group_head_id
-      print *, "KKK|   Real Space Dimensions: ", grid%para%rs_dims
-      print *, "KKK|   Real Space Position:   ", grid%para%rs_pos
-    end if
+      ALLOCATE(pws(n))
+      DO i = 1, n
+         CALL fat_pw_rs_create_ref(fat_env, pws(i))
+      END DO
 
-    if (associated(grid%g)) then
-      print *, "KKK|  G-vector Statistics:"
-      print *, "KKK|   Mean G magnitude:      ", sum(sqrt(sum(grid%g**2, dim=1))) / size(grid%g, 2)
-      print *, "KKK|   Max G magnitude:       ", sqrt(maxval(sum(grid%g**2, dim=1)))
-    end if
+      CALL timestop(handle)
 
-    if (associated(grid%gsq)) then
-      print *, "KKK|   Mean G^2:              ", sum(grid%gsq) / size(grid%gsq)
-      print *, "KKK|   Max G^2:               ", maxval(grid%gsq)
-    end if
+   END SUBROUTINE fat_pws_rs_create_ref
 
+! **************************************************************************************************
+!> \brief Creates an array of g-space pw types for the reference system
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pws array of pw's to be created
+!> \param n size of array to create
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
+! **************************************************************************************************
+   SUBROUTINE fat_pws_gs_create_ref(fat_env, pws, n)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_c1d_gs_type), POINTER                     :: pws(:)
+      INTEGER, INTENT(IN)                               :: n
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pws_gs_create_ref'
+
+      INTEGER                                           :: handle, i
+
+      CALL timeset(routineN, handle)
+
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
+
+      ALLOCATE(pws(n))
+      DO i = 1, n
+         CALL fat_pw_gs_create_ref(fat_env, pws(i))
+      END DO
+
+      CALL timestop(handle)
+
+   END SUBROUTINE fat_pws_gs_create_ref
+
+! **************************************************************************************************
+!> \brief Releases an array of real space pw types for the reference system
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pws array of pw's to be released
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
+! **************************************************************************************************
+   SUBROUTINE fat_pws_rs_release_ref(fat_env, pws)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_r3d_rs_type), POINTER                     :: pws(:)
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pws_rs_release_ref'
+
+      INTEGER                                           :: handle, i
+
+      CALL timeset(routineN, handle)
+
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
+
+      CPASSERT(ASSOCIATED(pws))
+      DO i = 1, SIZE(pws)
+         CALL fat_pw_rs_release_ref(fat_env, pws(i))
+      END DO
+      DEALLOCATE(pws)
+      NULLIFY(pws)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE fat_pws_rs_release_ref
+
+! **************************************************************************************************
+!> \brief Releases an array of g-space pw types for the reference system
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param pws array of pw's to be released
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
+! **************************************************************************************************
+   SUBROUTINE fat_pws_gs_release_ref(fat_env, pws)
+      TYPE(fat_env_type), POINTER                       :: fat_env
+      TYPE(pw_c1d_gs_type), POINTER                     :: pws(:)
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pws_gs_release_ref'
+
+      INTEGER                                           :: handle, i
+
+      CALL timeset(routineN, handle)
+
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
+
+      CPASSERT(ASSOCIATED(pws))
+      DO i = 1, SIZE(pws)
+         CALL fat_pw_gs_release_ref(fat_env, pws(i))
+      END DO
+      DEALLOCATE(pws)
+      NULLIFY(pws)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE fat_pws_gs_release_ref
+
+! **************************************************************************************************
+!> \brief Gets the real space electron density for one fragment in the freeze-and-thaw environment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param rho the real space density arrays to be filled
+!> \param i_frag index of the current fragment
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
+! **************************************************************************************************
+   SUBROUTINE fat_rho_rs_frag(fat_env, rho, i_frag)
+      TYPE(fat_env_type), POINTER                        :: fat_env
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho(:)
+      INTEGER, INTENT(IN)                                :: i_frag
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_rho_rs_frag'
+
+      CHARACTER(LEN=default_string_length)               :: label
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(qs_rho_type), POINTER                         :: qs_rho
+      INTEGER                                            :: handle
+
+      CALL timeset(routineN, handle)
+
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
+
+      ! Initialize rho with correct data structure and grid mappings
+      qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
+      CALL get_qs_env(qs_env, rho=qs_rho)
+      CALL qs_rho_get(qs_rho, rho_r=rho)
+
+      ! Map external density if needed
+      IF (fat_env%extern(i_frag)) THEN
+         CALL integer_to_string(i_frag, label)
+         CALL cp_cube_to_pw(rho(1), "extern_"//TRIM(label)//".cube", 1.0_dp, .FALSE.)
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE fat_rho_rs_frag
+
+! **************************************************************************************************
+!> \brief Gets the g-space electron density for one fragment in the freeze-and-thaw environment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param rho the g-space density arrays to be filled
+!> \param i_frag index of the current fragment
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
+! **************************************************************************************************
+   SUBROUTINE fat_rho_gs_frag(fat_env, rho, i_frag)
+      TYPE(fat_env_type), POINTER                        :: fat_env
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho(:)
+      INTEGER, INTENT(IN)                                :: i_frag
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_rho_gs_frag'
+
+      CHARACTER(LEN=default_string_length)               :: label
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_rs
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(qs_rho_type), POINTER                         :: qs_rho
+      INTEGER                                            :: handle
+
+      CALL timeset(routineN, handle)
+
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
+
+      ! Initialize rho with correct data structure and grid mappings
+      qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
+      CALL get_qs_env(qs_env, rho=qs_rho)
+      CALL qs_rho_get(qs_rho, rho_g=rho)
+
+      ! Handle external density if needed
+      IF (fat_env%extern(i_frag)) THEN
+         CALL integer_to_string(i_frag, label)
+         ! Create temporary real space object for cube file reading
+         CALL fat_pw_rs_create_frag(fat_env, rho_rs, i_frag)
+         ! Read cube file into real space
+         CALL cp_cube_to_pw(rho_rs, "extern_"//TRIM(label)//".cube", 1.0_dp, .FALSE.)
+         ! Transfer to g-space
+         CALL pw_transfer(rho_rs, rho(1))
+         ! Cleanup
+         CALL fat_pw_rs_release_frag(fat_env, rho_rs, i_frag)
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE fat_rho_gs_frag
+
+! **************************************************************************************************
+!> \brief Gets the g-space nuclear density for one fragment in the freeze-and-thaw environment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param rhon the g-space nuclear density to be filled
+!> \param i_frag index of the current fragment
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
+! **************************************************************************************************
+   SUBROUTINE fat_rhon_gs_frag(fat_env, rhon, i_frag)
+      TYPE(fat_env_type), POINTER                        :: fat_env
+      TYPE(pw_c1d_gs_type), POINTER                      :: rhon
+      INTEGER, INTENT(IN)                                :: i_frag
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_rhon_gs_frag'
+
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(pw_r3d_rs_type), POINTER                      :: rhon_rs
+      INTEGER                                            :: handle
+
+      CALL timeset(routineN, handle)
+
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
+
+      ! First get real space nuclear density
+      CALL fat_pw_rs_create_frag(fat_env, rhon_rs, i_frag)
+      qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
+      CALL get_qs_env(qs_env=qs_env, rho_core=rhon_rs)
+
+      ! Transfer to g-space
+      CALL pw_transfer(rhon_rs, rhon)
+
+      ! Cleanup
+      CALL fat_pw_rs_release_frag(fat_env, rhon_rs, i_frag)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE fat_rhon_gs_frag
+
+! **************************************************************************************************
+!> \brief Gets the g-space gradient of nuclear density for one fragment
+!> \param fat_env the freeze-and-thaw environment containing calculation setup
+!> \param drhon the g-space nuclear density gradient to be filled
+!> \param i_frag index of the current fragment
+!> \param i_nuc index of the nucleus
+!> \param i_dir direction index (1=x, 2=y, 3=z)
+!> \par History
+!>      09.2024 created [Konstantin Komarov]
+!> \author Konstantin Komarov
+! **************************************************************************************************
+   SUBROUTINE fat_drhon_gs_frag(fat_env, drhon, i_frag, i_nuc, i_dir)
+      TYPE(fat_env_type), POINTER                        :: fat_env
+      TYPE(pw_c1d_gs_type), POINTER                     :: drhon
+      INTEGER, INTENT(IN)                                :: i_frag, i_nuc, i_dir
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_drhon_gs_frag'
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(pw_r3d_rs_type), POINTER                     :: drhon_rs
+      INTEGER                                            :: handle
+
+      CALL timeset(routineN, handle)
+
+      IF (is_debug) print *, "DBG| ", moduleN//"::"//routineN
+
+      ! Calculate gradient in real space first
+      CALL fat_pw_rs_create_frag(fat_env, drhon_rs, i_frag)
+      qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
+      CALL calculate_drho_core(drhon_rs, qs_env, i_dir, i_nuc)
+
+      ! Transfer to g-space
+      CALL pw_transfer(drhon_rs, drhon)
+
+      ! Cleanup
+      CALL fat_pw_rs_release_frag(fat_env, drhon_rs, i_frag)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE fat_drhon_gs_frag
+
+! subroutine write_pw_r_to_cube(fat_env, pw, filename)
+!   type(fat_env_type), intent(in) :: fat_env
+!   type(pw_type), intent(in) :: pw
+!   character(len=*), intent(in) :: filename
+!
+!   integer :: unit_nr
+!   type(cp_logger_type), pointer :: logger
+!   TYPE(particle_list_type), POINTER :: particles
+!   type(particle_type), dimension(:), pointer :: particle_set
+!   type(qs_environment_type), pointer :: qs_env
+!   type(dft_control_type), pointer :: dft_control
+!   type(pw_env_type), pointer :: pw_env
+!   type(qs_subsys_type), pointer :: subsys
+!   type(pw_pool_type), pointer :: pw_pool
+!   integer, pointer :: stride(:)
+!
+!   logger => cp_get_default_logger()
+!   unit_nr = cp_logger_get_default_io_unit(logger)
+!   log_counter = log_counter + 1
+!
+!   if (log_counter>6) return
+!
+!   print *, "KKK| write CUBE file number:", filename
+!
+!   if (unit_nr > 0) then
+!     qs_env => fat_env%force_env_ref%qs_env
+!
+!     CALL get_qs_env(qs_env=qs_env, dft_control=dft_control, pw_env=pw_env, &
+!                     particle_set=particle_set, subsys=subsys)
+!     CALL pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
+!     CALL qs_subsys_get(subsys, particles=particles)
+!
+!     allocate(stride(3))
+!     stride = [1, 1, 1]
+!
+!     call open_file(file_name=trim(filename), file_status="REPLACE", &
+!                    file_action="WRITE", unit_number=unit_nr)
+!     call cp_pw_to_cube(pw, unit_nr, trim(filename), particles=particles, stride=stride)
+!     call close_file(unit_number=unit_nr)
+!     deallocate(stride)
+!   end if
+! end subroutine write_pw_r_to_cube
+!
+! subroutine write_pw_g_to_cube(fat_env, pw, filename, i_frag)
+!   type(fat_env_type), intent(in) :: fat_env
+!   type(pw_type), intent(in) :: pw
+!   character(len=*), intent(in) :: filename
+!   integer, intent(in) :: i_frag
+!
+!   type(pw_type), pointer :: pw_real
+!   logical :: pool_exists
+!
+!   if (.not. associated(fat_env%pw_pool_sub)) then
+!     print *, "Error: pw_pool_sub is not associated in fat_env"
+!     return
+!   end if
+!
+!   if (i_frag < 1 .or. i_frag > size(fat_env%pw_pool_sub)) then
+!     print *, "Error: Invalid fragment index", i_frag
+!     return
+!   end if
+!
+!   pool_exists = associated(fat_env%pw_pool_sub(i_frag)%pool)
+!   if (.not. pool_exists) then
+!     print *, "Error: pw_pool is not associated for fragment", i_frag
+!     return
+!   end if
+!
+!   allocate(pw_real)
+!
+!   ! Create a new pw_type in real space
+!   call fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw_real, &
+!        use_data=realdata3d, in_space=realspace)
+!
+!   if (.not. associated(pw_real)) then
+!     print *, "Error: pw_real was not created successfully"
+!     deallocate(pw_real)
+!     return
+!   end if
+!   call pw_zero(pw_real)
+!
+!   ! Transfer data from reciprocal to real space
+!   call pw_transfer(pw, pw_real)
+!
+!   call write_pw_r_to_cube(fat_env, pw_real, filename)
+!
+!   ! Release the temporary real space pw_type
+!   call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(pw_real)
+!
+!   deallocate(pw_real)
+!
+! end subroutine write_pw_g_to_cube
+!
+! subroutine print_pw_statistics(pw, name, i_frag)
+!   type(pw_type), intent(in) :: pw
+!   character(len=*), intent(in) :: name
+!   integer, intent(in) :: i_frag
+!
+!   real(dp) :: mean, std_dev, min_val, max_val, sum_val, norm_2
+!   integer :: count, i
+!   type(pw_grid_type), pointer :: grid
+!   logical :: print_grid = .true.
+!
+!   grid => pw%pw_grid
+!
+!   if (pw%in_space == REALSPACE) then
+!     sum_val = sum(abs(pw%cr3d))
+!     count = size(pw%cr3d)
+!     mean = sum_val / count
+!     std_dev = sqrt(sum((abs(pw%cr3d) - mean)**2) / count)
+!     min_val = minval(abs(pw%cr3d))
+!     max_val = maxval(abs(pw%cr3d))
+!     norm_2 = sqrt(sum(pw%cr3d**2))
+!   else if (pw%in_space == RECIPROCALSPACE) then
+!     sum_val = sum(abs(pw%cc))
+!     count = size(pw%cc)
+!     mean = real(sum_val) / count
+!     std_dev = sqrt(sum(abs(pw%cc - mean)**2) / count)
+!     min_val = minval(abs(pw%cc))
+!     max_val = maxval(abs(pw%cc))
+!     norm_2 = sqrt(sum(abs(pw%cc)**2))
+!   else
+!     print *, "KKK| Error: Unknown space type for PW"
+!     return
+!   end if
+!
+!   ! PW Type Information
+!   print *, "KKK| Statistics for -> ", name, " <-(fragment ", i_frag, "):"
+!   print *, "KKK|  PW Type Information:"
+!   print *, "KKK|   In use:                ", pw%in_use
+!   print *, "KKK|   Space:                 ", merge("REALSPACE      ", &
+!     "RECIPROCALSPACE", pw%in_space == REALSPACE)
+!   print *, "KKK|  Data Statistics:"
+!   print *, "KKK|   Mean(abs):             ", mean
+!   print *, "KKK|   Std Dev:               ", std_dev
+!   print *, "KKK|   Min(abs):              ", min_val
+!   print *, "KKK|   Max(abs):              ", max_val
+!   print *, "KKK|   Sum(abs):              ", sum_val
+!   print *, "KKK|   Norm-2:                ", norm_2
+!   print *, "KKK|   Num of grid p.         ", count
+!
+!   if (print_grid) then
+!     print *, "KKK|  Grid Information:"
+!     print *, "KKK|   Total Grid Points:     ", grid%ngpts
+!     print *, "KKK|   Grid Points in Cutoff: ", grid%ngpts_cut
+!     print *, "KKK|   Dimensions:            ", grid%npts
+!     print *, "KKK|   Local Grid Points:     ", grid%ngpts_local
+!     print *, "KKK|   Local Points in Cutoff:", grid%ngpts_cut_local
+!     print *, "KKK|   Grid Bounds:           ", grid%bounds
+!     print *, "KKK|   Local Grid Bounds:     ", grid%bounds_local
+!     print *, "KKK|   Grid Spacing:          ", grid%dr
+!     print *, "KKK|   Cell Matrix:"
+!     do i = 1, 3
+!       print *, "KKK|                          ", grid%dh(:,i)
+!     end do
+!     print *, "KKK|   Inverse Cell Matrix:"
+!     do i = 1, 3
+!       print *, "KKK|                          ", grid%dh_inv(:,i)
+!     end do
+!     print *, "KKK|   Orthorhombic:          ", grid%orthorhombic
+!     print *, "KKK|   Volume Element:        ", grid%dvol
+!     print *, "KKK|   Total Volume:          ", grid%vol
+!     print *, "KKK|   Cutoff:                ", grid%cutoff
+!     print *, "KKK|   Grid Span:             ", merge("HALFSPACE", &
+!       "FULLSPACE", grid%grid_span == HALFSPACE)
+!     print *, "KKK|   Has G=0:               ", grid%have_g0
+!     print *, "KKK|   First G≠0 index:       ", grid%first_gne0
+!     print *, "KKK|   Grid ID:               ", grid%id_nr
+!     print *, "KKK|   Reference Count:       ", grid%ref_count
+!     print *, "KKK|   Spherical Cutoff:      ", grid%spherical
+!     print *, "KKK|  Parallel Information:"
+!     print *, "KKK|   Mode:                  ", merge("Distributed", &
+!       "Local      ", grid%para%mode == PW_MODE_DISTRIBUTED)
+!     print *, "KKK|   Ray Distribution:      ", grid%para%ray_distribution
+!     print *, "KKK|   Blocked:               ", grid%para%blocked
+!     print *, "KKK|   Group Size:            ", grid%para%group_size
+!     print *, "KKK|   My Position:           ", grid%para%my_pos
+!     print *, "KKK|   Group Head:            ", grid%para%group_head
+!     print *, "KKK|   Group Head ID:         ", grid%para%group_head_id
+!     print *, "KKK|   Real Space Dimensions: ", grid%para%rs_dims
+!     print *, "KKK|   Real Space Position:   ", grid%para%rs_pos
+!   end if
+!
+!   if (associated(grid%g)) then
+!     print *, "KKK|  G-vector Statistics:"
+!     print *, "KKK|   Mean G magnitude:      ", sum(sqrt(sum(grid%g**2, dim=1))) / size(grid%g, 2)
+!     print *, "KKK|   Max G magnitude:       ", sqrt(maxval(sum(grid%g**2, dim=1)))
+!   end if
+!
+!   if (associated(grid%gsq)) then
+!     print *, "KKK|   Mean G^2:              ", sum(grid%gsq) / size(grid%gsq)
+!     print *, "KKK|   Max G^2:               ", maxval(grid%gsq)
+!   end if
+!
 !#if defined(__parallel)
 !    print *, "KKK|  MPI Information:"
 !    print *, "KKK|   MPI Mode:               ", merge("DISTRIBUTED","LOCAL      ", &
@@ -522,7 +823,7 @@ contains
 !    print *, "KKK|   Has YZ Ray Array:       ", ALLOCATED(grid%para%yzp)
 !    print *, "KKK|   Has YZ Count Array:     ", ALLOCATED(grid%para%nyzray)
 !#endif
-  end subroutine print_pw_statistics
+! end subroutine print_pw_statistics
 ! **************************************************************************************************
 !> \brief Gets the nuclear density for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************

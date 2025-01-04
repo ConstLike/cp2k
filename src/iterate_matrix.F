@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,16 +15,16 @@ MODULE iterate_matrix
                                               arnoldi_extremal
    USE bibliography,                    ONLY: Richters2018,&
                                               cite_reference
-   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
-                                              cp_logger_get_default_unit_nr,&
-                                              cp_logger_type
-   USE dbcsr_api,                       ONLY: &
+   USE cp_dbcsr_api,                    ONLY: &
         dbcsr_add, dbcsr_add_on_diag, dbcsr_copy, dbcsr_create, dbcsr_desymmetrize, &
         dbcsr_distribution_get, dbcsr_distribution_type, dbcsr_filter, dbcsr_frobenius_norm, &
         dbcsr_gershgorin_norm, dbcsr_get_diag, dbcsr_get_info, dbcsr_get_matrix_type, &
         dbcsr_get_occupation, dbcsr_multiply, dbcsr_norm, dbcsr_norm_maxabsnorm, dbcsr_p_type, &
         dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_set_diag, dbcsr_trace, dbcsr_transposed, &
         dbcsr_type, dbcsr_type_no_symmetry
+   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_get_default_unit_nr,&
+                                              cp_logger_type
    USE input_constants,                 ONLY: ls_scf_submatrix_sign_direct,&
                                               ls_scf_submatrix_sign_direct_muadj,&
                                               ls_scf_submatrix_sign_direct_muadj_lowmem,&
@@ -672,16 +672,17 @@ CONTAINS
 !> \param matrix ...
 !> \param threshold ...
 !> \param sign_order ...
+!> \param iounit ...
 !> \par History
 !>       2010.10 created [Joost VandeVondele]
 !>       2019.05 extended to order byxond 2 [Robert Schade]
 !> \author Joost VandeVondele, Robert Schade
 ! **************************************************************************************************
-   SUBROUTINE matrix_sign_Newton_Schulz(matrix_sign, matrix, threshold, sign_order)
+   SUBROUTINE matrix_sign_Newton_Schulz(matrix_sign, matrix, threshold, sign_order, iounit)
 
       TYPE(dbcsr_type), INTENT(INOUT)                    :: matrix_sign, matrix
       REAL(KIND=dp), INTENT(IN)                          :: threshold
-      INTEGER, INTENT(IN), OPTIONAL                      :: sign_order
+      INTEGER, INTENT(IN), OPTIONAL                      :: sign_order, iounit
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'matrix_sign_Newton_Schulz'
 
@@ -696,11 +697,15 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      logger => cp_get_default_logger()
-      IF (logger%para_env%is_source()) THEN
-         unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
+      IF (PRESENT(iounit)) THEN
+         unit_nr = iounit
       ELSE
-         unit_nr = -1
+         logger => cp_get_default_logger()
+         IF (logger%para_env%is_source()) THEN
+            unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
+         ELSE
+            unit_nr = -1
+         END IF
       END IF
 
       IF (PRESENT(sign_order)) THEN
@@ -1059,8 +1064,6 @@ CONTAINS
       symmetrize = .FALSE.
       CALL matrix_sqrt_proot(matrix_sqrt, matrix_sqrt_inv, matrix2, threshold, order, &
                              0.01_dp, 100, symmetrize, converged)
-!      call matrix_sqrt_Newton_Schulz(matrix_sqrt, matrix_sqrt_inv, matrix2, threshold, order, &
-!                                        0.01_dp,100, symmetrize,converged)
 
       CALL dbcsr_multiply("N", "N", 1.0_dp, matrix, matrix_sqrt_inv, 0.0_dp, matrix_sign, &
                           filter_eps=threshold, flop=flop1)
@@ -1615,18 +1618,20 @@ CONTAINS
 !> \param max_iter_lanczos ...
 !> \param symmetrize ...
 !> \param converged ...
+!> \param iounit ...
 !> \par History
 !>       2010.10 created [Joost VandeVondele]
 !> \author Joost VandeVondele
 ! **************************************************************************************************
    SUBROUTINE matrix_sqrt_Newton_Schulz(matrix_sqrt, matrix_sqrt_inv, matrix, threshold, order, &
-                                        eps_lanczos, max_iter_lanczos, symmetrize, converged)
+                                        eps_lanczos, max_iter_lanczos, symmetrize, converged, iounit)
       TYPE(dbcsr_type), INTENT(INOUT)                    :: matrix_sqrt, matrix_sqrt_inv, matrix
       REAL(KIND=dp), INTENT(IN)                          :: threshold
       INTEGER, INTENT(IN)                                :: order
       REAL(KIND=dp), INTENT(IN)                          :: eps_lanczos
       INTEGER, INTENT(IN)                                :: max_iter_lanczos
       LOGICAL, OPTIONAL                                  :: symmetrize, converged
+      INTEGER, INTENT(IN), OPTIONAL                      :: iounit
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'matrix_sqrt_Newton_Schulz'
 
@@ -1642,11 +1647,15 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      logger => cp_get_default_logger()
-      IF (logger%para_env%is_source()) THEN
-         unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
+      IF (PRESENT(iounit)) THEN
+         unit_nr = iounit
       ELSE
-         unit_nr = -1
+         logger => cp_get_default_logger()
+         IF (logger%para_env%is_source()) THEN
+            unit_nr = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
+         ELSE
+            unit_nr = -1
+         END IF
       END IF
 
       IF (PRESENT(converged)) converged = .FALSE.
