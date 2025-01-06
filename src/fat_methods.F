@@ -99,36 +99,33 @@ contains
 ! **************************************************************************************************
 !> \brief Creates a pw for the reference system in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_pw_create_ref(fat_env, pw, rspace)
+  subroutine fat_pw_create_ref(fat_env, pw_r, pw_g)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), intent(out) :: pw
-    logical, optional :: rspace
+    type(pw_type), optional, intent(out) :: pw_r
+    type(pw_type), optional, intent(out) :: pw_g
 
     character(len=*), parameter :: routinen = "fat_pw_create_ref"
 
-    integer :: use_data, in_space, handle
-    logical :: my_rspace
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     call timeset(routinen, handle)
 
-    if (present(rspace)) then
-       my_rspace = rspace
-    else
-       my_rspace = .true.
-    end if
+    CPASSERT(PRESENT(pw_r) .OR. PRESENT(pw_g))
+    CPASSERT(ASSOCIATED(fat_env%pw_pool_ref))
 
-    if (my_rspace) then
-       use_data = realdata3d
-       in_space = realspace
-    else
-       use_data = complexdata1d
-       in_space = reciprocalspace
-    end if
+    IF (PRESENT(pw_r)) THEN
+       call fat_env%pw_pool_ref%create_pw(pw_r, &
+          use_data=realdata3d, in_space=realspace)
+       call pw_zero(pw_r)
+    END IF
 
-    call fat_env%pw_pool_ref%create_pw(pw, use_data=use_data, in_space=in_space)
-    call pw_zero(pw)
+    IF (PRESENT(pw_g)) THEN
+       call fat_env%pw_pool_ref%create_pw(pw_g, &
+          use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+       call pw_zero(pw_g)
+    END IF
 
     call timestop(handle)
 
@@ -170,9 +167,10 @@ contains
 ! **************************************************************************************************
 !> \brief Releases a pw for the reference system in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_pw_release_ref(fat_env, pw)
+  subroutine fat_pw_release_ref(fat_env, pw_r, pw_g)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), intent(inout) :: pw
+    type(pw_type), optional, intent(inout) :: pw_r
+    type(pw_type), optional, intent(inout) :: pw_g
 
     character(len=*), parameter :: routinen = "fat_pw_release_ref"
 
@@ -182,7 +180,15 @@ contains
 
     call timeset(routinen, handle)
 
-    call fat_env%pw_pool_ref%give_back_pw(pw)
+    CPASSERT(PRESENT(pw_r) .OR. PRESENT(pw_g))
+
+    IF (PRESENT(pw_r)) THEN
+       call fat_env%pw_pool_ref%give_back_pw(pw_r)
+    END IF
+
+    IF (PRESENT(pw_g)) THEN
+       call fat_env%pw_pool_ref%give_back_pw(pw_g)
+    END IF
 
     if (is_debug) print *, "DBG| released"
 
@@ -193,11 +199,11 @@ contains
 ! **************************************************************************************************
 !> \brief Creates an array of pws for the reference system in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_pws_create_ref(fat_env, pws, n, rspace)
+  subroutine fat_pws_create_ref(fat_env, pws_r, pws_g, n_pws)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: pws(:)
-    integer :: n
-    logical, optional :: rspace
+    type(pw_type), optional, pointer :: pws_r(:)
+    type(pw_type), optional, pointer :: pws_g(:)
+    integer :: n_pws
 
     character(len=*), parameter :: routinen = "fat_pws_create_ref"
 
@@ -207,10 +213,21 @@ contains
 
     call timeset(routinen, handle)
 
-    allocate(pws(n))
-    do i = 1, n
-       call fat_pw_create_ref(fat_env, pws(i), rspace)
-    end do
+    CPASSERT(PRESENT(pws_r) .OR. PRESENT(pws_g))
+
+    IF (PRESENT(pws_r)) THEN
+       allocate(pws_r(n_pws))
+       do i = 1, n_pws
+          call fat_pw_create_ref(fat_env, pw_r=pws_r(i))
+       end do
+    END IF
+
+    IF (PRESENT(pws_g)) THEN
+       allocate(pws_g(n_pws))
+       do i = 1, n_pws
+          call fat_pw_create_ref(fat_env, pw_g=pws_g(i))
+       end do
+    END IF
 
     call timestop(handle)
 
@@ -260,9 +277,10 @@ contains
 ! **************************************************************************************************
 !> \brief Releases an array of pws for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_pws_release_ref(fat_env, pws)
+  subroutine fat_pws_release_ref(fat_env, pws_r, pws_g)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: pws(:)
+    type(pw_type), optional, pointer :: pws_r(:)
+    type(pw_type), optional, pointer :: pws_g(:)
 
     character(len=*), parameter :: routinen = "fat_pws_release_ref"
 
@@ -272,10 +290,21 @@ contains
 
     call timeset(routinen, handle)
 
-    do i = 1, size(pws)
-       call fat_pw_release_ref(fat_env, pws(i))
-    end do
-    DEALLOCATE(pws)
+    CPASSERT(PRESENT(pws_r) .OR. PRESENT(pws_g))
+
+    IF (PRESENT(pws_r)) THEN
+       do i = 1, size(pws_r)
+          call fat_pw_release_ref(fat_env, pw_r=pws_r(i))
+       END DO
+       DEALLOCATE(pws_r)
+    END IF
+
+    IF (PRESENT(pws_g)) THEN
+       do i = 1, size(pws_g)
+          call fat_pw_release_ref(fat_env, pw_g=pws_g(i))
+       END DO
+       DEALLOCATE(pws_g)
+    END IF
 
     if (is_debug) print *, "DBG| released"
 
@@ -771,7 +800,7 @@ contains
     use_gga = needs%norm_drho .OR. needs%norm_drho_spin
 
     ! Create pw for total density
-    call fat_pws_create_ref(fat_env, rho_r, 1)
+    call fat_pws_create_ref(fat_env, pws_r=rho_r, n_pws=1)
     call fat_rho_ref(fat_env, rho_r)
 
     ! Initialize rho_g if needed for GGA
@@ -809,7 +838,7 @@ contains
         deallocate(rho_g)
     end if
 
-    call fat_pws_release_ref(fat_env, rho_r)
+    call fat_pws_release_ref(fat_env, pws_r=rho_r)
 
     call timestop(handle)
 
@@ -933,7 +962,7 @@ contains
     call pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
 
     ! Create and initialize density arrays
-    call fat_pws_create_ref(fat_env, rho_r, 1)
+    call fat_pws_create_ref(fat_env, pws_r=rho_r, n_pws=1)
     call fat_rho_ref(fat_env, rho_r)
 
     ! Initialize rho_g if needed for GGA
@@ -975,7 +1004,7 @@ contains
     end if
 
     ! Cleanup
-    call fat_pws_release_ref(fat_env, rho_r)
+    call fat_pws_release_ref(fat_env, pws_r=rho_r)
 
     call timestop(handle)
 
@@ -1107,10 +1136,10 @@ contains
     call fat_v_ts_ref(fat_env, v, v_gga)
 !   if (is_debug) call print_pw_statistics(v(1), "v_emb Kin tot", 0)
     call pw_axpy(v(1), vemb, allow_noncompatible_grids=.true.)
-    call fat_pws_release_ref(fat_env, v)
+    call fat_pws_release_ref(fat_env, pws_r=v)
     IF (ASSOCIATED(v_gga)) then
        call pw_axpy(v_gga(1), vemb, allow_noncompatible_grids=.true.)
-       call fat_pws_release_ref(fat_env, v_gga)
+       call fat_pws_release_ref(fat_env, pws_g=v_gga)
     end if
 
     ! Fragment
@@ -1153,10 +1182,10 @@ contains
     call fat_v_xc_ref(fat_env, v, v_gga)
 !   if (is_debug) call print_pw_statistics(v(1), "v_emb XC tot", 0)
     call pw_axpy(v(1), vemb, allow_noncompatible_grids=.true.)
-    call fat_pws_release_ref(fat_env, v)
+    call fat_pws_release_ref(fat_env, pws_r=v)
     IF (ASSOCIATED(v_gga)) then
        call pw_axpy(v_gga(1), vemb, allow_noncompatible_grids=.true.)
-       call fat_pws_release_ref(fat_env, v_gga)
+       call fat_pws_release_ref(fat_env, pws_g=v_gga)
     end if
 
     ! Fragment
