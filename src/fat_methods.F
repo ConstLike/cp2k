@@ -67,10 +67,12 @@ contains
 
     character(len=*), parameter :: routinen = "fat_pw_create_frag"
 
-    integer :: use_data, in_space
+    integer :: use_data, in_space, handle
     logical :: my_rspace
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     if (present(rspace)) then
        my_rspace = rspace
@@ -90,6 +92,8 @@ contains
     call fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw, use_data=use_data, in_space=in_space)
     call pw_zero(pw)
 
+    call timestop(handle)
+
   end subroutine fat_pw_create_frag
 
 ! **************************************************************************************************
@@ -102,10 +106,12 @@ contains
 
     character(len=*), parameter :: routinen = "fat_pw_create_ref"
 
-    integer :: use_data, in_space
+    integer :: use_data, in_space, handle
     logical :: my_rspace
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     if (present(rspace)) then
        my_rspace = rspace
@@ -124,6 +130,8 @@ contains
     call fat_env%pw_pool_ref%create_pw(pw, use_data=use_data, in_space=in_space)
     call pw_zero(pw)
 
+    call timestop(handle)
+
   end subroutine fat_pw_create_ref
 
 ! **************************************************************************************************
@@ -132,16 +140,20 @@ contains
   subroutine fat_pw_release_frag(fat_env, pw, i_frag)
     type(fat_env_type), pointer :: fat_env
     type(pw_type), pointer :: pw
-    integer :: i_frag
+    integer :: i_frag, handle
 
     character(len=*), parameter :: routinen = "fat_pw_release_frag"
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
+    call timeset(routinen, handle)
+
     call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(pw)
     deallocate(pw)
 
     if (is_debug) print *, "DBG| released"
+
+    call timestop(handle)
 
   end subroutine fat_pw_release_frag
 
@@ -154,11 +166,17 @@ contains
 
     character(len=*), parameter :: routinen = "fat_pw_release_ref"
 
+    integer :: handle
+
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     call fat_env%pw_pool_ref%give_back_pw(pw)
 
     if (is_debug) print *, "DBG| released"
+
+    call timestop(handle)
 
   end subroutine fat_pw_release_ref
 
@@ -173,16 +191,20 @@ contains
 
     character(len=*), parameter :: routinen = "fat_pws_create_frag"
 
-    integer :: i
+    integer :: i, handle
     type(pw_type), pointer :: pw_tmp
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     allocate(pws(n))
     do i = 1, n
        pw_tmp = pws(i)
        call fat_pw_create_frag(fat_env, pw_tmp, i_frag, rspace)
     end do
+
+    call timestop(handle)
 
   end subroutine fat_pws_create_frag
 
@@ -197,14 +219,18 @@ contains
 
     character(len=*), parameter :: routinen = "fat_pws_create_ref"
 
-    integer :: i
+    integer :: i, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     allocate(pws(n))
     do i = 1, n
        call fat_pw_create_ref(fat_env, pws(i), rspace)
     end do
+
+    call timestop(handle)
 
   end subroutine fat_pws_create_ref
 
@@ -219,9 +245,11 @@ contains
     character(len=*), parameter :: routinen = "fat_pws_release_frag"
 
     type(pw_type), pointer :: pw_tmp
-    integer :: i
+    integer :: i, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     do i = 1, size(pws)
        pw_tmp => pws(i)
@@ -229,6 +257,8 @@ contains
     end do
 
     if (is_debug) print *, "DBG| released"
+
+    call timestop(handle)
 
   end subroutine fat_pws_release_frag
 
@@ -241,9 +271,11 @@ contains
 
     character(len=*), parameter :: routinen = "fat_pws_release_ref"
 
-    integer :: i
+    integer :: i, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     do i = 1, size(pws)
        call fat_pw_release_ref(fat_env, pws(i))
@@ -251,6 +283,8 @@ contains
     DEALLOCATE(pws)
 
     if (is_debug) print *, "DBG| released"
+
+    call timestop(handle)
 
   end subroutine fat_pws_release_ref
 
@@ -270,8 +304,11 @@ contains
     type(pw_type), pointer :: rho_tmp
     type(qs_environment_type), pointer :: qs_env
     type(qs_rho_type), pointer :: qs_rho
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     if (present(rspace)) then
        my_rspace = rspace
@@ -303,9 +340,10 @@ contains
     end if
 
 !   if (is_debug) call print_pw_statistics(rho(1), "rho", i_frag)
+!
+    call timestop(handle)
 
   end subroutine fat_rho_frag
-
 
   subroutine write_pw_r_to_cube(fat_env, pw, filename)
     type(fat_env_type), intent(in) :: fat_env
@@ -534,11 +572,16 @@ contains
     character(len=*), parameter :: routinen = "fat_rhon_frag"
 
     type(qs_environment_type), pointer :: qs_env
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
+    call timeset(routinen, handle)
+
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call get_qs_env(qs_env=qs_env, rho_core=rhon)
+
+    call timestop(handle)
 
   end subroutine fat_rhon_frag
 
@@ -554,11 +597,16 @@ contains
     character(len=*), parameter :: routinen = "fat_rhon_frag"
 
     type(qs_environment_type), pointer :: qs_env
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
+    call timeset(routinen, handle)
+
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call calculate_drho_core(drhon, qs_env, i_dir, i_nuc)
+
+    call timestop(handle)
 
   end subroutine fat_drhon_frag
 
@@ -577,8 +625,11 @@ contains
     type(pw_type), pointer :: drho_g
     type(qs_environment_type), pointer :: qs_env
     type(qs_rho_type), pointer :: rho
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call get_qs_env(qs_env, rho=rho)
@@ -587,6 +638,8 @@ contains
     call calculate_drho_elec_dR( &
          p_mat(1)%matrix, drho=drho, drho_gspace=drho_g, qs_env=qs_env, beta=i_dir, lambda=i_nuc)
     call fat_pw_release_frag(fat_env, drho_g, i_frag)
+
+    call timestop(handle)
 
   end subroutine fat_drho_frag
 
@@ -599,10 +652,12 @@ contains
 
     character(len=*), parameter :: routinen = "fat_rho_ref"
 
-    integer :: i, j
     type(pw_type), pointer :: pw_tmp(:)
+    integer :: i, j, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     do i = 1, fat_env%n_frag
        call fat_rho_frag(fat_env, pw_tmp, i)
@@ -610,6 +665,8 @@ contains
           call pw_axpy(pw_tmp(j), pw(j), allow_noncompatible_grids=.true.)
        end do
     end do
+
+    call timestop(handle)
 
   end subroutine fat_rho_ref
 
@@ -630,9 +687,11 @@ contains
     type(section_vals_type), pointer :: input, kin_section
     type(xc_rho_cflags_type) :: needs
     logical :: use_gga = .false.
-    integer :: i
+    integer :: i, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     ! Get XC section for kinetic
     qs_env => fat_env%force_env_ref%qs_env
@@ -681,6 +740,8 @@ contains
        deallocate(rho_g)
     end if
 
+    call timestop(handle)
+
   end subroutine fat_v_ts_frag
 
 ! **************************************************************************************************
@@ -699,9 +760,11 @@ contains
     type(section_vals_type), pointer :: input, kin_section
     type(xc_rho_cflags_type) :: needs
     logical :: use_gga = .false.
-    integer :: i
+    integer :: i, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     ! Get XC section for Kinetic
     qs_env => fat_env%force_env_ref%qs_env
@@ -753,6 +816,8 @@ contains
 
     call fat_pws_release_ref(fat_env, rho_r)
 
+    call timestop(handle)
+
   end subroutine fat_v_ts_ref
 
 ! **************************************************************************************************
@@ -774,9 +839,11 @@ contains
     type(section_vals_type), pointer :: input, xc_section
     type(xc_rho_cflags_type) :: needs
     logical :: use_gga = .false.
-    integer :: i
+    integer :: i, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     ! Get XC section
     qs_env => fat_env%force_env_ref%qs_env
@@ -829,6 +896,8 @@ contains
         deallocate(rho_g)
     end if
 
+    call timestop(handle)
+
   end subroutine fat_v_xc_frag
 
 ! **************************************************************************************************
@@ -849,9 +918,11 @@ contains
     type(section_vals_type), pointer :: input, xc_section
     type(xc_rho_cflags_type) :: needs
     logical :: use_gga = .false.
-    integer :: i
+    integer :: i, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     ! Get XC section for XC
     qs_env => fat_env%force_env_ref%qs_env
@@ -911,6 +982,8 @@ contains
     ! Cleanup
     call fat_pws_release_ref(fat_env, rho_r)
 
+    call timestop(handle)
+
   end subroutine fat_v_xc_ref
 
 ! **************************************************************************************************
@@ -928,8 +1001,11 @@ contains
     type(pw_poisson_type), pointer :: poisson_env
     type(pw_type), pointer :: rho_g(:), v_g(:)
     type(qs_environment_type), pointer :: qs_env
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     nullify(rho_g)
     call fat_rho_frag(fat_env, rho_g, i_frag, .false.)
@@ -957,6 +1033,8 @@ contains
     call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(v_g(1))
     deallocate(v_g)
 
+    call timestop(handle)
+
   end subroutine fat_v_e_frag
 ! **************************************************************************************************
 !> \brief Calculate nuclear potential for one fragment in the freeze-and-thaw environment
@@ -973,8 +1051,11 @@ contains
     type(pw_poisson_type), pointer :: poisson_env
     type(pw_type), pointer :: rho_g(:), v_g(:), rho_core
     type(qs_environment_type), pointer :: qs_env
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     allocate(rho_g(1))
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
@@ -1002,6 +1083,8 @@ contains
     deallocate(rho_g)
     deallocate(v_g)
 
+    call timestop(handle)
+
   end subroutine fat_v_n_frag
 
 ! **************************************************************************************************
@@ -1016,8 +1099,11 @@ contains
     character(len=*), parameter :: routinen = "fat_vemb_tsna_frag"
 
     type(pw_type), pointer :: v(:), v_gga(:)
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     call pw_zero(vemb)
 
@@ -1043,6 +1129,8 @@ contains
        call fat_pws_release_frag(fat_env, v_gga, i_frag)
     end if
 
+    call timestop(handle)
+
   end subroutine fat_vemb_tsna_frag
 
 ! **************************************************************************************************
@@ -1057,8 +1145,11 @@ contains
     character(len=*), parameter :: routinen = "fat_vemb_xcna_frag"
 
     type(pw_type), pointer :: v(:), v_gga(:)
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     call pw_zero(vemb)
 
@@ -1089,6 +1180,8 @@ contains
        call fat_pws_release_frag(fat_env, v_gga, i_frag)
     end if
 
+    call timestop(handle)
+
   end subroutine fat_vemb_xcna_frag
 
 ! **************************************************************************************************
@@ -1101,11 +1194,13 @@ contains
 
     character(len=*), parameter :: routinen = "fat_vemb_e_frag"
 
-    integer :: i
+    integer :: i, handle
     type(pw_type), pointer :: v, v_sum
     real(kind=dp) :: integral_value
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     call pw_zero(vemb)
 
@@ -1134,6 +1229,8 @@ contains
 
     call fat_pw_release_frag(fat_env, v_sum, i_frag)
 
+    call timestop(handle)
+
   end subroutine fat_vemb_e_frag
 ! **************************************************************************************************
 !> \brief Calculate nuclear embedding potential for one fragment in the freeze-and-thaw environment
@@ -1145,13 +1242,13 @@ contains
 
     character(len=*), parameter :: routinen = "fat_vemb_n_frag"
 
-    integer :: i
+    integer :: i, handle
     type(pw_type), pointer :: v, v_sum
     real(kind=dp) :: integral_value
 
-    if (is_debug) then
-       print *, "DBG| ", modulen//"::"//routinen
-    end if
+    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     call pw_zero(vemb)
 
@@ -1180,6 +1277,8 @@ contains
 
     call fat_pw_release_frag(fat_env, v_sum, i_frag)
 
+    call timestop(handle)
+
   end subroutine fat_vemb_n_frag
 
 ! **************************************************************************************************
@@ -1205,8 +1304,11 @@ contains
       rho(:), vemb_tsna, vemb_xcna, vemb_ee, vemb_ne, weights
     type(qs_environment_type), pointer :: qs_env
     type(qs_subsys_type), pointer :: subsys
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     ! Get the electron density for the current fragment
     call fat_rho_frag(fat_env, rho, i_frag)
@@ -1281,6 +1383,8 @@ contains
         call fat_pw_release_frag(fat_env, weights, i_frag)
       end if
     end if
+
+    call timestop(handle)
 
   end subroutine fat_vemb_frag
 
@@ -1357,8 +1461,11 @@ contains
     character(len=*), parameter :: routinen = "fat_eint_ee"
 
     type(pw_type), pointer :: v_ee, rho, rho_tmp(:)
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     call fat_pw_create_frag(fat_env, v_ee, i)
     call fat_v_e_frag(fat_env, v_ee, i)
@@ -1371,6 +1478,8 @@ contains
 
     call fat_pw_release_frag(fat_env, v_ee, i)
     call fat_pw_release_frag(fat_env, rho, i)
+
+    call timestop(handle)
 
   end function fat_eint_ee
 
@@ -1385,8 +1494,10 @@ contains
     character(len=*), parameter :: routinen = "fat_eint_ne"
 
     type(pw_type), pointer :: v, rho, rho_tmp(:)
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+    call timeset(routinen, handle)
 
     call fat_pw_create_frag(fat_env, v, i)
     call fat_v_n_frag(fat_env, v, i)
@@ -1399,6 +1510,8 @@ contains
 
     call fat_pw_release_frag(fat_env, v, i)
     call fat_pw_release_frag(fat_env, rho, i)
+
+    call timestop(handle)
 
   end function fat_eint_ne
 
@@ -1413,8 +1526,11 @@ contains
     character(len=*), parameter :: routinen = "fat_eint_nn"
 
     type(pw_type), pointer :: v, rho, rho_tmp
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     call fat_pw_create_frag(fat_env, v, i)
     call fat_v_n_frag(fat_env, v, i)
@@ -1429,6 +1545,8 @@ contains
 
     call fat_pw_release_frag(fat_env, v, i)
     call fat_pw_release_frag(fat_env, rho, i)
+
+    call timestop(handle)
 
   end function fat_eint_nn
 
@@ -1595,9 +1713,12 @@ contains
     type(pw_type), pointer :: rho(:), vemb, weights !, rho_tmp
     type(qs_energy_type), pointer :: energy
     type(qs_environment_type), pointer :: qs_env_tmp
+    integer :: handle
 !   character(len=100) :: filename
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen, " for frag:", i_frag
+
+    call timeset(routinen, handle)
 
     ! Get the force environment and system environment for current fragment
     force_env_tmp => fat_env%force_env_sub(i_frag)%force_env
@@ -1727,6 +1848,8 @@ contains
     ! Deallocate vemb potential
     call fat_pw_release_frag(fat_env, vemb, i_frag)
 
+    call timestop(handle)
+
   end subroutine fat_iterate_frag
 
 ! **************************************************************************************************
@@ -1737,9 +1860,11 @@ contains
 
     character(len=*), parameter :: routinen = "fat_iterate"
 
-    integer :: i_frag
+    integer :: i_frag, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     ! Loop over all fragments to optimize their densities with embedding effects
     do i_frag = 1, fat_env%n_frag
@@ -1753,6 +1878,8 @@ contains
 
     ! Increment iteration counter
     fat_env%i_iter = fat_env%i_iter + 1
+
+    call timestop(handle)
 
   end subroutine fat_iterate
 
@@ -1828,13 +1955,15 @@ contains
 
     character(len=*), parameter :: routinen = "fat_force_self"
 
-    integer :: i, i_atom, i_kind, j, k, n
+    integer :: i, i_atom, i_kind, j, k, n, handle
     integer, allocatable :: atom_of_kind(:), kind_of(:)
     type(atomic_kind_type), pointer :: kinds(:)
     type(qs_environment_type), pointer :: qs_env
     type(qs_force_type), pointer :: qs_force(:)
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     k = 0
     do i = 1, fat_env%n_frag
@@ -1851,6 +1980,8 @@ contains
        deallocate(atom_of_kind, kind_of)
     end do
 
+    call timestop(handle)
+
   end subroutine fat_force_self
 
 ! **************************************************************************************************
@@ -1862,12 +1993,14 @@ contains
 
     character(len=*), parameter :: routinen = "fat_force_emb"
 
-    integer :: a, i, j, k
+    integer :: a, i, j, k, handle
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
     type(pw_type), pointer :: v, drho
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
@@ -1887,6 +2020,8 @@ contains
        call fat_pw_release_frag(fat_env, v, i)
     end do
 
+    call timestop(handle)
+
   end subroutine fat_force_emb
 
 ! **************************************************************************************************
@@ -1898,12 +2033,14 @@ contains
 
     character(len=*), parameter :: routinen = "fat_force_tsna"
 
-    integer :: a, i, j, k
+    integer :: a, i, j, k, handle
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
     type(pw_type), pointer :: vemb, drho
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
@@ -1934,6 +2071,8 @@ contains
        call fat_pw_release_frag(fat_env, vemb, i)
 
     end do
+
+    call timestop(handle)
 
   end subroutine fat_force_tsna
 
