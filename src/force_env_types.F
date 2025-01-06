@@ -96,7 +96,7 @@ MODULE force_env_types
       "MIXED ", &
       "EMBED ", &
       "SIRIUS", &
-      "NNP   " /)
+      "NNP   "/)
 
    PUBLIC :: force_env_type, &
              force_env_p_type

@@ -127,7 +127,7 @@ MODULE force_env_methods
                                               subsys_spin
    USE optimize_embedding_potential,    ONLY: &
         Coulomb_guess, calculate_embed_pot_grad, conv_check_embed, get_max_subsys_diff, &
-        get_prev_density, init_embed_pot, make_subsys_embed_pot, max_dens_diff, opt_embed_step, &
+        get_prev_density, init_embed_pot, make_subsys_embed_pot, opt_embed_step, &
         prepare_embed_opt, print_emb_opt_info, print_embed_restart, print_pot_simple_grid, &
         print_rho_diff, print_rho_spin_diff, read_embed_pot, release_opt_embed, step_control, &
         understand_spin_states
@@ -139,18 +139,12 @@ MODULE force_env_methods
    USE pw_methods,                      ONLY: pw_axpy,&
                                               pw_copy,&
                                               pw_integral_ab,&
-                                              pw_set,&
-                                              pw_transfer,&
                                               pw_zero
    USE pw_poisson_methods,              ONLY: pw_poisson_solve
    USE pw_poisson_types,                ONLY: pw_poisson_type
-   USE pw_pool_types,                   ONLY: pw_pool_p_type,&
-                                              pw_pool_type
-   USE pw_types,                        ONLY: COMPLEXDATA1D,&
-                                              REALDATA3D,&
+   USE pw_pool_types,                   ONLY: pw_pool_type
+   USE pw_types,                        ONLY: REALDATA3D,&
                                               REALSPACE,&
-                                              RECIPROCALSPACE,&
-                                              pw_p_type,&
                                               pw_type
    USE pwdft_environment,               ONLY: pwdft_calc_energy_force
    USE pwdft_environment_types,         ONLY: pwdft_environment_type
@@ -164,12 +158,8 @@ MODULE force_env_methods
                                               qs_environment_type,&
                                               set_qs_env
    USE qs_force,                        ONLY: qs_calc_energy_force
-   USE qs_force_types,                  ONLY: qs_force_type
-   USE qs_ks_types,                     ONLY: qs_ks_env_type
-   USE qs_ks_methods,                   ONLY: calc_rho_tot_gspace
    USE qs_rho_types,                    ONLY: qs_rho_get,&
                                               qs_rho_type
-   USE qs_vxc,                          ONLY: qs_vxc_create
    USE restraint,                       ONLY: restraint_control
    USE scine_utils,                     ONLY: write_scine
    USE string_utilities,                ONLY: compress
@@ -179,7 +169,6 @@ MODULE force_env_methods
                                               virial_p_type,&
                                               virial_type,&
                                               zero_virial
-   USE xc,                              ONLY: xc_vxc_pw_create
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -204,7 +193,7 @@ CONTAINS
 !> \param consistent_energies Performs an additional qs_ks_update_qs_env, so
 !>          that the energies are appropriate to the forces, they are in the
 !>          non-selfconsistent case not consistent to each other! [08.2005, TdK]
-!> \param skip_external_control ..x.
+!> \param skip_external_control ...
 !> \param eval_energy_forces ...
 !> \param require_consistent_energy_force ...
 !> \param linres ...
@@ -301,7 +290,6 @@ CONTAINS
                                        calculate_forces)
          CASE (use_embed)
             CALL embed_energy(force_env)
-
          CASE default
             CPABORT("")
          END SELECT
@@ -1503,8 +1491,7 @@ CONTAINS
             IF (dft_control%qs_control%ref_embed_subsys) THEN
                ! Now we can optimize the embedding potential
                CALL dft_embedding(force_env, iforce_eval, energies, converged_embed)
-               ! IF (.NOT. converged_embed) CPABORT("Embedding potential optimization not converged.")
-               IF (.NOT. converged_embed) CPWARN("Embedding potential optimization not converged.")
+               IF (.NOT. converged_embed) CPABORT("Embedding potential optimization not converged.")
             END IF
             ! Deallocate embedding potential on the high-level subsystem
             IF (dft_control%qs_control%high_level_embed_subsys) THEN

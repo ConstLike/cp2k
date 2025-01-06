@@ -41,8 +41,7 @@ MODULE optimize_embedding_potential
                                               cp_pw_to_simple_volumetric
    USE dbcsr_api,                       ONLY: dbcsr_p_type
    USE embed_types,                     ONLY: opt_embed_pot_type
-   USE force_env_types,                 ONLY: force_env_p_type,&
-                                              force_env_type
+   USE force_env_types,                 ONLY: force_env_type
    USE input_constants,                 ONLY: &
         embed_diff, embed_fa, embed_grid_angstrom, embed_grid_bohr, embed_level_shift, embed_none, &
         embed_quasi_newton, embed_resp, embed_steep_desc
@@ -83,7 +82,6 @@ MODULE optimize_embedding_potential
    USE qs_kind_types,                   ONLY: get_qs_kind,&
                                               qs_kind_type
    USE qs_kinetic,                      ONLY: build_kinetic_matrix
-   USE qs_ks_methods,                   ONLY: calc_rho_tot_gspace
    USE qs_ks_types,                     ONLY: qs_ks_env_type
    USE qs_mo_types,                     ONLY: get_mo_set,&
                                               mo_set_type
@@ -92,7 +90,6 @@ MODULE optimize_embedding_potential
                                               qs_rho_type
    USE qs_subsys_types,                 ONLY: qs_subsys_get,&
                                               qs_subsys_type
-   USE qs_vxc,                          ONLY: qs_vxc_create
    USE xc,                              ONLY: smooth_cutoff
    USE xc_rho_cflags_types,             ONLY: xc_rho_cflags_setall,&
                                               xc_rho_cflags_type

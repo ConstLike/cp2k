@@ -27,7 +27,6 @@ MODULE input_cp2k_force_eval
                                               create_dft_section
    USE input_cp2k_eip,                  ONLY: create_eip_section
    USE input_cp2k_embed,                ONLY: create_embed_section
-   USE input_cp2k_extern,               ONLY: create_extern_section
    USE input_cp2k_mixed,                ONLY: create_mix_section
    USE input_cp2k_mm,                   ONLY: create_mm_section
    USE input_cp2k_nnp,                  ONLY: create_nnp_section
@@ -101,8 +100,7 @@ CONTAINS
                                         "Neural Network Potentials", &
                                         "Use a combination of two of the above", &
                                         "Perform an embedded calculation"), &
-                                        enum_i_vals=(/do_qs, do_sirius, do_fist, do_qmmm, do_eip, do_qs, do_nnp, &
-                                                      do_mixed, do_embed/), &
+                          enum_i_vals=(/do_qs, do_sirius, do_fist, do_qmmm, do_eip, do_qs, do_nnp, do_mixed, do_embed/), &
                           default_i_val=do_qs)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -177,10 +175,6 @@ CONTAINS
       CALL section_release(subsection)
 
       CALL create_f_env_print_section(subsection)
-      CALL section_add_subsection(section, subsection)
-      CALL section_release(subsection)
-
-      CALL create_extern_section(subsection)
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 

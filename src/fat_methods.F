@@ -751,7 +751,6 @@ contains
         deallocate(rho_g)
     end if
 
-
     call fat_pws_release_ref(fat_env, rho_r)
 
   end subroutine fat_v_ts_ref

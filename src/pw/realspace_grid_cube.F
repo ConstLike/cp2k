@@ -17,7 +17,6 @@ MODULE realspace_grid_cube
         file_amode_rdonly, file_offset, mp_comm_type, mp_file_descriptor_type, mp_file_type, &
         mp_file_type_free, mp_file_type_hindexed_make_chv, mp_file_type_set_view_chv, &
         mpi_character_size
-   USE physcon,                         ONLY: angstrom
    USE pw_grid_types,                   ONLY: PW_MODE_LOCAL
    USE pw_types,                        ONLY: pw_type
 #include "../base/base_uses.f90"
@@ -867,14 +866,10 @@ CONTAINS
       ! Write the header: number of points and number of spins
       ngrids = 1
       IF (DOUBLE) ngrids = 2
-      npoints = ((pw%pw_grid%npts(1)+my_stride(1)-1)/my_stride(1))* &
-                ((pw%pw_grid%npts(2)+my_stride(2)-1)/my_stride(2))* &
-                ((pw%pw_grid%npts(3)+my_stride(3)-1)/my_stride(3))
-!     npoints = ((pw%pw_grid%npts(1))/my_stride(1))* &
-!               ((pw%pw_grid%npts(2))/my_stride(2))* &
-!               ((pw%pw_grid%npts(3))/my_stride(3))
-      !IF (unit_nr > 1) WRITE (unit_nr, '(I7,I5)') npoints, ngrids
-      IF (unit_nr > 1) WRITE (unit_nr, '(I8)') npoints
+      npoints = ((pw%pw_grid%npts(1) + my_stride(1) - 1)/my_stride(1))* &
+                ((pw%pw_grid%npts(2) + my_stride(2) - 1)/my_stride(2))* &
+                ((pw%pw_grid%npts(3) + my_stride(3) - 1)/my_stride(3))
+      IF (unit_nr > 1) WRITE (unit_nr, '(I7,I5)') npoints, ngrids
 
       ALLOCATE (buf(L3:U3))
       IF (DOUBLE) ALLOCATE (buf2(L3:U3))
