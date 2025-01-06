@@ -310,7 +310,8 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="FAT_EXTERN", &
-                          description="Flag to use external program for subsystem calculations in FAT embedding instead of internal DFT. ", &
+                          description="Flag to use external program for subsystem calculations in "// &
+                          "FAT embedding instead of internal DFT. ", &
                           usage="FAT_EXTERN FALSE", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
