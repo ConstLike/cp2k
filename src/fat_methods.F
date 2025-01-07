@@ -149,11 +149,13 @@ contains
     CPASSERT(PRESENT(pw_r) .OR. PRESENT(pw_g))
 
     IF (PRESENT(pw_r)) THEN
+       CPASSERT(ASSOCIATED(pw_r))
        call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(pw_r)
        deallocate(pw_r)
     END IF
 
     IF (PRESENT(pw_g)) THEN
+       CPASSERT(ASSOCIATED(pw_g))
        call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(pw_g)
        deallocate(pw_g)
     END IF
@@ -255,6 +257,7 @@ contains
     CPASSERT(PRESENT(pws_r) .OR. PRESENT(pws_g))
 
     IF (PRESENT(pws_r)) THEN
+       CPASSERT(ASSOCIATED(pws_r))
        do i = 1, size(pws_r)
           pw_r_tmp => pws_r(i)
           call fat_pw_release_frag(fat_env, pw_r=pw_r_tmp, i_frag=i_frag)
@@ -262,6 +265,7 @@ contains
     END IF
 
     IF (PRESENT(pws_g)) THEN
+       CPASSERT(ASSOCIATED(pws_g))
        do i = 1, size(pws_g)
           pw_g_tmp => pws_g(i)
           call fat_pw_release_frag(fat_env, pw_g=pw_g_tmp, i_frag=i_frag)
@@ -293,6 +297,7 @@ contains
     CPASSERT(PRESENT(pws_r) .OR. PRESENT(pws_g))
 
     IF (PRESENT(pws_r)) THEN
+       CPASSERT(ASSOCIATED(pws_r))
        do i = 1, size(pws_r)
           call fat_pw_release_ref(fat_env, pw_r=pws_r(i))
        END DO
@@ -300,6 +305,7 @@ contains
     END IF
 
     IF (PRESENT(pws_g)) THEN
+       CPASSERT(ASSOCIATED(pws_g))
        do i = 1, size(pws_g)
           call fat_pw_release_ref(fat_env, pw_g=pws_g(i))
        END DO
@@ -339,10 +345,12 @@ contains
     call get_qs_env(qs_env, rho=qs_rho)
 
     IF (PRESENT(rho_r)) THEN
+       NULLIFY(rho_r)
        CALL qs_rho_get(qs_rho, rho_r=rho_r)
     END IF
 
     IF (PRESENT(rho_g)) THEN
+       NULLIFY(rho_g)
        CALL qs_rho_get(qs_rho, rho_g=rho_g)
     END IF
 
@@ -586,6 +594,8 @@ contains
 
     call timeset(routinen, handle)
 
+    NULLIFY(rhon_g)
+
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call get_qs_env(qs_env=qs_env, rho_core=rhon_g)
 
@@ -597,12 +607,12 @@ contains
 !> \brief Gets the gradient of the nuclear density w.r.t. a nuclear position for one fragment in the
 !>        freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_drhon_frag(fat_env, drhon_g, i_frag, i_nuc, i_dir)
+  subroutine fat_get_drhon_frag(fat_env, drhon_g, i_frag, i_nuc, i_dir)
     type(fat_env_type), pointer :: fat_env
     type(pw_type), pointer :: drhon_g
     integer :: i_frag, i_nuc, i_dir
 
-    character(len=*), parameter :: routinen = "fat_rhon_frag"
+    character(len=*), parameter :: routinen = "fat_get_drhon_frag"
 
     type(qs_environment_type), pointer :: qs_env
     integer :: handle
@@ -616,40 +626,42 @@ contains
 
     call timestop(handle)
 
-  end subroutine fat_drhon_frag
+  end subroutine fat_get_drhon_frag
 
 ! **************************************************************************************************
 !> \brief Gets the gradient of the electronic density w.r.t. a nuclear position for one fragment in
 !>        the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_drho_frag(fat_env, drho_r, i_frag, i_nuc, i_dir)
+  subroutine fat_get_drho_frag(fat_env, drho_r,  drho_g, i_frag, i_nuc, i_dir)
     type(fat_env_type), pointer :: fat_env
     type(pw_type), pointer :: drho_r
+    type(pw_type), pointer :: drho_g
     integer :: i_frag, i_nuc, i_dir
 
-    character(len=*), parameter :: routinen = "fat_drho_frag"
+    character(len=*), parameter :: routinen = "fat_get_drho_frag"
 
-    type(dbcsr_p_type), pointer :: p_mat(:)
-    type(pw_type), pointer :: drho_g_tmp
     type(qs_environment_type), pointer :: qs_env
-    type(qs_rho_type), pointer :: rho
+    type(dbcsr_p_type), pointer :: p_mat(:)
+    type(qs_rho_type), pointer :: rho_r
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     call timeset(routinen, handle)
 
+    CPASSERT(ASSOCIATED(drho_r) .AND. ASSOCIATED(drho_g))
+
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
-    call get_qs_env(qs_env, rho=rho)
-    call qs_rho_get(rho, rho_ao=p_mat)
-    call fat_pw_create_frag(fat_env, pw_g=drho_g_tmp, i_frag=i_frag)
+    call get_qs_env(qs_env, rho=rho_r)
+    call qs_rho_get(rho_r, rho_ao=p_mat)
+
     call calculate_drho_elec_dR( &
-         p_mat(1)%matrix, drho=drho_r, drho_gspace=drho_g_tmp, qs_env=qs_env, beta=i_dir, lambda=i_nuc)
-    call fat_pw_release_frag(fat_env, pw_g=drho_g_tmp, i_frag=i_frag)
+       p_mat(1)%matrix, drho=drho_r, drho_gspace=drho_g, &
+       qs_env=qs_env, beta=i_dir, lambda=i_nuc)
 
     call timestop(handle)
 
-  end subroutine fat_drho_frag
+  end subroutine fat_get_drho_frag
 
 ! **************************************************************************************************
 !> \brief Gets the total electron density for the freeze-and-thaw environment
@@ -2004,7 +2016,9 @@ contains
     integer :: a, i, j, k, handle
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: v, drho
+    type(pw_type), pointer :: v_r
+    type(pw_type), pointer :: drho_r
+    type(pw_type), pointer :: drho_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2012,20 +2026,20 @@ contains
 
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
-       call fat_pw_create_frag(fat_env, pw_r=v, i_frag=i)
-       call fat_vemb_frag(fat_env, v, i, .true.)
+       call fat_pw_create_frag(fat_env, pw_r=v_r, i_frag=i)
+       call fat_vemb_frag(fat_env, v_r, i, .true.)
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho, i_frag=i)
-             call fat_drho_frag(fat_env, drho, i, j, a)
-             forces(k, a) = pw_integral_ab(v, drho)
-             call fat_pw_release_frag(fat_env, pw_r=drho, i_frag=i)
+             call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
+             forces(k, a) = pw_integral_ab(v_r, drho_r)
+             call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
           end do
        end do
-       call fat_pw_release_frag(fat_env, pw_r=v, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=v_r, i_frag=i)
     end do
 
     call timestop(handle)
@@ -2044,7 +2058,9 @@ contains
     integer :: a, i, j, k, handle
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: vemb, drho
+    type(pw_type), pointer :: vemb_r
+    type(pw_type), pointer :: drho_r
+    type(pw_type), pointer :: drho_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2054,10 +2070,10 @@ contains
     do i = 1, fat_env%n_frag  ! fragments
 
       ! Create embedding potential
-       call fat_pw_create_frag(fat_env, pw_r=vemb, i_frag=i)
+       call fat_pw_create_frag(fat_env, pw_r=vemb_r, i_frag=i)
 
        ! Calculate total embedding potential (includes both LDA and GGA if present)
-       CALL fat_vemb_tsna_frag(fat_env=fat_env, vemb=vemb, i_frag=i)
+       CALL fat_vemb_tsna_frag(fat_env=fat_env, vemb=vemb_r, i_frag=i)
 
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
@@ -2065,18 +2081,18 @@ contains
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho, i_frag=i)
-             call fat_drho_frag(fat_env, drho, i, j, a)
+             call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
 
              ! Total force contribution (LDA + GGA if present)
-             forces(k, a) = pw_integral_ab(vemb, drho)
+             forces(k, a) = pw_integral_ab(vemb_r, drho_r)
 
-             call fat_pw_release_frag(fat_env, pw_r=drho, i_frag=i)
+             call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
           end do
        end do
 
        ! Release potential
-       call fat_pw_release_frag(fat_env, pw_r=vemb, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=vemb_r, i_frag=i)
 
     end do
 
@@ -2096,7 +2112,9 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: vemb, drho
+    type(pw_type), pointer :: vemb_r
+    type(pw_type), pointer :: drho_r
+    type(pw_type), pointer :: drho_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2104,10 +2122,10 @@ contains
     do i = 1, fat_env%n_frag  ! fragments
 
       ! Create embedding potential
-       call fat_pw_create_frag(fat_env, pw_r=vemb, i_frag=i)
+       call fat_pw_create_frag(fat_env, pw_r=vemb_r, i_frag=i)
 
        ! Calculate total embedding potential (includes both LDA and GGA if present)
-       call fat_vemb_xcna_frag(fat_env=fat_env, vemb=vemb, i_frag=i)
+       call fat_vemb_xcna_frag(fat_env=fat_env, vemb=vemb_r, i_frag=i)
 
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
@@ -2115,18 +2133,18 @@ contains
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho, i_frag=i)
-             call fat_drho_frag(fat_env, drho, i, j, a)
+             call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
 
              ! Total force contribution (LDA + GGA if present)
-             forces(k, a) = pw_integral_ab(vemb, drho)
+             forces(k, a) = pw_integral_ab(vemb_r, drho_r)
 
-             call fat_pw_release_frag(fat_env, pw_r=drho, i_frag=i)
+             call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
           end do
        end do
 
        ! Release potential
-       call fat_pw_release_frag(fat_env, pw_r=vemb, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=vemb_r, i_frag=i)
 
     end do
 
@@ -2144,26 +2162,28 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: v, drho
+    type(pw_type), pointer :: v_r
+    type(pw_type), pointer :: drho_r
+    type(pw_type), pointer :: drho_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
-       call fat_pw_create_frag(fat_env, pw_r=v, i_frag=i)
-       call fat_vemb_e_frag(fat_env, v, i)
+       call fat_pw_create_frag(fat_env, pw_r=v_r, i_frag=i)
+       call fat_vemb_e_frag(fat_env, v_r, i)
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho, i_frag=i)
-             call fat_drho_frag(fat_env, drho, i, j, a)
-             forces(k, a) = pw_integral_ab(v, drho)
-             call fat_pw_release_frag(fat_env, pw_r=drho, i_frag=i)
+             call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
+             forces(k, a) = pw_integral_ab(v_r, drho_r)
+             call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
           end do
        end do
-       call fat_pw_release_frag(fat_env, pw_r=v, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=v_r, i_frag=i)
     end do
 
   end subroutine fat_force_ee
@@ -2180,20 +2200,21 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: ve
-    type(pw_type), pointer :: vn
-    type(pw_type), pointer :: drho_r_tmp
-    type(pw_type), pointer :: drhon_g_tmp
+    type(pw_type), pointer :: ve_r
+    type(pw_type), pointer :: vn_r
+    type(pw_type), pointer :: drho_r
+    type(pw_type), pointer :: drho_g
+    type(pw_type), pointer :: drhon_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
-       call fat_pw_create_frag(fat_env, pw_r=ve, i_frag=i)
-       call fat_vemb_e_frag(fat_env, ve, i)
+       call fat_pw_create_frag(fat_env, pw_r=ve_r, i_frag=i)
+       call fat_vemb_e_frag(fat_env, ve_r, i)
 
-       call fat_pw_create_frag(fat_env, pw_r=vn, i_frag=i)
-       call fat_vemb_n_frag(fat_env, vn, i)
+       call fat_pw_create_frag(fat_env, pw_r=vn_r, i_frag=i)
+       call fat_vemb_n_frag(fat_env, vn_r, i)
 
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
 
@@ -2201,20 +2222,20 @@ contains
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho_r_tmp, i_frag=i)
-             call fat_drho_frag(fat_env, drho_r_tmp, i, j, a)
-             forces(k, a) = pw_integral_ab(vn, drho_r_tmp)
-             call fat_pw_release_frag(fat_env, pw_r=drho_r_tmp, i_frag=i)
+             call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
+             forces(k, a) = pw_integral_ab(vn_r, drho_r)
+             call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
 
-             call fat_pw_create_frag(fat_env, pw_r=drhon_g_tmp, i_frag=i)
-             call fat_drhon_frag(fat_env, drhon_g_tmp, i, j, a)
-             forces(k, a) = pw_integral_ab(ve, drhon_g_tmp)
-             call fat_pw_release_frag(fat_env, pw_r=drhon_g_tmp, i_frag=i)
+             call fat_pw_create_frag(fat_env, pw_r=drhon_g, i_frag=i)
+             call fat_get_drhon_frag(fat_env, drhon_g=drhon_g, i_frag=i, i_nuc=j, i_dir=a)
+             forces(k, a) = pw_integral_ab(ve_r, drhon_g)
+             call fat_pw_release_frag(fat_env, pw_g=drhon_g, i_frag=i)
           end do
        end do
 
-       call fat_pw_release_frag(fat_env, pw_r=ve, i_frag=i)
-       call fat_pw_release_frag(fat_env, pw_r=vn, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=ve_r, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=vn_r, i_frag=i)
     end do
 
   end subroutine fat_force_ne
@@ -2245,7 +2266,7 @@ contains
           k = k + 1
           do a = 1, 3  ! xyz
              call fat_pw_create_frag(fat_env, pw_r=drho, i_frag=i)
-             call fat_drhon_frag(fat_env, drho, i, j, a)
+             call fat_get_drhon_frag(fat_env, drhon_g=drho, i_frag=i, i_nuc=j, i_dir=a)
              forces(k, a) = pw_integral_ab(v, drho)
              call fat_pw_release_frag(fat_env, pw_r=drho, i_frag=i)
           end do
