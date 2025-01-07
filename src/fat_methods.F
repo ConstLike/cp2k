@@ -315,53 +315,53 @@ contains
 ! **************************************************************************************************
 !> \brief Gets the electron density for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_rho_frag(fat_env, rho, i_frag, rspace)
+  subroutine fat_rho_frag(fat_env, rho_r, rho_g, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: rho(:)
+    type(pw_type), optional, pointer :: rho_r(:)
+    type(pw_type), optional, pointer :: rho_g(:)
     integer :: i_frag
-    logical, optional :: rspace
 
     character(len=*), parameter :: routinen = "fat_rho_frag"
 
     character(len=default_string_length) :: label
-    logical :: my_rspace
-    type(pw_type), pointer :: rho_r_tmp
     type(qs_environment_type), pointer :: qs_env
     type(qs_rho_type), pointer :: qs_rho
+    type(pw_type), pointer :: rho_r_tmp
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     call timeset(routinen, handle)
 
-    if (present(rspace)) then
-       my_rspace = rspace
-    else
-       my_rspace = .true.
-    end if
+    CPASSERT(PRESENT(rho_r) .OR. PRESENT(rho_g))
 
-    ! Initialize rho with correct data structure and grid mappings
-    ! This is required even for external density to ensure proper parallel setup
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call get_qs_env(qs_env, rho=qs_rho)
-    if (my_rspace) then
-       call qs_rho_get(qs_rho, rho_r=rho)
-    else
-       call qs_rho_get(qs_rho, rho_g=rho)
-    end if
 
-    ! We map external density into the properly initialized rho
-    if (fat_env%extern(i_frag)) then
-       call integer_to_string(i_frag, label)
-       if (my_rspace) then
-          call cp_cube_to_pw(rho(1), "extern_"//trim(label)//".cube", 1.0_dp, .false.)
-       else
-          call fat_pw_create_frag(fat_env, pw_r=rho_r_tmp, i_frag=i_frag)
-          call cp_cube_to_pw(rho_r_tmp, "extern_"//trim(label)//".cube", 1.0_dp, .false.)
-          call pw_transfer(rho_r_tmp, rho(1))
-          call fat_pw_release_frag(fat_env, pw_r=rho_r_tmp, i_frag=i_frag)
-       end if
-    end if
+    IF (PRESENT(rho_r)) THEN
+       CALL qs_rho_get(qs_rho, rho_r=rho_r)
+    END IF
+
+    IF (PRESENT(rho_g)) THEN
+       CALL qs_rho_get(qs_rho, rho_g=rho_g)
+    END IF
+
+    IF (fat_env%extern(i_frag)) THEN
+
+       CALL integer_to_string(i_frag, label)
+
+       IF (PRESENT(rho_r)) THEN
+          CALL cp_cube_to_pw(rho_r(1), "extern_"//TRIM(label)//".cube", 1.0_dp, .FALSE.)
+       END IF
+
+       IF (PRESENT(rho_g)) THEN
+          CALL fat_pw_create_frag(fat_env, pw_r=rho_r_tmp, i_frag=i_frag)
+          CALL cp_cube_to_pw(rho_r_tmp, "extern_"//TRIM(label)//".cube", 1.0_dp, .FALSE.)
+          CALL pw_transfer(rho_r_tmp, rho_g(1))
+          CALL fat_pw_release_frag(fat_env, pw_r=rho_r_tmp, i_frag=i_frag)
+       END IF
+
+    END IF
 
 !   if (is_debug) call print_pw_statistics(rho(1), "rho", i_frag)
 !
@@ -369,12 +369,12 @@ contains
 
   end subroutine fat_rho_frag
 
-  subroutine write_pw_r_to_cube(fat_env, pw, filename)
-    type(fat_env_type), intent(in) :: fat_env
-    type(pw_type), intent(in) :: pw
+  subroutine write_pw_to_cube(fat_env, pw_r, pw_g, filename)
+    type(fat_env_type), pointer :: fat_env
+    type(pw_type), optional, pointer :: pw_r
+    type(pw_type), optional, pointer :: pw_g
     character(len=*), intent(in) :: filename
 
-    integer :: unit_nr
     type(cp_logger_type), pointer :: logger
     TYPE(particle_list_type), POINTER :: particles
     type(particle_type), dimension(:), pointer :: particle_set
@@ -383,7 +383,11 @@ contains
     type(pw_env_type), pointer :: pw_env
     type(qs_subsys_type), pointer :: subsys
     type(pw_pool_type), pointer :: pw_pool
+    type(pw_type), pointer :: pw_r_tmp
     integer, pointer :: stride(:)
+    integer :: unit_nr
+
+    CPASSERT(PRESENT(pw_r) .OR. PRESENT(pw_g))
 
     logger => cp_get_default_logger()
     unit_nr = cp_logger_get_default_io_unit(logger)
@@ -393,74 +397,53 @@ contains
 
     print *, "KKK| write CUBE file number:", filename
 
-    if (unit_nr > 0) then
-      qs_env => fat_env%force_env_ref%qs_env
+    IF (PRESENT(pw_r)) THEN
+       if (unit_nr > 0) then
+          qs_env => fat_env%force_env_ref%qs_env
 
-      CALL get_qs_env(qs_env=qs_env, dft_control=dft_control, pw_env=pw_env, &
-                      particle_set=particle_set, subsys=subsys)
-      CALL pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
-      CALL qs_subsys_get(subsys, particles=particles)
+          CALL get_qs_env(qs_env=qs_env, dft_control=dft_control, pw_env=pw_env, &
+                          particle_set=particle_set, subsys=subsys)
+          CALL pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
+          CALL qs_subsys_get(subsys, particles=particles)
 
-      allocate(stride(3))
-      stride = [1, 1, 1]
+          allocate(stride(3))
+          stride = [1, 1, 1]
 
-      call open_file(file_name=trim(filename), file_status="REPLACE", &
-                     file_action="WRITE", unit_number=unit_nr)
-      call cp_pw_to_cube(pw, unit_nr, trim(filename), particles=particles, stride=stride)
-      call close_file(unit_number=unit_nr)
-      deallocate(stride)
-    end if
-  end subroutine write_pw_r_to_cube
+          call open_file(file_name=trim(filename), file_status="REPLACE", &
+                         file_action="WRITE", unit_number=unit_nr)
+          call cp_pw_to_cube(pw_r, unit_nr, trim(filename), particles=particles, stride=stride)
+          call close_file(unit_number=unit_nr)
+          deallocate(stride)
+       end if
+    END IF
 
-  subroutine write_pw_g_to_cube(fat_env, pw, filename, i_frag)
-    type(fat_env_type), intent(in) :: fat_env
-    type(pw_type), intent(in) :: pw
-    character(len=*), intent(in) :: filename
-    integer, intent(in) :: i_frag
+    IF (PRESENT(pw_g)) THEN
+       if (unit_nr > 0) then
+          call fat_pw_create_ref(fat_env, pw_r=pw_r_tmp)
+          call pw_zero(pw_r_tmp)
+          call pw_transfer(pw_g, pw_r_tmp)
 
-    type(pw_type), pointer :: pw_real
-    logical :: pool_exists
+          qs_env => fat_env%force_env_ref%qs_env
 
-    if (.not. associated(fat_env%pw_pool_sub)) then
-      print *, "Error: pw_pool_sub is not associated in fat_env"
-      return
-    end if
+          CALL get_qs_env(qs_env=qs_env, dft_control=dft_control, pw_env=pw_env, &
+                          particle_set=particle_set, subsys=subsys)
+          CALL pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
+          CALL qs_subsys_get(subsys, particles=particles)
 
-    if (i_frag < 1 .or. i_frag > size(fat_env%pw_pool_sub)) then
-      print *, "Error: Invalid fragment index", i_frag
-      return
-    end if
+          allocate(stride(3))
+          stride = [1, 1, 1]
 
-    pool_exists = associated(fat_env%pw_pool_sub(i_frag)%pool)
-    if (.not. pool_exists) then
-      print *, "Error: pw_pool is not associated for fragment", i_frag
-      return
-    end if
+          call open_file(file_name=trim(filename), file_status="REPLACE", &
+                         file_action="WRITE", unit_number=unit_nr)
+          call cp_pw_to_cube(pw_r_tmp, unit_nr, trim(filename), particles=particles, stride=stride)
+          call close_file(unit_number=unit_nr)
+          deallocate(stride)
 
-    allocate(pw_real)
+          call fat_pw_release_ref(fat_env, pw_r=pw_r_tmp)
+       end if
+    END IF
 
-    ! Create a new pw_type in real space
-    call fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw_real, &
-         use_data=realdata3d, in_space=realspace)
-
-    if (.not. associated(pw_real)) then
-      print *, "Error: pw_real was not created successfully"
-      deallocate(pw_real)
-      return
-    end if
-    call pw_zero(pw_real)
-
-    ! Transfer data from reciprocal to real space
-    call pw_transfer(pw, pw_real)
-
-    call write_pw_r_to_cube(fat_env, pw_real, filename)
-
-    ! Release the temporary real space pw_type
-    call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(pw_real)
-
-    deallocate(pw_real)
-
-  end subroutine write_pw_g_to_cube
+  end subroutine write_pw_to_cube
 
   subroutine print_pw_statistics(pw, name, i_frag)
     type(pw_type), intent(in) :: pw
@@ -566,7 +549,7 @@ contains
 !#if defined(__parallel)
 !    print *, "KKK|  MPI Information:"
 !    print *, "KKK|   MPI Mode:               ", merge("DISTRIBUTED","LOCAL      ", &
-!             grid%para%mode == PW_MODE_DISTRIBUTED) 
+!             grid%para%mode == PW_MODE_DISTRIBUTED)
 !    print *, "KKK|   MPI Group Handle:       ", grid%para%group%get_handle()
 !    print *, "KKK|   MPI Group Size:         ", grid%para%group_size
 !    print *, "KKK|   MPI Position:           ", grid%para%my_pos
@@ -585,12 +568,13 @@ contains
 !    print *, "KKK|   Has YZ Count Array:     ", ALLOCATED(grid%para%nyzray)
 !#endif
   end subroutine print_pw_statistics
+
 ! **************************************************************************************************
 !> \brief Gets the nuclear density for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_rhon_frag(fat_env, rhon, i_frag)
+  subroutine fat_rhon_frag(fat_env, rhon_g, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: rhon
+    type(pw_type), pointer :: rhon_g
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_rhon_frag"
@@ -603,7 +587,7 @@ contains
     call timeset(routinen, handle)
 
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
-    call get_qs_env(qs_env=qs_env, rho_core=rhon)
+    call get_qs_env(qs_env=qs_env, rho_core=rhon_g)
 
     call timestop(handle)
 
@@ -613,9 +597,9 @@ contains
 !> \brief Gets the gradient of the nuclear density w.r.t. a nuclear position for one fragment in the
 !>        freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_drhon_frag(fat_env, drhon, i_frag, i_nuc, i_dir)
+  subroutine fat_drhon_frag(fat_env, drhon_g, i_frag, i_nuc, i_dir)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: drhon
+    type(pw_type), pointer :: drhon_g
     integer :: i_frag, i_nuc, i_dir
 
     character(len=*), parameter :: routinen = "fat_rhon_frag"
@@ -628,7 +612,7 @@ contains
     call timeset(routinen, handle)
 
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
-    call calculate_drho_core(drhon, qs_env, i_dir, i_nuc)
+    call calculate_drho_core(drhon_g, qs_env, i_dir, i_nuc)
 
     call timestop(handle)
 
@@ -638,15 +622,15 @@ contains
 !> \brief Gets the gradient of the electronic density w.r.t. a nuclear position for one fragment in
 !>        the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_drho_frag(fat_env, drho, i_frag, i_nuc, i_dir)
+  subroutine fat_drho_frag(fat_env, drho_r, i_frag, i_nuc, i_dir)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: drho
+    type(pw_type), pointer :: drho_r
     integer :: i_frag, i_nuc, i_dir
 
     character(len=*), parameter :: routinen = "fat_drho_frag"
 
     type(dbcsr_p_type), pointer :: p_mat(:)
-    type(pw_type), pointer :: drho_g
+    type(pw_type), pointer :: drho_g_tmp
     type(qs_environment_type), pointer :: qs_env
     type(qs_rho_type), pointer :: rho
     integer :: handle
@@ -658,10 +642,10 @@ contains
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call get_qs_env(qs_env, rho=rho)
     call qs_rho_get(rho, rho_ao=p_mat)
-    call fat_pw_create_frag(fat_env, pw_g=drho_g, i_frag=i_frag)
+    call fat_pw_create_frag(fat_env, pw_g=drho_g_tmp, i_frag=i_frag)
     call calculate_drho_elec_dR( &
-         p_mat(1)%matrix, drho=drho, drho_gspace=drho_g, qs_env=qs_env, beta=i_dir, lambda=i_nuc)
-    call fat_pw_release_frag(fat_env, pw_g=drho_g, i_frag=i_frag)
+         p_mat(1)%matrix, drho=drho_r, drho_gspace=drho_g_tmp, qs_env=qs_env, beta=i_dir, lambda=i_nuc)
+    call fat_pw_release_frag(fat_env, pw_g=drho_g_tmp, i_frag=i_frag)
 
     call timestop(handle)
 
@@ -684,7 +668,7 @@ contains
     call timeset(routinen, handle)
 
     do i = 1, fat_env%n_frag
-       call fat_rho_frag(fat_env, pw_tmp, i)
+       call fat_rho_frag(fat_env, rho_r=pw_tmp, i_frag=i)
        do j = 1, size(pw_tmp)
           call pw_axpy(pw_tmp(j), pw(j), allow_noncompatible_grids=.true.)
        end do
@@ -727,7 +711,7 @@ contains
     use_gga = needs%norm_drho .OR. needs%norm_drho_spin
 
     ! Get density
-    call fat_rho_frag(fat_env, rho_r, i_frag)
+    call fat_rho_frag(fat_env, rho_r=rho_r, i_frag=i_frag)
 
     ! Initialize rho_g if needed for GGA
     if (use_gga) then
@@ -882,7 +866,7 @@ contains
     call pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
 
     ! Get density
-    call fat_rho_frag(fat_env, rho_r, i_frag)
+    call fat_rho_frag(fat_env, rho_r=rho_r, i_frag=i_frag)
 
     ! Initialize rho_g if needed for GGA
     nullify(rho_g, tau)
@@ -1032,7 +1016,7 @@ contains
     call timeset(routinen, handle)
 
     nullify(rho_g)
-    call fat_rho_frag(fat_env, rho_g, i_frag, .false.)
+    call fat_rho_frag(fat_env, rho_g=rho_g, i_frag=i_frag)
 
 !   if (is_debug) then
 !      call print_pw_statistics(rho_g(1), "rho", i_frag)
@@ -1087,7 +1071,7 @@ contains
     rho_g(1) = rho_core
 
 !   if (is_debug) call print_pw_statistics(rho_g(1), "rho_core", i_frag)
-!   if (is_debug) call write_pw_g_to_cube(fat_env, rho_g(1), "rho_core", i_frag)
+!   if (is_debug) call write_pw_to_cube(fat_env, pw_g=rho_g(1), name="rho_core")
 
     allocate(v_g(1))
     call fat_env%pw_pool_sub(i_frag)%pool%create_pw(v_g(1), &
@@ -1241,7 +1225,7 @@ contains
        integral_value = pw_integral_ab(v, v)
        if (is_debug) print *, "KKK| Integral of vemb_ee frag", i, ": ", integral_value
 !      if (is_debug) call print_pw_statistics(v, "vemb_ee", i_frag)
-!      if (is_debug) call write_pw_r_to_cube(fat_env, v, "vemb_ee")
+!      if (is_debug) call write_pw_to_cube(fat_env, pw_r=v, "vemb_ee")
 
        if (is_debug) print *, "KKK| vemb_ee allow_noncompatible_grids=True"
        call pw_axpy(v, v_sum, allow_noncompatible_grids=.true.)
@@ -1289,7 +1273,7 @@ contains
        integral_value = pw_integral_ab(v, v)
        if (is_debug) print *, "KKK| Integral of vemb_ne frag", i, ": ", integral_value
 !      if (is_debug) call print_pw_statistics(v, "vemb_ne", i_frag)
-!      if (is_debug) call write_pw_r_to_cube(fat_env, v, "vemb_ne")
+!      if (is_debug) call write_pw_to_cube(fat_env, pw_r=v, "vemb_ne")
 
        if (is_debug) print *, "KKK| vemb_ne allow_noncompatible_grids=True"
        call pw_axpy(v, v_sum, allow_noncompatible_grids=.true.)
@@ -1335,7 +1319,7 @@ contains
     call timeset(routinen, handle)
 
     ! Get the electron density for the current fragment
-    call fat_rho_frag(fat_env, rho, i_frag)
+    call fat_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
 !   if (is_debug) call print_pw_statistics(rho(1), "rho", i_frag)
 
     ! Calculate and add the non-additive kinetic embedding potential
@@ -1495,7 +1479,7 @@ contains
     call fat_v_e_frag(fat_env, v_ee, i)
 
     call fat_pw_create_frag(fat_env, pw_r=rho, i_frag=i)
-    call fat_rho_frag(fat_env, rho_tmp, j)
+    call fat_rho_frag(fat_env, rho_r=rho_tmp, i_frag=j)
 
     call pw_transfer(rho_tmp(1), rho)
     e = pw_integral_ab(v_ee, rho)
@@ -1527,7 +1511,7 @@ contains
     call fat_v_n_frag(fat_env, v, i)
 
     call fat_pw_create_frag(fat_env, pw_r=rho, i_frag=i)
-    call fat_rho_frag(fat_env, rho_tmp, j)
+    call fat_rho_frag(fat_env, rho_r=rho_tmp, i_frag=j)
 
     call pw_transfer(rho_tmp(1), rho)
     e = pw_integral_ab(v, rho)
@@ -1808,7 +1792,7 @@ contains
        read (input_unit, *) fat_env%e_sub(i_frag)
 
        ! Get electron density from external calculation
-       call fat_rho_frag(fat_env, rho, i_frag)
+       call fat_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
 
        ! Calculate embedding energy for current fragment:
        ! Integrate the density * embedding potential
@@ -1820,7 +1804,7 @@ contains
 !         call pw_transfer(rho(1), rho_tmp)
 !         ! Write density to cube file
 !         write(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
-!         call write_pw_r_to_cube(fat_env, rho_tmp, filename)
+!         call write_pw_to_cube(fat_env, pw_r=rho_tmp, filename)
 !         ! Deallocate
 !         call fat_pw_release_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
 !      end if
@@ -1850,7 +1834,7 @@ contains
          print *, "KKK| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
 
        ! Get electron density from internal calculation
-       call fat_rho_frag(fat_env, rho, i_frag)
+       call fat_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
 
 !      if (is_debug) then
 !         ! Create temporary pw for density
@@ -1858,7 +1842,7 @@ contains
 !         call pw_transfer(rho(1), rho_tmp)
 !         ! Write density to cube file
 !         write(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
-!         call write_pw_r_to_cube(fat_env, rho_tmp, filename)
+!         call write_pw_to_cube(fat_env, pw_r=rho_tmp, filename)
 !         ! Deallocate
 !         call fat_pw_release_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
 !      end if
@@ -2196,7 +2180,10 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: ve, vn, drho, drhon
+    type(pw_type), pointer :: ve
+    type(pw_type), pointer :: vn
+    type(pw_type), pointer :: drho_r_tmp
+    type(pw_type), pointer :: drhon_g_tmp
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2214,15 +2201,15 @@ contains
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho, i_frag=i)
-             call fat_drho_frag(fat_env, drho, i, j, a)
-             forces(k, a) = pw_integral_ab(vn, drho)
-             call fat_pw_release_frag(fat_env, pw_r=drho, i_frag=i)
+             call fat_pw_create_frag(fat_env, pw_r=drho_r_tmp, i_frag=i)
+             call fat_drho_frag(fat_env, drho_r_tmp, i, j, a)
+             forces(k, a) = pw_integral_ab(vn, drho_r_tmp)
+             call fat_pw_release_frag(fat_env, pw_r=drho_r_tmp, i_frag=i)
 
-             call fat_pw_create_frag(fat_env, pw_r=drhon, i_frag=i)
-             call fat_drhon_frag(fat_env, drhon, i, j, a)
-             forces(k, a) = pw_integral_ab(ve, drhon)
-             call fat_pw_release_frag(fat_env, pw_r=drhon, i_frag=i)
+             call fat_pw_create_frag(fat_env, pw_r=drhon_g_tmp, i_frag=i)
+             call fat_drhon_frag(fat_env, drhon_g_tmp, i, j, a)
+             forces(k, a) = pw_integral_ab(ve, drhon_g_tmp)
+             call fat_pw_release_frag(fat_env, pw_r=drhon_g_tmp, i_frag=i)
           end do
        end do
 
@@ -2301,37 +2288,68 @@ contains
 ! **************************************************************************************************
 !> \brief Print the forces for a freeze-and-thaw optimization
 ! **************************************************************************************************
-  subroutine fat_force_print(fat_env, forces, label)
-    type(fat_env_type), pointer :: fat_env
-    real(dp), allocatable, intent(in) :: forces(:, :)
-    character(len=*) :: label
+   SUBROUTINE fat_force_print(fat_env, forces, label)
+      TYPE(fat_env_type), POINTER                        :: fat_env
+      REAL(dp), ALLOCATABLE, INTENT(IN)                  :: forces(:, :)
+      CHARACTER(len=*), INTENT(IN)                       :: label
 
-    character(len=*), parameter :: routinen = "fat_force_print"
+      CHARACTER(len=*), PARAMETER :: routineN = 'fat_force_print'
 
-    integer :: i, n, output_unit
-    character(len=2) :: symbol
-    type(particle_type), pointer :: particles(:)
-    type(atomic_kind_type), pointer :: kind
-    type(qs_environment_type), pointer :: qs_env
 
-    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+      INTEGER :: i, n, output_unit, log_unit
+      CHARACTER(len=2) :: symbol
+      CHARACTER(len=*), PARAMETER :: fmt_energy = &
+        '(/," ENERGY| Total FORCE_EVAL ( FAT ) energy [a.u.]:",T61,F20.15)'
+      CHARACTER(len=*), PARAMETER :: fmt_header = &
+        '(/," ATOMIC FORCES in [a.u.]",/,/," # Atom   Kind   Element",T30,"X",T45,"Y",T60,"Z")'
+      CHARACTER(len=*), PARAMETER :: fmt_forces = &
+        '(2X,I5,2X,I5,6X,A2,T23,3F15.8)'
+      CHARACTER(len=*), PARAMETER :: fmt_sum = &
+        '(/," SUM OF ATOMIC FORCES",T23,4F15.8,/)'
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particles
+      TYPE(atomic_kind_type), POINTER                    :: kind
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      REAL(KIND=dp), DIMENSION(3)                        :: grand_total
+      TYPE(cp_logger_type), POINTER                      :: logger
 
-    qs_env => fat_env%force_env_ref%qs_env
-    call get_qs_env(qs_env, particle_set=particles)
-    n = size(particles)
+      IF (is_debug) PRINT *, "DBG| ", moduleN//"::"//routineN
 
-    call open_file( &
-         label//".xyz", file_status="REPLACE", file_action="WRITE", unit_number=output_unit)
-    write (output_unit, '(I0)') size(particles)
-    write (output_unit, *)
-    do i = 1, n
-       kind => particles(i)%atomic_kind
-       call get_atomic_kind(kind, element_symbol=symbol)
-       write (output_unit, '(A2,3(F26.15," "))') symbol, forces(i, 1), forces(i, 2), forces(i, 3)
-    end do
-    call close_file(output_unit)
+      qs_env => fat_env%force_env_ref%qs_env
+      CALL get_qs_env(qs_env, particle_set=particles)
+      n = SIZE(particles)
 
-  end subroutine fat_force_print
+      logger => cp_get_default_logger()
+      log_unit = cp_logger_get_default_io_unit(logger)
+
+      IF (log_unit > 0) THEN
+         WRITE(log_unit, fmt_energy) fat_env%e_tot
+         WRITE(log_unit, fmt_header)
+
+         grand_total(:) = 0.0_dp
+         DO i = 1, n
+            kind => particles(i)%atomic_kind
+            CALL get_atomic_kind(kind, element_symbol=symbol)
+            WRITE(log_unit, fmt_forces) i, i, symbol, forces(i,1:3)
+            grand_total(:) = grand_total(:) + forces(i,:)
+         END DO
+
+         WRITE(log_unit, fmt_sum) grand_total(:), SQRT(SUM(grand_total**2))
+      END IF
+
+      ! Write forces to XYZ file
+      CALL open_file(label//".xyz", file_status="REPLACE", &
+                     file_action="WRITE", unit_number=output_unit)
+      WRITE (output_unit, '(I0)') n
+      WRITE (output_unit, *)
+      DO i = 1, n
+         kind => particles(i)%atomic_kind
+         CALL get_atomic_kind(kind, element_symbol=symbol)
+         WRITE (output_unit, '(A2,3(F17.12," "))') &
+            symbol, forces(i, 1), forces(i, 2), forces(i, 3)
+      END DO
+      CALL close_file(output_unit)
+
+   END SUBROUTINE fat_force_print
 
 ! **************************************************************************************************
 !> \brief Calculate the forces for a freeze-and-thaw optimization
