@@ -666,25 +666,42 @@ contains
 ! **************************************************************************************************
 !> \brief Gets the total electron density for the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_rho_ref(fat_env, pw)
+  subroutine fat_rho_ref(fat_env, rho_r, rho_g)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: pw(:)
+    type(pw_type), pointer, optional :: rho_r(:)
+    type(pw_type), pointer, optional :: rho_g(:)
 
     character(len=*), parameter :: routinen = "fat_rho_ref"
 
-    type(pw_type), pointer :: pw_tmp(:)
+    type(pw_type), pointer :: rho_r_tmp(:)
+    type(pw_type), pointer :: rho_g_tmp(:)
     integer :: i, j, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     call timeset(routinen, handle)
 
-    do i = 1, fat_env%n_frag
-       call fat_rho_frag(fat_env, rho_r=pw_tmp, i_frag=i)
-       do j = 1, size(pw_tmp)
-          call pw_axpy(pw_tmp(j), pw(j), allow_noncompatible_grids=.true.)
+    CPASSERT(PRESENT(rho_r) .OR. PRESENT(rho_g))
+
+    IF (PRESENT(rho_r)) THEN
+       CPASSERT(ASSOCIATED(rho_r))
+       do i = 1, fat_env%n_frag
+          call fat_rho_frag(fat_env, rho_r=rho_r_tmp, i_frag=i)
+          do j = 1, size(rho_r_tmp)
+             call pw_axpy(rho_r_tmp(j), rho_r(j), allow_noncompatible_grids=.true.)
+          end do
        end do
-    end do
+    END IF
+
+    IF (PRESENT(rho_g)) THEN
+       CPASSERT(ASSOCIATED(rho_g))
+       do i = 1, fat_env%n_frag
+          call fat_rho_frag(fat_env, rho_g=rho_g_tmp, i_frag=i)
+          do j = 1, size(rho_g_tmp)
+          end do
+          call pw_axpy(rho_g_tmp(j), rho_g(j), allow_noncompatible_grids=.true.)
+       end do
+    END IF
 
     call timestop(handle)
 
@@ -797,7 +814,7 @@ contains
 
     ! Create pw for total density
     call fat_pws_create_ref(fat_env, pws_r=rho_r, n_pws=1)
-    call fat_rho_ref(fat_env, rho_r)
+    call fat_rho_ref(fat_env, rho_r=rho_r)
 
     ! Initialize rho_g if needed for GGA
     if (use_gga) then
@@ -959,7 +976,7 @@ contains
 
     ! Create and initialize density arrays
     call fat_pws_create_ref(fat_env, pws_r=rho_r, n_pws=1)
-    call fat_rho_ref(fat_env, rho_r)
+    call fat_rho_ref(fat_env, rho_r=rho_r)
 
     ! Initialize rho_g if needed for GGA
     nullify(rho_g, tau)
