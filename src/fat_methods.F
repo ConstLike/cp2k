@@ -710,38 +710,29 @@ contains
 ! **************************************************************************************************
   subroutine fat_get_rho_ref(fat_env, rho_r, rho_g)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer, optional :: rho_r(:)
+    type(pw_type), optional :: rho_r(:)
     type(pw_type), pointer, optional :: rho_g(:)
 
     character(len=*), parameter :: routinen = "fat_get_rho_ref"
 
     type(pw_type), pointer :: rho_r_tmp(:)
-    type(pw_type), pointer :: rho_g_tmp(:)
     integer :: i, j, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     call timeset(routinen, handle)
 
-    CPASSERT(PRESENT(rho_r) .OR. PRESENT(rho_g))
-
-    IF (PRESENT(rho_r)) THEN
-       CPASSERT(ASSOCIATED(rho_r))
-       do i = 1, fat_env%n_frag
-          call fat_get_rho_frag(fat_env, rho_r=rho_r_tmp, i_frag=i)
-          do j = 1, size(rho_r_tmp)
-             call pw_axpy(rho_r_tmp(j), rho_r(j), allow_noncompatible_grids=.true.)
-          end do
+    do i = 1, fat_env%n_frag
+       call fat_get_rho_frag(fat_env, rho_r=rho_r_tmp, i_frag=i)
+       do j = 1, size(rho_r_tmp)
+          call pw_axpy(rho_r_tmp(j), rho_r(j), allow_noncompatible_grids=.true.)
        end do
-    END IF
-
+    end do
+    
     IF (PRESENT(rho_g)) THEN
        CPASSERT(ASSOCIATED(rho_g))
-       do i = 1, fat_env%n_frag
-          call fat_get_rho_frag(fat_env, rho_g=rho_g_tmp, i_frag=i)
-          do j = 1, size(rho_g_tmp)
-          end do
-          call pw_axpy(rho_g_tmp(j), rho_g(j), allow_noncompatible_grids=.true.)
+       do j = 1, size(rho_r)
+          call pw_transfer(rho_r(j), rho_g(j))
        end do
     END IF
 
@@ -752,10 +743,9 @@ contains
 ! **************************************************************************************************
 !> \brief Calculate kinetic potential for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_v_ts_frag(fat_env, v, v_gga, i_frag)
+  subroutine fat_v_ts_frag(fat_env, v, i_frag)
     type(fat_env_type), pointer :: fat_env
     type(pw_type), pointer :: v(:)
-    type(pw_type), pointer :: v_gga(:)
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_v_ts_frag"
@@ -764,9 +754,7 @@ contains
     type(pw_type), pointer :: rho_g(:), rho_r(:), tau(:), v_tau(:)
     type(qs_environment_type), pointer :: qs_env
     type(section_vals_type), pointer :: input, kin_section
-    type(xc_rho_cflags_type) :: needs
-    logical :: use_gga = .false.
-    integer :: i, handle
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -776,48 +764,17 @@ contains
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, input=input)
     kin_section => section_vals_get_subs_vals(input, "DFT%QS%OPT_EMBED%XC")
-    needs = xc_functionals_get_needs( &
-              section_vals_get_subs_vals(kin_section, "XC_FUNCTIONAL"), &
-                                         lsd=.false., calc_potential=.true.)
-    use_gga = needs%norm_drho .OR. needs%norm_drho_spin
 
     ! Get density
-    call fat_get_rho_frag(fat_env, rho_r=rho_r, i_frag=i_frag)
+    call fat_get_rho_frag(fat_env, rho_r=rho_r, rho_g=rho_g, i_frag=i_frag)
 
-    ! Initialize rho_g if needed for GGA
-    if (use_gga) then
-       allocate(rho_g(size(rho_r)))
-       do i = 1, size(rho_r)
-          call fat_env%pw_pool_sub(i_frag)%pool%create_pw(rho_g(i), &
-                        use_data=complexdata1d, in_space=reciprocalspace)
-          call pw_transfer(rho_r(i), rho_g(i))
-       end do
-    end if
-
-    ! Calculate LDA part
+    ! Calculate XC part
     nullify(v, v_tau)
     call xc_vxc_pw_create(vxc_rho=v, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
                           tau=tau, exc=e, xc_section=kin_section, &
                           pw_pool=fat_env%pw_pool_sub(i_frag)%pool, &
                           compute_virial=.false., virial_xc=virial)
     fat_env%ekin_sub(i_frag) = e
-
-
-    ! Calculate GGA part if needed
-    if (use_gga) then
-       call xc_vxc_pw_create(vxc_rho=v_gga, vxc_tau=v_tau, &
-                             rho_r=rho_r, rho_g=rho_g, &
-                             tau=tau, exc=e, xc_section=kin_section, &
-                             pw_pool=fat_env%pw_pool_sub(i_frag)%pool, &
-                             compute_virial=.false., virial_xc=virial)
-       fat_env%ekin_sub(i_frag) = fat_env%ekin_sub(i_frag) + e
-
-       ! Cleanup rho_g
-       do i = 1, size(rho_g)
-           call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(rho_g(i))
-       end do
-       deallocate(rho_g)
-    end if
 
     call timestop(handle)
 
@@ -826,10 +783,9 @@ contains
 ! **************************************************************************************************
 !> \brief Calculate reference kinetic potential for the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_v_ts_ref(fat_env, v, v_gga)
+  subroutine fat_v_ts_ref(fat_env, v)
     type(fat_env_type), pointer :: fat_env
     type(pw_type), pointer :: v(:)
-    type(pw_type), pointer :: v_gga(:)
 
     character(len=*), parameter :: routinen = "fat_v_ts_ref"
 
@@ -837,9 +793,7 @@ contains
     type(pw_type), pointer :: rho_g(:), rho_r(:), tau(:), v_tau(:)
     type(qs_environment_type), pointer :: qs_env
     type(section_vals_type), pointer :: input, kin_section
-    type(xc_rho_cflags_type) :: needs
-    logical :: use_gga = .false.
-    integer :: i, handle
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -849,26 +803,12 @@ contains
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, input=input)
     kin_section => section_vals_get_subs_vals(input, "DFT%QS%OPT_EMBED%XC")
-    needs = xc_functionals_get_needs( &
-              section_vals_get_subs_vals(kin_section, "XC_FUNCTIONAL"), &
-                                         lsd=.false., calc_potential=.true.)
-    use_gga = needs%norm_drho .OR. needs%norm_drho_spin
 
     ! Create pw for total density
-    call fat_pws_create_ref(fat_env, pws_r=rho_r, n_pws=1)
-    call fat_get_rho_ref(fat_env, rho_r=rho_r)
+    call fat_pws_create_ref(fat_env, pws_r=rho_r, pws_g=rho_g, n_pws=1)
+    call fat_get_rho_ref(fat_env, rho_r=rho_r, rho_g=rho_g)
 
-    ! Initialize rho_g if needed for GGA
-    if (use_gga) then
-       allocate(rho_g(size(rho_r)))
-       do i = 1, size(rho_r)
-          call fat_env%pw_pool_ref%create_pw(rho_g(i), &
-                     use_data=complexdata1d, in_space=reciprocalspace)
-          call pw_transfer(rho_r(i), rho_g(i))
-       end do
-    end if
-
-    ! Calculate LDA part
+    ! Calculate XC part
     nullify(v, v_tau)
     call xc_vxc_pw_create(vxc_rho=v, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
                           tau=tau, exc=e, xc_section=kin_section, &
@@ -876,24 +816,7 @@ contains
                           compute_virial=.false., virial_xc=virial)
     fat_env%ekin_ref = e
 
-
-    ! Calculate GGA part
-    if (use_gga) then
-        call xc_vxc_pw_create(vxc_rho=v_gga, vxc_tau=v_tau, &
-                              rho_r=rho_r, rho_g=rho_g, &
-                              tau=tau, exc=e, xc_section=kin_section, &
-                              pw_pool=fat_env%pw_pool_ref, &
-                              compute_virial=.false., virial_xc=virial)
-        fat_env%ekin_ref = fat_env%ekin_ref + e
-
-        ! Cleanup rho_g
-        do i = 1, size(rho_g)
-            call fat_env%pw_pool_ref%give_back_pw(rho_g(i))
-        end do
-        deallocate(rho_g)
-    end if
-
-    call fat_pws_release_ref(fat_env, pws_r=rho_r)
+    call fat_pws_release_ref(fat_env, pws_r=rho_r, pws_g=rho_g)
 
     call timestop(handle)
 
@@ -902,10 +825,9 @@ contains
 ! **************************************************************************************************
 !> \brief Calculate xc potential for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_v_xc_frag(fat_env, v, v_gga, i_frag)
+  subroutine fat_v_xc_frag(fat_env, v, i_frag)
     type(fat_env_type), pointer :: fat_env
     type(pw_type), pointer :: v(:)
-    type(pw_type), pointer :: v_gga(:)
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_v_xc_frag"
@@ -916,9 +838,7 @@ contains
     type(pw_pool_type), pointer :: pw_pool
     type(qs_environment_type), pointer :: qs_env
     type(section_vals_type), pointer :: input, xc_section
-    type(xc_rho_cflags_type) :: needs
-    logical :: use_gga = .false.
-    integer :: i, handle
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -928,52 +848,21 @@ contains
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, input=input)
     xc_section => section_vals_get_subs_vals(input, "DFT%XC")
-    needs = xc_functionals_get_needs( &
-            section_vals_get_subs_vals(xc_section, "XC_FUNCTIONAL"), &
-            lsd=.false., calc_potential=.true.)
-    use_gga = needs%norm_drho .OR. needs%norm_drho_spin
 
     call get_qs_env(qs_env, pw_env=pw_env)
     call pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
 
     ! Get density
-    call fat_get_rho_frag(fat_env, rho_r=rho_r, i_frag=i_frag)
+    call fat_get_rho_frag(fat_env, rho_r=rho_r, rho_g=rho_g, i_frag=i_frag)
 
-    ! Initialize rho_g if needed for GGA
-    nullify(rho_g, tau)
-    if (use_gga) then
-       allocate(rho_g(size(rho_r)))
-       do i = 1, size(rho_r)
-          call fat_env%pw_pool_sub(i_frag)%pool%create_pw(rho_g(i), &
-                                use_data=complexdata1d, in_space=reciprocalspace)
-          call pw_transfer(rho_r(i), rho_g(i))
-       end do
-    end if
-
-    ! Calculate LDA part
+    ! Calculate XC part
     nullify(v, v_tau)
     call xc_vxc_pw_create(vxc_rho=v, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
                           tau=tau, exc=e, xc_section=xc_section, &
                           pw_pool=fat_env%pw_pool_sub(i_frag)%pool, &
                           compute_virial=.false., virial_xc=virial)
+
     fat_env%exc_sub(i_frag) = e
-
-
-    ! Calculate GGA part if needed
-    if (use_gga) then
-        call xc_vxc_pw_create(vxc_rho=v_gga, vxc_tau=v_tau, &
-                            rho_r=rho_r, rho_g=rho_g, &
-                            tau=tau, exc=e, xc_section=xc_section, &
-                            pw_pool=fat_env%pw_pool_sub(i_frag)%pool, &
-                            compute_virial=.false., virial_xc=virial)
-        fat_env%exc_sub(i_frag) = fat_env%exc_sub(i_frag) + e
-
-        ! Cleanup rho_g
-        do i = 1, size(rho_g)
-            call fat_env%pw_pool_sub(i_frag)%pool%give_back_pw(rho_g(i))
-        end do
-        deallocate(rho_g)
-    end if
 
     call timestop(handle)
 
@@ -982,10 +871,9 @@ contains
 ! **************************************************************************************************
 !> \brief Calculate reference xc potential for the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_v_xc_ref(fat_env, v, v_gga)
+  subroutine fat_v_xc_ref(fat_env, v)
     type(fat_env_type), pointer :: fat_env
     type(pw_type), pointer :: v(:)
-    type(pw_type), pointer :: v_gga(:)
 
     character(len=*), parameter :: routinen = "fat_v_xc_ref"
 
@@ -995,9 +883,7 @@ contains
     type(pw_pool_type), pointer :: pw_pool
     type(qs_environment_type), pointer :: qs_env
     type(section_vals_type), pointer :: input, xc_section
-    type(xc_rho_cflags_type) :: needs
-    logical :: use_gga = .false.
-    integer :: i, handle
+    integer ::  handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -1007,59 +893,24 @@ contains
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, input=input)
     xc_section => section_vals_get_subs_vals(input, "DFT%XC")
-    needs = xc_functionals_get_needs( &
-            section_vals_get_subs_vals(xc_section, "XC_FUNCTIONAL"), &
-            lsd=.false., calc_potential=.true.)
-    use_gga = needs%norm_drho .OR. needs%norm_drho_spin
 
     ! Get PW environment and pool
     call get_qs_env(qs_env, pw_env=pw_env)
     call pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
 
     ! Create and initialize density arrays
-    call fat_pws_create_ref(fat_env, pws_r=rho_r, n_pws=1)
-    call fat_get_rho_ref(fat_env, rho_r=rho_r)
-
-    ! Initialize rho_g if needed for GGA
-    nullify(rho_g, tau)
-    if (use_gga) then
-       allocate(rho_g(size(rho_r)))
-       do i = 1, size(rho_r)
-          call fat_env%pw_pool_ref%create_pw(rho_g(i), &
-                      use_data=complexdata1d, in_space=reciprocalspace)
-          call pw_transfer(rho_r(i), rho_g(i))
-       end do
-    end if
-
-    ! Calculate LDA part
-    nullify(v, v_tau)
+    call fat_pws_create_ref(fat_env, pws_r=rho_r, pws_g=rho_g, n_pws=1)
+    call fat_get_rho_ref(fat_env, rho_r=rho_r, rho_g=rho_g)
 
     ! Calculate XC potential and energy
+    nullify(v, v_tau)
     call xc_vxc_pw_create(vxc_rho=v, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
                           tau=tau, exc=e, xc_section=xc_section, &
                           pw_pool=pw_pool, compute_virial=.false., virial_xc=virial)
 
-    ! Store reference XC energy
     fat_env%exc_ref = e
 
-    ! Calculate GGA part
-    if (use_gga) then
-       call xc_vxc_pw_create(vxc_rho=v_gga, vxc_tau=v_tau, &
-                             rho_r=rho_r, rho_g=rho_g, &
-                             tau=tau, exc=e, xc_section=xc_section, &
-                             pw_pool=fat_env%pw_pool_ref, &
-                             compute_virial=.false., virial_xc=virial)
-       fat_env%exc_ref = fat_env%exc_ref + e
-
-       ! Cleanup rho_g
-       do i = 1, size(rho_g)
-           call fat_env%pw_pool_ref%give_back_pw(rho_g(i))
-       end do
-       deallocate(rho_g)
-    end if
-
-    ! Cleanup
-    call fat_pws_release_ref(fat_env, pws_r=rho_r)
+    call fat_pws_release_ref(fat_env, pws_r=rho_r, pws_g=rho_g)
 
     call timestop(handle)
 
@@ -1141,7 +992,6 @@ contains
     character(len=*), parameter :: routinen = "fat_vemb_tsna_frag"
 
     type(pw_type), pointer :: v(:)
-    type(pw_type), pointer :: v_gga(:)
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1151,26 +1001,18 @@ contains
     call pw_zero(vemb)
 
     ! Reference system
-    nullify(v, v_gga)
-    call fat_v_ts_ref(fat_env, v, v_gga)
+    nullify(v)
+    call fat_v_ts_ref(fat_env, v)
 !   if (is_debug) call print_pw_statistics(v(1), "v_emb Kin tot", 0)
     call pw_axpy(v(1), vemb, allow_noncompatible_grids=.true.)
     call fat_pws_release_ref(fat_env, pws_r=v)
-    IF (ASSOCIATED(v_gga)) then
-       call pw_axpy(v_gga(1), vemb, allow_noncompatible_grids=.true.)
-       call fat_pws_release_ref(fat_env, pws_g=v_gga)
-    end if
 
     ! Fragment
-    nullify(v, v_gga)
-    call fat_v_ts_frag(fat_env, v, v_gga, i_frag)
+    nullify(v)
+    call fat_v_ts_frag(fat_env, v, i_frag)
 !   if (is_debug) call print_pw_statistics(v(1), "v_emb Kin", i_frag)
     call pw_axpy(v(1), vemb, -1.0_dp, allow_noncompatible_grids=.true.)
     call fat_pws_release_frag(fat_env, pws_r=v, i_frag=i_frag)
-    if (associated(v_gga)) then
-       call pw_axpy(v_gga(1), vemb, -1.0_dp, allow_noncompatible_grids=.true.)
-       call fat_pws_release_frag(fat_env, pws_g=v_gga, i_frag=i_frag)
-    end if
 
     call timestop(handle)
 
@@ -1187,7 +1029,7 @@ contains
 
     character(len=*), parameter :: routinen = "fat_vemb_xcna_frag"
 
-    type(pw_type), pointer :: v(:), v_gga(:)
+    type(pw_type), pointer :: v(:)
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1197,19 +1039,15 @@ contains
     call pw_zero(vemb)
 
     ! Reference system
-    nullify(v, v_gga)
-    call fat_v_xc_ref(fat_env, v, v_gga)
+    nullify(v)
+    call fat_v_xc_ref(fat_env, v)
 !   if (is_debug) call print_pw_statistics(v(1), "v_emb XC tot", 0)
     call pw_axpy(v(1), vemb, allow_noncompatible_grids=.true.)
     call fat_pws_release_ref(fat_env, pws_r=v)
-    IF (ASSOCIATED(v_gga)) then
-       call pw_axpy(v_gga(1), vemb, allow_noncompatible_grids=.true.)
-       call fat_pws_release_ref(fat_env, pws_g=v_gga)
-    end if
 
     ! Fragment
-    nullify(v, v_gga)
-    call fat_v_xc_frag(fat_env, v, v_gga, i_frag)
+    nullify(v)
+    call fat_v_xc_frag(fat_env, v, i_frag)
 !   if (is_debug) then
 !     call print_pw_statistics(v(1), "v_emb XC LDA", i_frag)
 !     if (associated(v_gga)) then
@@ -1218,10 +1056,6 @@ contains
 !   endif
     call pw_axpy(v(1), vemb, -1.0_dp, allow_noncompatible_grids=.true.)
     call fat_pws_release_frag(fat_env, pws_r=v, i_frag=i_frag)
-    if (associated(v_gga)) then
-       call pw_axpy(v_gga(1), vemb, -1.0_dp, allow_noncompatible_grids=.true.)
-       call fat_pws_release_frag(fat_env, pws_g=v_gga, i_frag=i_frag)
-    end if
 
     call timestop(handle)
 
