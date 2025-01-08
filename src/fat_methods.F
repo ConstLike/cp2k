@@ -1079,7 +1079,6 @@ contains
     type(pw_poisson_type), pointer :: poisson_env
     type(pw_env_type), pointer :: pw_env
     type(pw_type), pointer :: rho_g(:)
-    type(pw_type), pointer :: v_g
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1088,27 +1087,22 @@ contains
 
     call fat_get_rho_frag(fat_env, rho_g=rho_g, i_frag=i_frag)
 
-    call fat_pw_create_frag(fat_env, pw_g=v_g, i_frag=i_frag)
-
     ! Solve Poisson equation
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call get_qs_env(qs_env, pw_env=pw_env)
     call pw_env_get(pw_env, poisson_env=poisson_env)
-    call pw_poisson_solve(poisson_env, density=rho_g(1), vhartree=v_g)
-
-    call pw_transfer(v_g, v_elec_pot)
-
-    call fat_pw_release_frag(fat_env, pw_g=v_g, i_frag=i_frag)
+    call pw_poisson_solve(poisson_env, density=rho_g(1), vhartree=v_elec_pot)
 
     call timestop(handle)
 
   end subroutine fat_v_e_frag
+
 ! **************************************************************************************************
 !> \brief Calculate nuclear potential for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_v_n_frag(fat_env, v, i_frag)
+  subroutine fat_v_n_frag(fat_env, v_nuc_pot, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v
+    type(pw_type), pointer :: v_nuc_pot
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_v_n_frag"
@@ -1116,7 +1110,6 @@ contains
     type(qs_environment_type), pointer :: qs_env
     type(pw_poisson_type), pointer :: poisson_env
     type(pw_env_type), pointer :: pw_env
-    type(pw_type), pointer :: v_g
     type(pw_type), pointer :: rhon_g
     integer :: handle
 
@@ -1124,19 +1117,13 @@ contains
 
     call timeset(routinen, handle)
 
-    call fat_pw_create_frag(fat_env, pw_g=v_g, i_frag=i_frag)
-
     call fat_get_rhon_frag(fat_env, rhon_g=rhon_g, i_frag=i_frag)
 
     ! Solve Poisson equation
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
     call get_qs_env(qs_env, pw_env=pw_env)
     call pw_env_get(pw_env, poisson_env=poisson_env)
-    call pw_poisson_solve(poisson_env, density=rhon_g, vhartree=v_g)
-
-    call pw_transfer(v_g, v)
-
-    call fat_pw_release_frag(fat_env, pw_g=v_g, i_frag=i_frag)
+    call pw_poisson_solve(poisson_env, density=rhon_g, vhartree=v_nuc_pot)
 
     call timestop(handle)
 
@@ -1284,7 +1271,7 @@ contains
 
     character(len=*), parameter :: routinen = "fat_vemb_n_frag"
 
-    type(pw_type), pointer :: v, v_sum
+    type(pw_type), pointer :: v
     integer :: i, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1293,24 +1280,18 @@ contains
 
     call pw_zero(vemb)
 
-    allocate(v_sum)
-    call fat_env%pw_pool_sub(i_frag)%pool%create_pw(v_sum, use_data=realdata3d, in_space=realspace)
-    call pw_zero(v_sum)
-
     do i = 1, fat_env%n_frag
+
        if (i == i_frag) cycle
 
        call fat_pw_create_frag(fat_env, pw_r=v, i_frag=i)
-       call fat_v_n_frag(fat_env, v, i)
 
-       call pw_axpy(v, v_sum, allow_noncompatible_grids=.true.)
-       call fat_env%pw_pool_sub(i)%pool%give_back_pw(v)
+       call fat_v_n_frag(fat_env, v_nuc_pot=v, i_frag=i)
+
+       call pw_axpy(v, vemb, allow_noncompatible_grids=.true.)
+
        call fat_pw_release_frag(fat_env, pw_r=v, i_frag=i)
     end do
-
-    call pw_transfer(v_sum, vemb)
-
-    call fat_pw_release_frag(fat_env, pw_r=v_sum, i_frag=i_frag)
 
     call timestop(handle)
 
