@@ -1140,7 +1140,8 @@ contains
 
     character(len=*), parameter :: routinen = "fat_vemb_tsna_frag"
 
-    type(pw_type), pointer :: v(:), v_gga(:)
+    type(pw_type), pointer :: v(:)
+    type(pw_type), pointer :: v_gga(:)
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1316,56 +1317,32 @@ contains
     integer :: output_unit
     integer, pointer :: stride(:)
     type(particle_list_type), pointer :: particle_list
-    type(pw_type), pointer :: &
-      rho(:), vemb_tsna, vemb_xcna, vemb_ee, vemb_ne, weights
     type(qs_environment_type), pointer :: qs_env
     type(qs_subsys_type), pointer :: subsys
+    type(pw_type), pointer :: vemb_tmp
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     call timeset(routinen, handle)
 
-    ! Get the electron density for the current fragment
-    call fat_get_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
-!   if (is_debug) call print_pw_statistics(rho(1), "rho", i_frag)
+    call fat_pw_create_frag(fat_env, pw_r=vemb_tmp, i_frag=i_frag)
 
     ! Calculate and add the non-additive kinetic embedding potential
-    call fat_pw_create_frag(fat_env, pw_r=vemb_tsna, i_frag=i_frag)
-    call fat_vemb_tsna_frag(fat_env, vemb_tsna, i_frag)
-!   if(is_debug) call print_pw_statistics(vemb_tsna, "v_emb Kin", i_frag)
-    call pw_axpy(vemb_tsna, vemb)
-    call fat_pw_release_frag(fat_env, pw_r=vemb_tsna, i_frag=i_frag)
+    call fat_vemb_tsna_frag(fat_env, vemb_tmp, i_frag)
+    call pw_axpy(vemb_tmp, vemb)
 
     ! Calculate and add the non-additive exchange-correlation embedding potential
-    call fat_pw_create_frag(fat_env, pw_r=vemb_xcna, i_frag=i_frag)
-    call fat_vemb_xcna_frag(fat_env, vemb_xcna, i_frag)
-!   if(is_debug) call print_pw_statistics(vemb_xcna, "v_emb XC", i_frag)
-    call pw_axpy(vemb_xcna, vemb)
-    call fat_pw_release_frag(fat_env, pw_r=vemb_xcna, i_frag=i_frag)
-
-!   ! TODO: Calculate and add the non-additive exact exchange HF embedding potential
-!   IF (fat_env(i_frag)%use_hfx) THEN
-!      call fat_pw_create_frag(fat_env, pw_r=vemb_hfx, i_frag=i_frag)
-!      call fat_vemb_hfx_frag(fat_env, vemb_hfx, i_frag)
-!      if(is_debug) call print_pw_statistics(vemb_xcna, "v_emb XC", i_frag)
-!      call pw_axpy(vemb_hfx, vemb)
-!      call fat_pw_release_frag(fat_env, pw_r=vemb_hfx, i_frag=i_frag)
-!   END IF
+    call fat_vemb_xcna_frag(fat_env, vemb_tmp, i_frag)
+    call pw_axpy(vemb_tmp, vemb)
 
     ! Calculate and add the electron-electron embedding potential
-    call fat_pw_create_frag(fat_env, pw_r=vemb_ee, i_frag=i_frag)
-    call fat_vemb_e_frag(fat_env, vemb_ee, i_frag)
-!   if(is_debug) call print_pw_statistics(vemb_ee, "v_emb EE", i_frag)
-    call pw_axpy(vemb_ee, vemb)
-    call fat_pw_release_frag(fat_env, pw_r=vemb_ee, i_frag=i_frag)
+    call fat_vemb_e_frag(fat_env, vemb_tmp, i_frag)
+    call pw_axpy(vemb_tmp, vemb)
 
     ! Calculate and add the nuclear-electron embedding potential
-    call fat_pw_create_frag(fat_env, pw_r=vemb_ne, i_frag=i_frag)
-    call fat_vemb_n_frag(fat_env, vemb_ne, i_frag)
-!   if(is_debug) call print_pw_statistics(vemb_ne, "v_emb NE", i_frag)
-    call pw_axpy(vemb_ne, vemb)
-    call fat_pw_release_frag(fat_env, pw_r=vemb_ne, i_frag=i_frag)
+    call fat_vemb_n_frag(fat_env, vemb_tmp, i_frag)
+    call pw_axpy(vemb_tmp, vemb)
 
     ! If requested, write the embedding potential to files
     if (to_file) then
@@ -1391,14 +1368,17 @@ contains
         call open_file( &
              "vemb_"//trim(label)//".dat", file_status="REPLACE", &
              file_action="WRITE", unit_number=output_unit)
-        call fat_pw_create_frag(fat_env, pw_r=weights, i_frag=i_frag)
-        ! Set weights to the volume element of the grid
-        call pw_set(weights, vemb%pw_grid%dr(1) * vemb%pw_grid%dr(2) * vemb%pw_grid%dr(3))
-        ! Write the potential values along with their weights
-        call pw_to_simple_volumetric(weights, output_unit, [1, 1, 1], vemb)
-        call fat_pw_release_frag(fat_env, pw_r=weights, i_frag=i_frag)
+
+        call pw_zero(vemb_tmp)
+
+        ! Set weights (vemb_tmp) to the volume element of the grid
+        call pw_set(vemb_tmp, vemb%pw_grid%dr(1) * vemb%pw_grid%dr(2) * vemb%pw_grid%dr(3))
+        ! Write the potential values along with their weights (vemb_tmp)
+        call pw_to_simple_volumetric(vemb_tmp, output_unit, [1, 1, 1], vemb)
       end if
     end if
+
+    call fat_pw_release_frag(fat_env, pw_r=vemb_tmp, i_frag=i_frag)
 
     call timestop(handle)
 
