@@ -24,17 +24,16 @@ module fat_types
   type fat_env_type
      type(force_env_type), pointer   :: force_env_ref
      type(force_env_p_type), pointer :: force_env_sub(:)
+     type(pw_pool_p_type), pointer   :: pw_pool_sub(:) => NULL()
+     type(pw_pool_type), pointer     :: pw_pool_ref => NULL()
      integer                         :: i_iter, n_iter, n_frag
      logical                         :: is_converged
      logical, allocatable            :: extern(:)
      real(dp)                        :: eps, e_old, ekin_ref, exc_ref, e_tot, eee, ene, enn
      real(dp), allocatable           :: e_emb(:), e_sub(:), ekin_sub(:), exc_sub(:)
-     type(pw_type), pointer          :: rho_r_sub(:), vemb(:)
-     type(pw_pool_type), pointer     :: pw_pool_ref
-     type(pw_pool_p_type), pointer   :: pw_pool_sub(:)
      integer                         :: output_unit
   end type fat_env_type
-  
+
 contains
 
 ! **************************************************************************************************
@@ -46,7 +45,7 @@ contains
     if (present(is_converged)) is_converged = fat_env%is_converged
 
   end subroutine fat_env_get
-  
+
 ! **************************************************************************************************
 ! **************************************************************************************************
   subroutine fat_env_set(fat_env, is_converged)
@@ -56,7 +55,7 @@ contains
     if (present(is_converged)) fat_env%is_converged = is_converged
 
   end subroutine fat_env_set
-  
+
 ! **************************************************************************************************
 ! **************************************************************************************************
   subroutine fat_env_create(fat_env)
@@ -66,7 +65,7 @@ contains
     allocate(fat_env)
 
   end subroutine fat_env_create
-  
+
 ! **************************************************************************************************
 ! **************************************************************************************************
   subroutine fat_env_release(fat_env)

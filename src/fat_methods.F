@@ -728,7 +728,7 @@ contains
           call pw_axpy(rho_r_tmp(j), rho_r(j), allow_noncompatible_grids=.true.)
        end do
     end do
-    
+
     IF (PRESENT(rho_g)) THEN
        CPASSERT(ASSOCIATED(rho_g))
        do j = 1, size(rho_r)
@@ -743,38 +743,42 @@ contains
 ! **************************************************************************************************
 !> \brief Calculate kinetic potential for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_v_ts_frag(fat_env, v, i_frag)
+  subroutine fat_v_ts_frag(fat_env, rho_r, rho_g, v_kin_pot_frag, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v(:)
+    type(pw_type), pointer :: rho_r(:)
+    type(pw_type), pointer :: rho_g(:)
+    type(pw_type), pointer :: v_kin_pot_frag(:)
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_v_ts_frag"
 
-    real(dp) :: e, virial(3, 3)
-    type(pw_type), pointer :: rho_g(:), rho_r(:), tau(:), v_tau(:)
     type(qs_environment_type), pointer :: qs_env
-    type(section_vals_type), pointer :: input, kin_section
+    type(section_vals_type), pointer :: input
+    type(section_vals_type), pointer :: kin_section
+    type(pw_type), pointer :: tau(:)
+    type(pw_type), pointer :: v_tau(:)
+    real(dp) :: virial(3, 3)
+    real(dp) :: e_kin_frag
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     call timeset(routinen, handle)
 
-    ! Get XC section for kinetic
+    ! Get XC section for kinetic potential calculation
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, input=input)
     kin_section => section_vals_get_subs_vals(input, "DFT%QS%OPT_EMBED%XC")
 
-    ! Get density
-    call fat_get_rho_frag(fat_env, rho_r=rho_r, rho_g=rho_g, i_frag=i_frag)
-
-    ! Calculate XC part
-    nullify(v, v_tau)
-    call xc_vxc_pw_create(vxc_rho=v, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
-                          tau=tau, exc=e, xc_section=kin_section, &
+    ! Calculate fragment kinetic potential and energy
+    nullify(v_kin_pot_frag, v_tau)
+    call xc_vxc_pw_create(vxc_rho=v_kin_pot_frag, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
+                          tau=tau, exc=e_kin_frag, xc_section=kin_section, &
                           pw_pool=fat_env%pw_pool_sub(i_frag)%pool, &
                           compute_virial=.false., virial_xc=virial)
-    fat_env%ekin_sub(i_frag) = e
+
+    ! Store the fragment kinetic energy contribution
+    fat_env%ekin_sub(i_frag) = e_kin_frag
 
     call timestop(handle)
 
@@ -783,39 +787,49 @@ contains
 ! **************************************************************************************************
 !> \brief Calculate reference kinetic potential for the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_v_ts_ref(fat_env, v)
+  subroutine fat_v_ts_ref(fat_env, v_kin_pot_ref)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v(:)
+    type(pw_type), pointer :: v_kin_pot_ref(:)
 
     character(len=*), parameter :: routinen = "fat_v_ts_ref"
 
-    real(dp) :: e, virial(3, 3)
-    type(pw_type), pointer :: rho_g(:), rho_r(:), tau(:), v_tau(:)
     type(qs_environment_type), pointer :: qs_env
-    type(section_vals_type), pointer :: input, kin_section
+    type(section_vals_type), pointer :: input
+    type(section_vals_type), pointer :: kin_section
+    type(pw_type), pointer :: rho_r(:)
+    type(pw_type), pointer :: rho_g(:)
+    type(pw_type), pointer :: tau(:)
+    type(pw_type), pointer :: v_tau(:)
+    real(dp) :: virial(3, 3)
+    real(dp) :: e_kin_ref
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     call timeset(routinen, handle)
 
-    ! Get XC section for Kinetic
+    ! Get XC section for kinetic potential calculation
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, input=input)
     kin_section => section_vals_get_subs_vals(input, "DFT%QS%OPT_EMBED%XC")
 
-    ! Create pw for total density
+    ! Create pws for total density
     call fat_pws_create_ref(fat_env, pws_r=rho_r, pws_g=rho_g, n_pws=1)
+
+    ! Get density (rho_r is for LDA, rho_g is for GGA)
     call fat_get_rho_ref(fat_env, rho_r=rho_r, rho_g=rho_g)
 
-    ! Calculate XC part
-    nullify(v, v_tau)
-    call xc_vxc_pw_create(vxc_rho=v, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
-                          tau=tau, exc=e, xc_section=kin_section, &
+    ! Calculate total system kinetic potential and energy
+    nullify(v_kin_pot_ref, v_tau)
+    call xc_vxc_pw_create(vxc_rho=v_kin_pot_ref, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
+                          tau=tau, exc=e_kin_ref, xc_section=kin_section, &
                           pw_pool=fat_env%pw_pool_ref, &
                           compute_virial=.false., virial_xc=virial)
-    fat_env%ekin_ref = e
 
+    ! Store the total kinetic energy contribution
+    fat_env%ekin_ref = e_kin_ref
+
+    ! Cleanup
     call fat_pws_release_ref(fat_env, pws_r=rho_r, pws_g=rho_g)
 
     call timestop(handle)
@@ -825,44 +839,42 @@ contains
 ! **************************************************************************************************
 !> \brief Calculate xc potential for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_v_xc_frag(fat_env, v, i_frag)
+  subroutine fat_v_xc_frag(fat_env, rho_r, rho_g, v_xc_pot_frag, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v(:)
+    type(pw_type), pointer :: rho_r(:)
+    type(pw_type), pointer :: rho_g(:)
+    type(pw_type), pointer :: v_xc_pot_frag(:)
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_v_xc_frag"
 
-    real(dp) :: e, virial(3, 3)
-    type(pw_env_type), pointer :: pw_env
-    type(pw_type), pointer :: rho_g(:), rho_r(:), tau(:), v_tau(:)
-    type(pw_pool_type), pointer :: pw_pool
     type(qs_environment_type), pointer :: qs_env
-    type(section_vals_type), pointer :: input, xc_section
+    type(section_vals_type), pointer :: input
+    type(section_vals_type), pointer :: xc_section
+    type(pw_type), pointer :: tau(:)
+    type(pw_type), pointer :: v_tau(:)
+    real(dp) :: virial(3, 3)
+    real(dp) :: e_xc_frag
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     call timeset(routinen, handle)
 
-    ! Get XC section
+    ! Get XC section for XC potential calculation
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, input=input)
     xc_section => section_vals_get_subs_vals(input, "DFT%XC")
 
-    call get_qs_env(qs_env, pw_env=pw_env)
-    call pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
-
-    ! Get density
-    call fat_get_rho_frag(fat_env, rho_r=rho_r, rho_g=rho_g, i_frag=i_frag)
-
-    ! Calculate XC part
-    nullify(v, v_tau)
-    call xc_vxc_pw_create(vxc_rho=v, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
-                          tau=tau, exc=e, xc_section=xc_section, &
+    ! Calculate fragment XC potential and energy
+    nullify(v_xc_pot_frag, v_tau)
+    call xc_vxc_pw_create(vxc_rho=v_xc_pot_frag, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
+                          tau=tau, exc=e_xc_frag, xc_section=xc_section, &
                           pw_pool=fat_env%pw_pool_sub(i_frag)%pool, &
                           compute_virial=.false., virial_xc=virial)
 
-    fat_env%exc_sub(i_frag) = e
+    ! Store the fragment XC energy contribution
+    fat_env%exc_sub(i_frag) = e_xc_frag
 
     call timestop(handle)
 
@@ -871,45 +883,49 @@ contains
 ! **************************************************************************************************
 !> \brief Calculate reference xc potential for the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_v_xc_ref(fat_env, v)
+  subroutine fat_v_xc_ref(fat_env, v_xc_pot_ref)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v(:)
+    type(pw_type), pointer :: v_xc_pot_ref(:)
 
     character(len=*), parameter :: routinen = "fat_v_xc_ref"
 
-    real(dp) :: e, virial(3, 3)
-    type(pw_env_type), pointer :: pw_env
-    type(pw_type), pointer :: rho_g(:), rho_r(:), tau(:), v_tau(:)
-    type(pw_pool_type), pointer :: pw_pool
     type(qs_environment_type), pointer :: qs_env
-    type(section_vals_type), pointer :: input, xc_section
+    type(section_vals_type), pointer :: input
+    type(section_vals_type), pointer :: xc_section
+    type(pw_type), pointer :: rho_r(:)
+    type(pw_type), pointer :: rho_g(:)
+    type(pw_type), pointer :: tau(:)
+    type(pw_type), pointer :: v_tau(:)
+    real(dp) :: virial(3, 3)
+    real(dp) :: e_xc_ref
     integer ::  handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     call timeset(routinen, handle)
 
-    ! Get XC section for XC
+    ! Get XC section for XC potential calculation
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, input=input)
     xc_section => section_vals_get_subs_vals(input, "DFT%XC")
 
-    ! Get PW environment and pool
-    call get_qs_env(qs_env, pw_env=pw_env)
-    call pw_env_get(pw_env, auxbas_pw_pool=pw_pool)
-
-    ! Create and initialize density arrays
+    ! Create pws for total density
     call fat_pws_create_ref(fat_env, pws_r=rho_r, pws_g=rho_g, n_pws=1)
+
+    ! Get density (rho_r is for LDA, rho_g is for GGA)
     call fat_get_rho_ref(fat_env, rho_r=rho_r, rho_g=rho_g)
 
-    ! Calculate XC potential and energy
-    nullify(v, v_tau)
-    call xc_vxc_pw_create(vxc_rho=v, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
-                          tau=tau, exc=e, xc_section=xc_section, &
-                          pw_pool=pw_pool, compute_virial=.false., virial_xc=virial)
+    ! Calculate total system XC potential and energy
+    nullify(v_xc_pot_ref, v_tau)
+    call xc_vxc_pw_create(vxc_rho=v_xc_pot_ref, vxc_tau=v_tau, rho_r=rho_r, rho_g=rho_g, &
+                          tau=tau, exc=e_xc_ref, xc_section=xc_section, &
+                          pw_pool=fat_env%pw_pool_ref, &
+                          compute_virial=.false., virial_xc=virial)
 
-    fat_env%exc_ref = e
+    ! Store the total XC energy contribution
+    fat_env%exc_ref = e_xc_ref
 
+    ! Cleanup
     call fat_pws_release_ref(fat_env, pws_r=rho_r, pws_g=rho_g)
 
     call timestop(handle)
@@ -984,9 +1000,11 @@ contains
 !> \brief Calculate non-additive kinetic embedding potential for one fragment in the freeze-and-thaw
 !>        environment
 ! **************************************************************************************************
-  subroutine fat_vemb_tsna_frag(fat_env, vemb, i_frag)
+  subroutine fat_vemb_tsna_frag(fat_env, rho_r, rho_g, v_emb, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: vemb
+    type(pw_type), pointer :: rho_r(:)
+    type(pw_type), pointer :: rho_g(:)
+    type(pw_type), pointer :: v_emb
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_vemb_tsna_frag"
@@ -998,20 +1016,19 @@ contains
 
     call timeset(routinen, handle)
 
-    call pw_zero(vemb)
+    call pw_zero(v_emb)
 
     ! Reference system
     nullify(v)
-    call fat_v_ts_ref(fat_env, v)
-!   if (is_debug) call print_pw_statistics(v(1), "v_emb Kin tot", 0)
-    call pw_axpy(v(1), vemb, allow_noncompatible_grids=.true.)
+    call fat_v_ts_ref(fat_env, v_kin_pot_ref=v)
+    call pw_axpy(pw1=v(1), pw2=v_emb, allow_noncompatible_grids=.true.)
     call fat_pws_release_ref(fat_env, pws_r=v)
 
     ! Fragment
     nullify(v)
-    call fat_v_ts_frag(fat_env, v, i_frag)
-!   if (is_debug) call print_pw_statistics(v(1), "v_emb Kin", i_frag)
-    call pw_axpy(v(1), vemb, -1.0_dp, allow_noncompatible_grids=.true.)
+    call fat_v_ts_frag(fat_env, rho_r=rho_r, rho_g=rho_g, &
+                       v_kin_pot_frag=v, i_frag=i_frag)
+    call pw_axpy(pw1=v(1), pw2=v_emb, alpha=-1.0_dp, allow_noncompatible_grids=.true.)
     call fat_pws_release_frag(fat_env, pws_r=v, i_frag=i_frag)
 
     call timestop(handle)
@@ -1022,9 +1039,11 @@ contains
 !> \brief Calculate non-additive xc embedding potential for one fragment in the freeze-and-thaw
 !>        environment
 ! **************************************************************************************************
-  subroutine fat_vemb_xcna_frag(fat_env, vemb, i_frag)
+  subroutine fat_vemb_xcna_frag(fat_env, rho_r, rho_g, v_emb, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: vemb
+    type(pw_type), pointer :: rho_r(:)
+    type(pw_type), pointer :: rho_g(:)
+    type(pw_type), pointer :: v_emb
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_vemb_xcna_frag"
@@ -1036,25 +1055,19 @@ contains
 
     call timeset(routinen, handle)
 
-    call pw_zero(vemb)
+    call pw_zero(v_emb)
 
     ! Reference system
     nullify(v)
-    call fat_v_xc_ref(fat_env, v)
-!   if (is_debug) call print_pw_statistics(v(1), "v_emb XC tot", 0)
-    call pw_axpy(v(1), vemb, allow_noncompatible_grids=.true.)
+    call fat_v_xc_ref(fat_env, v_xc_pot_ref=v)
+    call pw_axpy(pw1=v(1), pw2=v_emb, allow_noncompatible_grids=.true.)
     call fat_pws_release_ref(fat_env, pws_r=v)
 
     ! Fragment
     nullify(v)
-    call fat_v_xc_frag(fat_env, v, i_frag)
-!   if (is_debug) then
-!     call print_pw_statistics(v(1), "v_emb XC LDA", i_frag)
-!     if (associated(v_gga)) then
-!       call print_pw_statistics(v_gga(1), "v_emb XC GGA", i_frag)
-!     endif
-!   endif
-    call pw_axpy(v(1), vemb, -1.0_dp, allow_noncompatible_grids=.true.)
+    call fat_v_xc_frag(fat_env, rho_r=rho_r, rho_g=rho_g, &
+                       v_xc_pot_frag=v, i_frag=i_frag)
+    call pw_axpy(pw1=v(1), pw2=v_emb, alpha=-1.0_dp, allow_noncompatible_grids=.true.)
     call fat_pws_release_frag(fat_env, pws_r=v, i_frag=i_frag)
 
     call timestop(handle)
@@ -1064,9 +1077,9 @@ contains
 ! **************************************************************************************************
 !> \brief Calculate electronic embedding potential for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_vemb_e_frag(fat_env, vemb, i_frag)
+  subroutine fat_vemb_e_frag(fat_env, v_emb, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: vemb
+    type(pw_type), pointer :: v_emb
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_vemb_e_frag"
@@ -1078,7 +1091,7 @@ contains
 
     call timeset(routinen, handle)
 
-    call pw_zero(vemb)
+    call pw_zero(v_emb)
 
     do i = 1, fat_env%n_frag
 
@@ -1088,7 +1101,7 @@ contains
 
        call fat_v_e_frag(fat_env, v_elec_pot=v, i_frag=i)
 
-       call pw_axpy(v, vemb, allow_noncompatible_grids=.true.)
+       call pw_axpy(v, v_emb, allow_noncompatible_grids=.true.)
 
        call fat_pw_release_frag(fat_env, pw_r=v, i_frag=i)
     end do
@@ -1099,9 +1112,9 @@ contains
 ! **************************************************************************************************
 !> \brief Calculate nuclear embedding potential for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
-  subroutine fat_vemb_n_frag(fat_env, vemb, i_frag)
+  subroutine fat_vemb_n_frag(fat_env, v_emb, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: vemb
+    type(pw_type), pointer :: v_emb
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_vemb_n_frag"
@@ -1113,7 +1126,7 @@ contains
 
     call timeset(routinen, handle)
 
-    call pw_zero(vemb)
+    call pw_zero(v_emb)
 
     do i = 1, fat_env%n_frag
 
@@ -1123,7 +1136,7 @@ contains
 
        call fat_v_n_frag(fat_env, v_nuc_pot=v, i_frag=i)
 
-       call pw_axpy(v, vemb, allow_noncompatible_grids=.true.)
+       call pw_axpy(v, v_emb, allow_noncompatible_grids=.true.)
 
        call fat_pw_release_frag(fat_env, pw_r=v, i_frag=i)
     end do
@@ -1131,28 +1144,95 @@ contains
     call timestop(handle)
 
   end subroutine fat_vemb_n_frag
+  ! **************************************************************************************************
+!> \brief Write embedding potential to cube and dat files
+!> \param fat_env The freeze-and-thaw environment
+!> \param v_emb The embedding potential to write
+!> \param work_tmp Temporary workspace for potential calculations
+!> \param i_frag The fragment index
+!> \par History
+!>      09.2024 Created [Konstantin Komarov]
+! **************************************************************************************************
+  SUBROUTINE write_embedding_potential(fat_env, v_emb, work_tmp, i_frag)
+    TYPE(fat_env_type), POINTER                       :: fat_env
+    TYPE(pw_type), POINTER                            :: v_emb
+    TYPE(pw_type), POINTER                            :: work_tmp
+    INTEGER, INTENT(IN)                               :: i_frag
+
+    CHARACTER(len=*), PARAMETER :: routineN = 'write_embedding_potential'
+
+    TYPE(qs_environment_type), POINTER                :: qs_env
+    CHARACTER(len=default_string_length)              :: label
+    TYPE(particle_list_type), POINTER                 :: particle_list
+    TYPE(qs_subsys_type), POINTER                     :: subsys
+    INTEGER, POINTER                                  :: stride(:)
+    INTEGER                                           :: output_unit
+    INTEGER                                           :: handle
+
+    CALL timeset(routineN, handle)
+
+    ! Proceed if it is the source node
+    IF (.NOT. fat_env%force_env_ref%para_env%is_source()) THEN
+       CALL timestop(handle)
+       RETURN
+    END IF
+
+    IF (is_debug) PRINT *, "DBG| ", moduleN//"::"//routineN
+
+    ! Convert fragment index to string for file naming
+    CALL integer_to_string(i_frag, label)
+
+    ! Write embedding potential to cube file
+    CALL open_file( &
+         "vemb_"//TRIM(label)//".cube", file_status="REPLACE", &
+         file_action="WRITE", unit_number=output_unit)
+
+    qs_env => fat_env%force_env_ref%qs_env
+    CALL get_qs_env(qs_env, subsys=subsys)
+    CALL qs_subsys_get(subsys, particles=particle_list)
+
+    ALLOCATE(stride(3))
+    stride = [1, 1, 1]
+    CALL cp_pw_to_cube(v_emb, output_unit, "vemb_"//TRIM(label), particle_list, stride=stride)
+    DEALLOCATE(stride)
+    CALL close_file(unit_number=output_unit)
+
+    ! Write embedding potential to dat file (simple volumetric format)
+    CALL open_file( &
+         "vemb_"//TRIM(label)//".dat", file_status="REPLACE", &
+         file_action="WRITE", unit_number=output_unit)
+
+    CALL pw_zero(work_tmp)
+
+    ! Set weights (work_tmp) to the volume element of the grid
+    CALL pw_set(work_tmp, v_emb%pw_grid%dr(1) * v_emb%pw_grid%dr(2) * v_emb%pw_grid%dr(3))
+
+    ! Write the potential values along with their weights (work_tmp)
+    CALL pw_to_simple_volumetric(work_tmp, output_unit, [1, 1, 1], v_emb)
+
+    CALL close_file(unit_number=output_unit)
+
+    CALL timestop(handle)
+
+  END SUBROUTINE write_embedding_potential
 
 ! **************************************************************************************************
 !> \brief Calculate embedding potential for one fragment in the freeze-and-thaw environment
 !> \param fat_env The freeze-and-thaw environment
-!> \param vemb The embedding potential (output)
+!> \param v_emb The embedding potential (output)
 !> \param i_frag The index of the current fragment
 !> \param to_file Boolean flag to determine if the potential should be written to a file
 ! **************************************************************************************************
-  subroutine fat_vemb_frag(fat_env, vemb, i_frag, to_file)
+  subroutine fat_vemb_frag(fat_env, v_emb, i_frag, to_file)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: vemb
+    type(pw_type), pointer :: v_emb
     integer :: i_frag
     logical :: to_file
 
     character(len=*), parameter :: routinen = "fat_vemb_frag"
 
-    character(len=default_string_length) :: label
-    integer :: output_unit
-    integer, pointer :: stride(:)
-    type(particle_list_type), pointer :: particle_list
-    type(qs_environment_type), pointer :: qs_env
-    type(qs_subsys_type), pointer :: subsys
+    type(pw_type), pointer :: rho_r(:)
+    type(pw_type), pointer :: rho_g(:)
     type(pw_type), pointer :: vemb_tmp
     integer :: handle
 
@@ -1160,57 +1240,33 @@ contains
 
     call timeset(routinen, handle)
 
+    call fat_get_rho_frag(fat_env, rho_r=rho_r, rho_g=rho_g, i_frag=i_frag)
+
     call fat_pw_create_frag(fat_env, pw_r=vemb_tmp, i_frag=i_frag)
 
     ! Calculate and add the non-additive kinetic embedding potential
-    call fat_vemb_tsna_frag(fat_env, vemb_tmp, i_frag)
-    call pw_axpy(vemb_tmp, vemb)
+    call fat_vemb_tsna_frag(fat_env, rho_r=rho_r, rho_g=rho_g, &
+                            v_emb=vemb_tmp, i_frag=i_frag)
+    call pw_axpy(vemb_tmp, v_emb)
 
     ! Calculate and add the non-additive exchange-correlation embedding potential
-    call fat_vemb_xcna_frag(fat_env, vemb_tmp, i_frag)
-    call pw_axpy(vemb_tmp, vemb)
+    call fat_vemb_xcna_frag(fat_env, rho_r=rho_r, rho_g=rho_g, &
+                            v_emb=vemb_tmp, i_frag=i_frag)
+    call pw_axpy(vemb_tmp, v_emb)
 
     ! Calculate and add the electron-electron embedding potential
     call fat_vemb_e_frag(fat_env, vemb_tmp, i_frag)
-    call pw_axpy(vemb_tmp, vemb)
+    call pw_axpy(vemb_tmp, v_emb)
 
     ! Calculate and add the nuclear-electron embedding potential
     call fat_vemb_n_frag(fat_env, vemb_tmp, i_frag)
-    call pw_axpy(vemb_tmp, vemb)
+    call pw_axpy(vemb_tmp, v_emb)
 
     ! If requested, write the embedding potential to files
-    if (to_file) then
-      IF (fat_env%force_env_ref%para_env%is_source()) THEN
-        ! Convert fragment index to string for file naming
-        call integer_to_string(i_frag, label)
-
-        ! Write embedding potential to a cube file
-        if (is_debug) print *, "DBG| ", modulen//"::"//routinen
-
-        call open_file( &
-             "vemb_"//trim(label)//".cube", file_status="replace",&
-             & file_action="write", unit_number=output_unit)
-        qs_env => fat_env%force_env_ref%qs_env
-        call get_qs_env(qs_env, subsys=subsys)
-        call qs_subsys_get(subsys, particles=particle_list)
-        allocate(stride(3))
-        stride = [1, 1, 1]
-        call cp_pw_to_cube(vemb, output_unit, "vemb_"//trim(label), particle_list, stride=stride)
-        deallocate(stride)
-
-        ! Write embedding potential to a dat file (simple volumetric format)
-        call open_file( &
-             "vemb_"//trim(label)//".dat", file_status="REPLACE", &
-             file_action="WRITE", unit_number=output_unit)
-
-        call pw_zero(vemb_tmp)
-
-        ! Set weights (vemb_tmp) to the volume element of the grid
-        call pw_set(vemb_tmp, vemb%pw_grid%dr(1) * vemb%pw_grid%dr(2) * vemb%pw_grid%dr(3))
-        ! Write the potential values along with their weights (vemb_tmp)
-        call pw_to_simple_volumetric(vemb_tmp, output_unit, [1, 1, 1], vemb)
-      end if
-    end if
+    IF (to_file) THEN
+       CALL write_embedding_potential(fat_env, v_emb=v_emb, &
+                                      work_tmp=vemb_tmp, i_frag=i_frag)
+    END IF
 
     call fat_pw_release_frag(fat_env, pw_r=vemb_tmp, i_frag=i_frag)
 
@@ -1546,10 +1602,10 @@ contains
 
     character :: cmdmsg(100)
     character(default_string_length) :: label
-    integer:: cmdstat, exitstat, input_unit, output_unit
+    integer:: cmdstat, exitstat, input_unit
     type(dft_control_type), pointer :: dft_control
     type(force_env_type), pointer :: force_env_tmp
-    type(pw_type), pointer :: rho(:), vemb, weights !, rho_tmp
+    type(pw_type), pointer :: rho(:), v_emb, weights !, rho_tmp
     type(qs_energy_type), pointer :: energy
     type(qs_environment_type), pointer :: qs_env_tmp
     integer :: handle
@@ -1570,8 +1626,8 @@ contains
     call get_qs_env(qs_env_tmp, dft_control=dft_control)
     dft_control%apply_embed_pot = .true.
 
-    ! Create a new embedding potential for current fragment
-    call fat_pw_create_frag(fat_env, pw_r=vemb, i_frag=i_frag)
+!   ! Create a new embedding potential for current fragment
+    call fat_pw_create_frag(fat_env, pw_r=v_emb, i_frag=i_frag)
 
     ! After first iteration, calculate the embedding potential
     if (fat_env%i_iter > 0) then
@@ -1580,11 +1636,11 @@ contains
        ! - Non-additive XC potential
        ! - Electrostatic potential from other fragments
        ! (to_file = False)
-       call fat_vemb_frag(fat_env, vemb, i_frag, .false.)
+       call fat_vemb_frag(fat_env, v_emb, i_frag, .false.)
     end if
 
     ! Set the embedding potential to the qs env
-    call set_qs_env(qs_env=qs_env_tmp, embed_pot=vemb)
+    call set_qs_env(qs_env=qs_env_tmp, embed_pot=v_emb)
 
 
     ! Handle external fragment calculations if configured
@@ -1592,30 +1648,14 @@ contains
 
        if (is_debug) print *, "KKK| Using extern for fragment ", i_frag
 
-       call integer_to_string(i_frag, label)
-
-       ! Write embedding potential to file for external program
-       call open_file( &
-            "vemb_"//trim(label)//".dat", file_status="REPLACE", &
-            file_action="WRITE", unit_number=output_unit)
-
-       ! Create weights for the potential based on grid spacing
        call fat_pw_create_frag(fat_env, pw_r=weights, i_frag=i_frag)
-       call pw_set(weights, vemb%pw_grid%dr(1) * vemb%pw_grid%dr(2) * vemb%pw_grid%dr(3))
-
-       ! Write potential with weights to output_unit file
-       call pw_to_simple_volumetric(weights, output_unit, [1, 1, 1], vemb)
-
-       ! Deallocate weights
+       CALL write_embedding_potential(fat_env, v_emb=v_emb, &
+                                      work_tmp=weights, i_frag=i_frag)
        call fat_pw_release_frag(fat_env, pw_r=weights, i_frag=i_frag)
 
        ! Execute external calculation script
        call execute_command_line("sh extern_"//trim(label)//".sh", .true., exitstat, cmdstat, cmdmsg)
        if (cmdstat /= 0) CPABORT("External command did not execute successfully")
-
-!      ! Get energy from DFT calculation
-!      call get_qs_env(qs_env_tmp, energy=energy)
-!      if (is_debug) print *, "KKK| IT IS ENERGY in fat_iterate_frag:", energy%total
 
        ! Get energy from external calculation
        call open_file( &
@@ -1627,7 +1667,7 @@ contains
 
        ! Calculate embedding energy for current fragment:
        ! Integrate the density * embedding potential
-       fat_env%e_emb(i_frag) = pw_integral_ab(vemb, rho(1))
+       fat_env%e_emb(i_frag) = pw_integral_ab(v_emb, rho(1))
 
 !      if (is_debug) then
 !         ! Create temporary pw for density
@@ -1664,8 +1704,8 @@ contains
        if(is_debug) &
          print *, "KKK| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
 
-       ! Get electron density from internal calculation
-       call fat_get_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
+!      ! Get electron density from internal calculation
+!      call fat_get_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
 
 !      if (is_debug) then
 !         ! Create temporary pw for density
@@ -1684,8 +1724,8 @@ contains
        print *, "KKK| Total subsystem (", i_frag, ") energy:", fat_env%e_sub(i_frag)
     end if
 
-    ! Deallocate vemb potential
-    call fat_pw_release_frag(fat_env, pw_r=vemb, i_frag=i_frag)
+    ! Deallocate v_emb potential
+    call fat_pw_release_frag(fat_env, pw_r=v_emb, i_frag=i_frag)
 
     call timestop(handle)
 
@@ -1804,6 +1844,8 @@ contains
 
     call timeset(routinen, handle)
 
+    forces = 0.0_dp
+
     k = 0
     do i = 1, fat_env%n_frag
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
@@ -1843,21 +1885,24 @@ contains
 
     call timeset(routinen, handle)
 
+    forces = 0.0_dp
+
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
        call fat_pw_create_frag(fat_env, pw_r=v_r, i_frag=i)
        call fat_vemb_frag(fat_env, v_r, i, .true.)
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
+
+       call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
              call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
              forces(k, a) = pw_integral_ab(v_r, drho_r)
-             call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
           end do
        end do
+       call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
        call fat_pw_release_frag(fat_env, pw_r=v_r, i_frag=i)
     end do
 
@@ -1877,7 +1922,9 @@ contains
     integer :: a, i, j, k, handle
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: vemb_r
+    type(pw_type), pointer :: rho_r(:)
+    type(pw_type), pointer :: rho_g(:)
+    type(pw_type), pointer :: v_emb
     type(pw_type), pointer :: drho_r
     type(pw_type), pointer :: drho_g
 
@@ -1885,33 +1932,39 @@ contains
 
     call timeset(routinen, handle)
 
+    forces = 0.0_dp
+
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
 
       ! Create embedding potential
-       call fat_pw_create_frag(fat_env, pw_r=vemb_r, i_frag=i)
+       call fat_pw_create_frag(fat_env, pw_r=v_emb, i_frag=i)
+
+       call fat_get_rho_frag(fat_env, rho_r=rho_r, rho_g=rho_g, i_frag=i)
 
        ! Calculate total embedding potential (includes both LDA and GGA if present)
-       CALL fat_vemb_tsna_frag(fat_env=fat_env, vemb=vemb_r, i_frag=i)
+       CALL fat_vemb_tsna_frag(fat_env=fat_env, rho_r=rho_r, rho_g=rho_g, &
+                               v_emb=v_emb, i_frag=i)
 
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
 
+       call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+
              call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
 
              ! Total force contribution (LDA + GGA if present)
-             forces(k, a) = pw_integral_ab(vemb_r, drho_r)
+             forces(k, a) = pw_integral_ab(v_emb, drho_r)
 
-             call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
           end do
        end do
+       call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
 
        ! Release potential
-       call fat_pw_release_frag(fat_env, pw_r=vemb_r, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=v_emb, i_frag=i)
 
     end do
 
@@ -1931,39 +1984,46 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: vemb_r
+    type(pw_type), pointer :: v_emb
+    type(pw_type), pointer :: rho_r(:)
+    type(pw_type), pointer :: rho_g(:)
     type(pw_type), pointer :: drho_r
     type(pw_type), pointer :: drho_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
+    forces = 0.0_dp
+
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
 
       ! Create embedding potential
-       call fat_pw_create_frag(fat_env, pw_r=vemb_r, i_frag=i)
+       call fat_pw_create_frag(fat_env, pw_r=v_emb, i_frag=i)
+
+       call fat_get_rho_frag(fat_env, rho_r=rho_r, rho_g=rho_g, i_frag=i)
 
        ! Calculate total embedding potential (includes both LDA and GGA if present)
-       call fat_vemb_xcna_frag(fat_env=fat_env, vemb=vemb_r, i_frag=i)
+       call fat_vemb_xcna_frag(fat_env=fat_env, rho_r=rho_r, rho_g=rho_g, &
+                               v_emb=v_emb, i_frag=i)
 
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
 
+       call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
              call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
 
              ! Total force contribution (LDA + GGA if present)
-             forces(k, a) = pw_integral_ab(vemb_r, drho_r)
+             forces(k, a) = pw_integral_ab(v_emb, drho_r)
 
-             call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
           end do
        end do
+       call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
 
        ! Release potential
-       call fat_pw_release_frag(fat_env, pw_r=vemb_r, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=v_emb, i_frag=i)
 
     end do
 
@@ -1987,21 +2047,23 @@ contains
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
+    forces = 0.0_dp
+
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
        call fat_pw_create_frag(fat_env, pw_r=v_r, i_frag=i)
        call fat_vemb_e_frag(fat_env, v_r, i)
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
+       call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
              call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
              forces(k, a) = pw_integral_ab(v_r, drho_r)
-             call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
           end do
        end do
+       call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
        call fat_pw_release_frag(fat_env, pw_r=v_r, i_frag=i)
     end do
 
@@ -2027,6 +2089,8 @@ contains
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
+    forces = 0.0_dp
+
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
        call fat_pw_create_frag(fat_env, pw_r=ve_r, i_frag=i)
@@ -2038,20 +2102,20 @@ contains
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
 
        call get_qs_env(qs_env, particle_set=particles)
+       call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+       call fat_pw_create_frag(fat_env, pw_r=drhon_g, i_frag=i)
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
              call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
              forces(k, a) = pw_integral_ab(vn_r, drho_r)
-             call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
 
-             call fat_pw_create_frag(fat_env, pw_r=drhon_g, i_frag=i)
              call fat_get_drhon_frag(fat_env, drhon_g=drhon_g, i_frag=i, i_nuc=j, i_dir=a)
              forces(k, a) = pw_integral_ab(ve_r, drhon_g)
-             call fat_pw_release_frag(fat_env, pw_g=drhon_g, i_frag=i)
           end do
        end do
+       call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_g=drhon_g, i_frag=i)
 
        call fat_pw_release_frag(fat_env, pw_r=ve_r, i_frag=i)
        call fat_pw_release_frag(fat_env, pw_r=vn_r, i_frag=i)
@@ -2071,26 +2135,28 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: v, drho
+    type(pw_type), pointer :: v_pot, drho
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
+    forces = 0.0_dp
+
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
-       call fat_pw_create_frag(fat_env, pw_r=v, i_frag=i)
-       call fat_vemb_n_frag(fat_env, v, i)
+       call fat_pw_create_frag(fat_env, pw_r=v_pot, i_frag=i)
+       call fat_vemb_n_frag(fat_env, v_pot, i)
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
+       call fat_pw_create_frag(fat_env, pw_r=drho, i_frag=i)
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_pw_create_frag(fat_env, pw_r=drho, i_frag=i)
              call fat_get_drhon_frag(fat_env, drhon_g=drho, i_frag=i, i_nuc=j, i_dir=a)
-             forces(k, a) = pw_integral_ab(v, drho)
-             call fat_pw_release_frag(fat_env, pw_r=drho, i_frag=i)
+             forces(k, a) = pw_integral_ab(v_pot, drho)
           end do
        end do
-       call fat_pw_release_frag(fat_env, pw_r=v, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=drho, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=v_pot, i_frag=i)
     end do
 
   end subroutine fat_force_nn
@@ -2111,6 +2177,8 @@ contains
     type(qs_force_type), pointer :: force(:)
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    forces = 0.0_dp
 
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, atomic_kind_set=atomic_kinds, force=force)
@@ -2200,94 +2268,78 @@ contains
     character(len=*), parameter :: routinen = "fat_force"
 
     integer :: i, j
-    real(dp), allocatable :: &
-         & forces(:, :), forces_self(:, :), forces_emb(:, :),&
-         & forces_tsna(:, :), forces_xcna(:, :), forces_ee(:, :),&
-         & forces_ne(:, :), forces_nn(:, :), forces_overlap(:, :)
+    real(dp), allocatable :: forces(:, :)
+    real(dp), allocatable :: forces_tmp(:, :)
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     call fat_force_create(fat_env, forces)
+    call fat_force_create(fat_env, forces_tmp)
 
-    call fat_force_create(fat_env, forces_self)
-    call fat_force_self(fat_env, forces_self)
-    call fat_force_print(fat_env, forces_self, "force_self")
+    call fat_force_self(fat_env, forces_tmp)
+    call fat_force_print(fat_env, forces_tmp, "force_self")
     do i = 1, size(forces, 1)
        do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_self(i, j)
+          forces(i, j) = forces(i, j) + forces_tmp(i, j)
        end do
     end do
-    deallocate(forces_self)
 
-    call fat_force_create(fat_env, forces_emb)
-    call fat_force_emb(fat_env, forces_emb)
-    call fat_force_print(fat_env, forces_emb, "force_emb")
+    call fat_force_emb(fat_env, forces_tmp)
+    call fat_force_print(fat_env, forces_tmp, "force_emb")
     do i = 1, size(forces, 1)
        do j = 1, 3
-          forces(i, j) = forces(i, j) - forces_emb(i, j)
+          forces(i, j) = forces(i, j) - forces_tmp(i, j)
        end do
     end do
-    deallocate(forces_emb)
 
-    call fat_force_create(fat_env, forces_tsna)
-    call fat_force_tsna(fat_env, forces_tsna)
-    call fat_force_print(fat_env, forces_tsna, "force_tsna")
+    call fat_force_tsna(fat_env, forces_tmp)
+    call fat_force_print(fat_env, forces_tmp, "force_tsna")
     do i = 1, size(forces, 1)
        do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_tsna(i, j)
+          forces(i, j) = forces(i, j) + forces_tmp(i, j)
        end do
     end do
-    deallocate(forces_tsna)
 
-    call fat_force_create(fat_env, forces_xcna)
-    call fat_force_xcna(fat_env, forces_xcna)
-    call fat_force_print(fat_env, forces_xcna, "force_xcna")
+    call fat_force_xcna(fat_env, forces_tmp)
+    call fat_force_print(fat_env, forces_tmp, "force_xcna")
     do i = 1, size(forces, 1)
        do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_xcna(i, j)
+          forces(i, j) = forces(i, j) + forces_tmp(i, j)
        end do
     end do
-    deallocate(forces_xcna)
 
-    call fat_force_create(fat_env, forces_ee)
-    call fat_force_ee(fat_env, forces_ee)
-    call fat_force_print(fat_env, forces_ee, "force_ee")
+    call fat_force_ee(fat_env, forces_tmp)
+    call fat_force_print(fat_env, forces_tmp, "force_ee")
     do i = 1, size(forces, 1)
        do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_ee(i, j)
+          forces(i, j) = forces(i, j) + forces_tmp(i, j)
        end do
     end do
-    deallocate(forces_ee)
 
-    call fat_force_create(fat_env, forces_ne)
-    call fat_force_ne(fat_env, forces_ne)
-    call fat_force_print(fat_env, forces_ne, "force_ne")
+    call fat_force_ne(fat_env, forces_tmp)
+    call fat_force_print(fat_env, forces_tmp, "force_ne")
     do i = 1, size(forces, 1)
        do j = 1, 3
-          forces(i, j) = forces(i, j) + 2*forces_ne(i, j)
+          forces(i, j) = forces(i, j) + 2*forces_tmp(i, j)
        end do
     end do
-    deallocate(forces_ne)
 
-    call fat_force_create(fat_env, forces_nn)
-    call fat_force_nn(fat_env, forces_nn)
-    call fat_force_print(fat_env, forces_nn, "force_nn")
+    call fat_force_nn(fat_env, forces_tmp)
+    call fat_force_print(fat_env, forces_tmp, "force_nn")
     do i = 1, size(forces, 1)
        do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_nn(i, j)
+          forces(i, j) = forces(i, j) + forces_tmp(i, j)
        end do
     end do
-    deallocate(forces_nn)
 
-    call fat_force_create(fat_env, forces_overlap)
-    call fat_force_overlap(fat_env, forces_overlap)
-    call fat_force_print(fat_env, forces_overlap, "force_overlap")
+    call fat_force_overlap(fat_env, forces_tmp)
+    call fat_force_print(fat_env, forces_tmp, "force_overlap")
     do i = 1, size(forces, 1)
        do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_overlap(i, j)
+          forces(i, j) = forces(i, j) + forces_tmp(i, j)
        end do
     end do
-    deallocate(forces_overlap)
+    deallocate(forces_tmp)
 
     call fat_force_print(fat_env, forces, "force")
 
@@ -2376,9 +2428,10 @@ contains
 
     character(len=*), parameter :: routinen = "fat_finalize"
 
-    integer :: i
     type(dft_control_type), pointer :: dft_control
     type(qs_environment_type), pointer :: qs_env
+
+    integer :: i
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
