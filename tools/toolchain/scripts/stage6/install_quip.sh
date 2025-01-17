@@ -54,7 +54,89 @@ __INSTALL__)
     if [ -f QUIP-${quip_ver}.tar.gz ]; then
       echo "QUIP-${quip_ver}.tar.gz is found"
     else
-      download_pkg_from_cp2k_org "${quip_sha256}" "QUIP-${quip_ver}.tar.gz"
+      if [ -f QUIP-${quip_ver}.tar.gz ]; then
+        echo "QUIP-${quip_ver}.tar.gz is found"
+      else
+        download_pkg_from_cp2k_org "${quip_sha256}" "QUIP-${quip_ver}.tar.gz"
+      fi
+      if [ -f fox-${fox_ver}.tar.gz ]; then
+        echo "fox-${fox_ver}.tar.gz is found"
+      else
+        download_pkg_from_cp2k_org "${fox_sha256}" "fox-${fox_ver}.tar.gz"
+      fi
+      [ -d QUIP-${quip_ver} ] && rm -rf QUIP-${quip_ver}
+      [ -d fox-${fox_ver} ] && rm -rf fox-${fox_ver}
+      echo "Installing from scratch into ${pkg_install_dir}"
+      tar -xzf QUIP-${quip_ver}.tar.gz
+      tar -xzf fox-${fox_ver}.tar.gz
+      cd QUIP-${quip_ver}
+      rmdir ./src/fox
+      ln -s ../../fox-${fox_ver} ./src/fox
+      # translate OPENBLAS_ARCH
+      case $OPENBLAS_ARCH in
+      x86_64)
+        quip_arch="x86_64"
+        ;;
+      i386)
+        quip_arch="x86_32"
+        ;;
+      arm*)
+        quip_arch="x86_64"
+        ;;
+      *)
+        report_error ${LINENO} "arch $OPENBLAS_ARCH is currently not supported."
+        exit 1
+        ;;
+      esac
+      # The ARCHER cd has a very annoying habit of printing out
+      # dir names to stdout for any target directories that are
+      # more than one level deep, and one cannot seem to disable
+      # it. This unfortunately messes up the installation script
+      # for QUIP. So this hack will help to resolve the issue
+      if [ "${ENABLE_CRAY}" = "__TRUE__" ]; then
+        sed -i \
+          -e "s|\(cd build/.*\)|\1 >&- 2>&-|g" \
+          bin/find_sizeof_fortran_t
+      fi
+      sed -i \
+        -e "s|\(F77 *=\).*|\1 ${FC}|g" \
+        -e "s|\(F90 *=\).*|\1 ${FC}|g" \
+        -e "s|\(F95 *=\).*|\1 ${FC}|g" \
+        -e "s|\(CC *=\).*|\1 ${CC}|g" \
+        -e "s|\(CPLUSPLUS *=\).*|\1 ${CXX}|g" \
+        -e "s|\(LINKER *=\).*|\1 ${FC}|g" \
+        -e "s|\(FPP *=\).*|\1 ${FC} -E -x f95-cpp-input|g" \
+        -e "s|\(QUIPPY_FCOMPILER *=\).*|\1 ${FC}|g" \
+        -e "s|\(QUIPPY_CPP *=\).*|\1 ${FC} -E -x f95-cpp-input|g" \
+        arch/Makefile.linux_${quip_arch}_gfortran
+
+      # workaround for compilation with GCC-10, until properly fixed:
+      #   https://github.com/libAtoms/QUIP/issues/209
+      if ("${FC}" --version | grep -q 'GNU'); then
+        compat_flag=$(allowed_gfortran_flags "-fallow-argument-mismatch")
+      fi
+
+      # enable debug symbols
+      echo "F95FLAGS       += -g ${compat_flag}" >>arch/Makefile.linux_${quip_arch}_gfortran
+      echo "F77FLAGS       += -g ${compat_flag}" >>arch/Makefile.linux_${quip_arch}_gfortran
+      echo "CFLAGS         += -g -fpermissive" >>arch/Makefile.linux_${quip_arch}_gfortran
+      echo "CPLUSPLUSFLAGS += -g -fpermissive" >>arch/Makefile.linux_${quip_arch}_gfortran
+      # Makefile.linux_${quip_arch}_gfortran_openmp includes Makefile.linux_${quip_arch}_gfortran
+      export QUIP_ARCH=linux_${quip_arch}_gfortran_openmp
+      # hit enter a few times to accept defaults
+      echo -e "${MATH_LDFLAGS} $(resolve_string "${MATH_LIBS}") \n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n" | make config >configure.log
+      # make -j does not work :-(
+      make >make.log 2>&1 || tail -n ${LOG_LINES} make.log
+      ! [ -d "${pkg_install_dir}/include" ] && mkdir -p "${pkg_install_dir}/include"
+      ! [ -d "${pkg_install_dir}/lib" ] && mkdir -p "${pkg_install_dir}/lib"
+      cp build/${QUIP_ARCH}/quip_unified_wrapper_module.mod \
+        "${pkg_install_dir}/include/"
+      cp build/${QUIP_ARCH}/*.a \
+        "${pkg_install_dir}/lib/"
+      cp src/fox/objs.${QUIP_ARCH}/lib/*.a \
+        "${pkg_install_dir}/lib/"
+      cd ..
+      write_checksums "${install_lock_file}" "${SCRIPT_DIR}/stage6/$(basename ${SCRIPT_NAME})"
     fi
     if [ -f fox-${fox_ver}.tar.gz ]; then
       echo "fox-${fox_ver}.tar.gz is found"
@@ -173,6 +255,7 @@ prepend_path CMAKE_PREFIX_PATH "$pkg_install_dir"
 EOF
   fi
   cat <<EOF >>"${BUILDDIR}/setup_quip"
+export QUIP_VER="${quip_ver}"
 export QUIP_CFLAGS="${QUIP_CFLAGS}"
 export QUIP_LDFLAGS="${QUIP_LDFLAGS}"
 export QUIP_LIBS="${QUIP_LIBS}"

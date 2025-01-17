@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -10,6 +10,12 @@
 ! **************************************************************************************************
 MODULE qs_scf_initialization
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_create,&
+                                              dbcsr_init_p,&
+                                              dbcsr_p_type,&
+                                              dbcsr_type,&
+                                              dbcsr_type_no_symmetry,&
+                                              dbcsr_type_real_default
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
                                               cp_dbcsr_m_by_n_from_row_template,&
@@ -37,24 +43,19 @@ MODULE qs_scf_initialization
                                               cp_print_key_finished_output,&
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
-   USE dbcsr_api,                       ONLY: dbcsr_create,&
-                                              dbcsr_init_p,&
-                                              dbcsr_p_type,&
-                                              dbcsr_type,&
-                                              dbcsr_type_no_symmetry,&
-                                              dbcsr_type_real_default
    USE input_constants,                 ONLY: &
-        broy_mix, broy_mix_new, cholesky_dbcsr, cholesky_inverse, cholesky_off, &
-        diag_block_davidson, diag_block_krylov, diag_filter_matrix, diag_ot, diag_standard, &
-        direct_p_mix, kerker_mix, multisec_mix, no_mix, ot2cdft, outer_scf_none, plus_u_lowdin, &
-        pulay_mix, wfi_frozen_method_nr, wfi_ps_method_nr, wfi_use_guess_method_nr
+        broy_mix, cholesky_dbcsr, cholesky_inverse, cholesky_off, diag_block_davidson, &
+        diag_block_krylov, diag_filter_matrix, diag_ot, diag_standard, direct_p_mix, kerker_mix, &
+        multisec_mix, no_mix, ot2cdft, outer_scf_none, plus_u_lowdin, pulay_mix, &
+        smeagol_runtype_emtransport, wfi_frozen_method_nr, wfi_ps_method_nr, &
+        wfi_use_guess_method_nr
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type,&
                                               section_vals_val_get
    USE kinds,                           ONLY: dp
    USE kpoint_types,                    ONLY: kpoint_type
    USE message_passing,                 ONLY: mp_para_env_type
-   USE pw_types,                        ONLY: pw_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type
    USE qmmm_image_charge,               ONLY: conditional_calc_image_matrix
    USE qs_block_davidson_types,         ONLY: block_davidson_allocate,&
                                               block_davidson_env_create
@@ -73,6 +74,8 @@ MODULE qs_scf_initialization
                                               fb_env_write_info
    USE qs_fb_env_types,                 ONLY: fb_env_create,&
                                               fb_env_has_data
+   USE qs_harris_types,                 ONLY: harris_type
+   USE qs_harris_utils,                 ONLY: harris_density_update
    USE qs_initial_guess,                ONLY: calculate_first_density_matrix
    USE qs_kind_types,                   ONLY: get_qs_kind,&
                                               qs_kind_type,&
@@ -101,7 +104,8 @@ MODULE qs_scf_initialization
    USE qs_scf_types,                    ONLY: &
         block_davidson_diag_method_nr, block_krylov_diag_method_nr, diag_subspace_env_create, &
         filter_matrix_diag_method_nr, general_diag_method_nr, krylov_space_create, &
-        ot_diag_method_nr, ot_method_nr, qs_scf_env_type, scf_env_create, special_diag_method_nr
+        ot_diag_method_nr, ot_method_nr, qs_scf_env_type, scf_env_create, smeagol_method_nr, &
+        special_diag_method_nr
    USE qs_wf_history_methods,           ONLY: reorthogonalize_vectors,&
                                               wfi_extrapolate,&
                                               wfi_get_method_label,&
@@ -228,7 +232,7 @@ CONTAINS
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_scf_env_type), POINTER                     :: scf_env
 
-      TYPE(pw_type), DIMENSION(:), POINTER               :: rho_g
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_g
       TYPE(qs_rho_type), POINTER                         :: rho
 
       NULLIFY (rho_g)
@@ -239,7 +243,7 @@ CONTAINS
       ELSE
          ! Reallocate mixing store, if the g space grid (cell) has changed
          SELECT CASE (scf_env%mixing_method)
-         CASE (kerker_mix, pulay_mix, broy_mix, broy_mix_new, multisec_mix)
+         CASE (kerker_mix, pulay_mix, broy_mix, multisec_mix)
             IF (ASSOCIATED(scf_env%mixing_store)) THEN
                ! The current mixing_store data structure does not allow for an unique
                ! grid comparison, but the probability that the 1d lengths of the old and
@@ -676,7 +680,7 @@ CONTAINS
       CASE (no_mix)
          scf_env%mixing_method = no_mixing_nr
          scf_env%p_mix_alpha = 1.0_dp
-      CASE (direct_p_mix, kerker_mix, pulay_mix, broy_mix, broy_mix_new, multisec_mix)
+      CASE (direct_p_mix, kerker_mix, pulay_mix, broy_mix, multisec_mix)
          scf_env%mixing_method = scf_control%mixing_method
          mixing_section => section_vals_get_subs_vals(scf_section, "MIXING")
          IF (.NOT. ASSOCIATED(scf_env%mixing_store)) THEN
@@ -746,6 +750,18 @@ CONTAINS
                             dft_control%qs_control%semi_empirical)
       need_coeff_b = .FALSE.
       scf_env%needs_ortho = .FALSE.
+
+      IF (dft_control%smeagol_control%smeagol_enabled .AND. &
+          dft_control%smeagol_control%run_type == smeagol_runtype_emtransport) THEN
+         scf_env%method = smeagol_method_nr
+         scf_env%skip_diis = .TRUE.
+         scf_control%use_diag = .FALSE.
+
+         IF (.NOT. do_kpoints) THEN
+            CPABORT("SMEAGOL requires kpoint calculations")
+         END IF
+         CPWARN_IF(scf_control%use_ot, "OT is irrelevant to NEGF method")
+      END IF
 
       IF (scf_control%use_diag) THEN
          ! sanity check whether combinations are allowed
@@ -831,7 +847,7 @@ CONTAINS
             CPABORT("nspin must be 2 for restricted (ROKS)")
          IF (do_kpoints) &
             CPABORT("OT not possible with kpoint calculations")
-      ELSE
+      ELSEIF (scf_env%method /= smeagol_method_nr) THEN
          CPABORT("OT or DIAGONALIZATION have to be set")
       END IF
       DO ispin = 1, dft_control%nspins
@@ -1045,10 +1061,11 @@ CONTAINS
 
       INTEGER                                            :: extrapolation_method_nr, handle, ispin, &
                                                             nmo, output_unit
-      LOGICAL                                            :: orthogonal_wf
+      LOGICAL                                            :: do_harris, orthogonal_wf
       TYPE(cp_fm_type), POINTER                          :: mo_coeff
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(harris_type), POINTER                         :: harris_env
       TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(qs_rho_type), POINTER                         :: rho
@@ -1065,6 +1082,8 @@ CONTAINS
                       mos=mos, &
                       dft_control=dft_control, &
                       para_env=para_env)
+
+      do_harris = qs_env%harris_method
 
       extrapolation_method_nr = wfi_use_guess_method_nr
       IF (ASSOCIATED(qs_env%wf_history)) THEN
@@ -1084,22 +1103,30 @@ CONTAINS
             END DO
          END IF
       END IF
-      output_unit = cp_print_key_unit_nr(logger, scf_section, "PRINT%PROGRAM_RUN_INFO", &
-                                         extension=".scfLog")
-      IF (output_unit > 0) THEN
-         WRITE (UNIT=output_unit, FMT="(/,T2,A,I0)") &
-            "Extrapolation method: "// &
-            TRIM(wfi_get_method_label(extrapolation_method_nr))
-         IF (extrapolation_method_nr == wfi_ps_method_nr) THEN
-            WRITE (UNIT=output_unit, FMT="(T2,A,I0,A)") &
-               "Extrapolation order:  ", &
-               MAX((MIN(qs_env%wf_history%memory_depth, qs_env%wf_history%snapshot_count) - 1), 0)
+
+      IF (.NOT. do_harris) THEN
+         output_unit = cp_print_key_unit_nr(logger, scf_section, "PRINT%PROGRAM_RUN_INFO", &
+                                            extension=".scfLog")
+         IF (output_unit > 0) THEN
+            WRITE (UNIT=output_unit, FMT="(/,T2,A,I0)") &
+               "Extrapolation method: "// &
+               TRIM(wfi_get_method_label(extrapolation_method_nr))
+            IF (extrapolation_method_nr == wfi_ps_method_nr) THEN
+               WRITE (UNIT=output_unit, FMT="(T2,A,I0,A)") &
+                  "Extrapolation order:  ", &
+                  MAX((MIN(qs_env%wf_history%memory_depth, qs_env%wf_history%snapshot_count) - 1), 0)
+            END IF
          END IF
+         CALL cp_print_key_finished_output(output_unit, logger, scf_section, &
+                                           "PRINT%PROGRAM_RUN_INFO")
       END IF
 
-      CALL cp_print_key_finished_output(output_unit, logger, scf_section, &
-                                        "PRINT%PROGRAM_RUN_INFO")
-      IF (extrapolation_method_nr == wfi_use_guess_method_nr) THEN
+      IF (do_harris) THEN
+         CALL get_qs_env(qs_env, harris_env=harris_env)
+         CALL harris_density_update(qs_env, harris_env)
+         CALL qs_rho_update_rho(rho, qs_env=qs_env)
+         CALL qs_ks_did_change(qs_env%ks_env, rho_changed=.TRUE.)
+      ELSE IF (extrapolation_method_nr == wfi_use_guess_method_nr) THEN
          CALL calculate_first_density_matrix(scf_env=scf_env, qs_env=qs_env)
          CALL qs_rho_update_rho(rho, qs_env=qs_env)
          CALL qs_ks_did_change(qs_env%ks_env, rho_changed=.TRUE.)

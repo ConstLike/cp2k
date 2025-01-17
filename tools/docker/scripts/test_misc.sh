@@ -28,10 +28,18 @@ echo ""
 # prepare inputs for minimax_to_fortran_source.py
 unzip -q -d ./tools/minimax_tools/1_xData 1_xData.zip
 
-run_test ./tools/prettify/prettify_test.py
+run_test ./tools/precommit/format_fortran_test.py
 run_test ./tools/minimax_tools/minimax_to_fortran_source.py --check
 run_test ./tools/docker/generate_dockerfiles.py --check
 
+# Test pao-ml training.
+run_test ./tools/pao-ml/pao-train.py --kind=H --epochs=200 ./tools/pao-ml/example.pao
+run_test ./tools/pao-ml/pao-retrain.py --model="DZVP-MOLOPT-GTH-PAO4-H.pt" --epochs=200 ./tools/pao-ml/example.pao
+run_test ./tools/pao-ml/pao-validate.py --threshold=1e-1 --model="DZVP-MOLOPT-GTH-PAO4-H.pt" ./tools/pao-ml/example.pao
+run_test ./tools/pao-ml/pao-validate.py --threshold=1e-6 --model="tests/QS/regtest-pao-5/DZVP-MOLOPT-GTH-PAO4-H.pt" ./tools/pao-ml/example.pao
+run_test ./tools/pao-ml/pao-validate.py --threshold=1e-5 --model="tests/QS/regtest-pao-5/DZVP-MOLOPT-GTH-PAO4-O.pt" ./tools/pao-ml/example.pao
+
+run_test mypy --strict ./tools/pao-ml/
 run_test mypy --strict ./tools/minimax_tools/minimax_to_fortran_source.py
 run_test mypy --strict ./tools/dashboard/generate_dashboard.py
 run_test mypy --strict ./tools/dashboard/generate_regtest_survey.py

@@ -1,6 +1,6 @@
 #!-------------------------------------------------------------------------------------------------!
 #!   CP2K: A general program to perform molecular dynamics simulations                             !
-#!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                  !
+#!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                  !
 #!                                                                                                 !
 #!   SPDX-License-Identifier: GPL-2.0-or-later                                                     !
 #!-------------------------------------------------------------------------------------------------!
@@ -69,7 +69,12 @@ list(
   basis_set_output.F
   beta_gamma_psi.F
   block_p_types.F
-  bse.F
+  bse_main.F
+  bse_full_diag.F
+  bse_iterative.F
+  bse_print.F
+  bse_properties.F
+  bse_util.F
   bsse.F
   cell_methods.F
   colvar_methods.F
@@ -113,6 +118,7 @@ list(
   ct_methods.F
   ct_types.F
   debug_os_integrals.F
+  deepmd_wrapper.F
   dft_plus_u.F
   dgemm_counter_types.F
   distribution_2d_types.F
@@ -127,9 +133,13 @@ list(
   dm_ls_scf_types.F
   domain_submatrix_methods.F
   domain_submatrix_types.F
+  eeq_data.F
+  eeq_input.F
+  eeq_method.F
   ec_efield_local.F
   ec_environment.F
   ec_env_types.F
+  ec_external.F
   ec_methods.F
   ec_orth_solver.F
   ed_analysis.F
@@ -205,10 +215,14 @@ list(
   grrm_utils.F
   gapw_1c_basis_set.F
   gw_communication.F
-  gw_methods.F
+  gw_main.F
+  gw_large_cell_gamma.F
+  gw_small_cell_full_kp.F
   post_scf_bandstructure_types.F
   post_scf_bandstructure_utils.F
   gw_utils.F
+  gw_integrals.F
+  gw_kp_to_real_space_and_back.F
   hartree_local_methods.F
   hartree_local_types.F
   header.F
@@ -238,6 +252,14 @@ list(
   input_cp2k_colvar.F
   input_cp2k_constraints.F
   input_cp2k_dft.F
+  input_cp2k_harris.F
+  input_cp2k_print_dft.F
+  input_cp2k_scf.F
+  input_cp2k_as.F
+  input_cp2k_opt.F
+  input_cp2k_qs.F
+  input_cp2k_se.F
+  input_cp2k_xas.F
   input_cp2k_distribution.F
   input_cp2k_ec.F
   input_cp2k_eip.F
@@ -269,6 +291,7 @@ list(
   input_cp2k_restarts_util.F
   input_cp2k_rsgrid.F
   input_cp2k_subsys.F
+  input_cp2k_smeagol.F
   input_cp2k_tb.F
   input_cp2k_thermostats.F
   input_cp2k_transport.F
@@ -282,6 +305,9 @@ list(
   iao_analysis.F
   iao_types.F
   ipi_driver.F
+  ipi_environment.F
+  ipi_environment_types.F
+  ipi_server.F
   iterate_matrix.F
   kg_correction.F
   kg_environment.F
@@ -293,6 +319,7 @@ list(
   kpoint_methods.F
   kpoint_transitional.F
   kpoint_types.F
+  kpsym.F
   libgrpp_integrals.F
   libint_2c_3c.F
   libint_wrapper.F
@@ -310,6 +337,7 @@ list(
   lri_optimize_ri_basis_types.F
   ls_matrix_exp.F
   manybody_eam.F
+  manybody_deepmd.F
   manybody_gal21.F
   manybody_gal.F
   manybody_allegro.F
@@ -418,6 +446,7 @@ list(
   pao_ml.F
   pao_ml_gaussprocess.F
   pao_ml_neuralnet.F
+  pao_model.F
   pao_optimizer.F
   pao_param_exp.F
   pao_param.F
@@ -480,6 +509,7 @@ list(
   qs_atomic_block.F
   qs_band_structure.F
   qs_basis_gradient.F
+  qs_basis_rotation_methods.F
   qs_block_davidson_types.F
   qs_cdft_methods.F
   qs_cdft_opt_types.F
@@ -509,9 +539,13 @@ list(
   qs_diis.F
   qs_diis_types.F
   qs_dispersion_nonloc.F
+  qs_dispersion_d2.F
+  qs_dispersion_d3.F
+  qs_dispersion_d4.F
   qs_dispersion_pairpot.F
   qs_dispersion_types.F
   qs_dispersion_utils.F
+  qs_dispersion_cnum.F
   qs_dos.F
   qs_efield_berry.F
   qs_efield_local.F
@@ -520,7 +554,6 @@ list(
   qs_elf_methods.F
   qs_energy.F
   qs_energy_init.F
-  qs_energy_matrix_w.F
   qs_energy_types.F
   qs_energy_utils.F
   qs_energy_window.F
@@ -553,9 +586,12 @@ list(
   qs_gcp_utils.F
   qs_grid_atom.F
   qs_gspace_mixing.F
+  qs_harris_types.F
+  qs_harris_utils.F
   qs_harmonics_atom.F
   qs_hash_table_functions.F
   qs_initial_guess.F
+  qs_eht_guess.F
   qs_integral_utils.F
   qs_integrate_potential.F
   qs_integrate_potential_product.F
@@ -615,6 +651,8 @@ list(
   qs_neighbor_lists.F
   qs_neighbor_list_types.F
   qs_nl_hash_table_types.F
+  qs_nonscf.F
+  qs_nonscf_utils.F
   qs_o3c_methods.F
   qs_o3c_types.F
   qs_oce_methods.F
@@ -674,6 +712,7 @@ list(
   qs_tddfpt2_soc_types.F
   qs_tddfpt2_stda_types.F
   qs_tddfpt2_stda_utils.F
+  qs_tddfpt2_smearing_methods.F
   qs_tddfpt2_subgroups.F
   qs_tddfpt2_types.F
   qs_tddfpt2_utils.F
@@ -700,7 +739,7 @@ list(
   restraint.F
   ri_environment_methods.F
   rmsd.F
-  rpa_axk.F
+  rpa_exchange.F
   rpa_communication.F
   rpa_grad.F
   rpa_gw.F
@@ -710,6 +749,7 @@ list(
   rpa_gw_sigma_x.F
   rpa_im_time.F
   rpa_main.F
+  rpa_sigma_functional.F
   rpa_rse.F
   rpa_im_time_force_types.F
   rpa_im_time_force_methods.F
@@ -747,6 +787,10 @@ list(
   semi_empirical_utils.F
   simpar_types.F
   sirius_interface.F
+  smeagol_control_types.F
+  smeagol_emtoptions.F
+  smeagol_interface.F
+  smeagol_matrix_utils.F
   spglib_f08.F
   splines_methods.F
   splines_types.F
@@ -783,6 +827,8 @@ list(
   torch_api.F
   transport_env_types.F
   transport.F
+  trexio.F
+  trexio_utils.F
   uff_vdw_radii_table.F
   virial_methods.F
   voronoi_interface.F
@@ -803,10 +849,15 @@ list(
   xas_tp_scf.F
   xray_diffraction.F
   xtb_coulomb.F
+  xtb_eeq.F
   xtb_ehess.F
   xtb_ehess_force.F
+  xtb_hcore.F
+  xtb_hab_force.F
+  xtb_ks_matrix.F
   xtb_matrices.F
   xtb_parameters.F
+  xtb_potentials.F
   xtb_types.F)
 
 list(
@@ -854,7 +905,8 @@ list(
   arnoldi/arnoldi_data_methods.F
   arnoldi/arnoldi_geev.F
   arnoldi/arnoldi_methods.F
-  arnoldi/arnoldi_types.F)
+  arnoldi/arnoldi_types.F
+  arnoldi/arnoldi_vector.F)
 
 list(APPEND CP2K_SRCS_F base/base_hooks.F base/kinds.F base/machine.F)
 
@@ -882,7 +934,6 @@ list(
   common/fparser.F
   common/gamma.F
   common/kahan_sum.F
-  common/lapack.F
   common/lebedev.F
   common/linear_systems.F
   common/list_callstackentry.F
@@ -915,8 +966,6 @@ list(
   common/util.F
   common/whittaker.F)
 
-list(APPEND CP2K_SRCS_F dbcsrx/dbcsr_vector.F)
-
 list(APPEND CP2K_SRCS_F dbm/dbm_api.F dbm/dbm_tests.F)
 
 list(
@@ -943,6 +992,8 @@ list(
   dbt/tas/dbt_tas_types.F
   dbt/tas/dbt_tas_util.F)
 
+list(APPEND CP2K_SRCS_F dbx/cp_dbcsr_api.F)
+
 list(
   APPEND
   CP2K_SRCS_F
@@ -953,13 +1004,17 @@ list(
   emd/rt_propagation_methods.F
   emd/rt_propagation_output.F
   emd/rt_propagation_utils.F
-  emd/rt_propagator_init.F)
+  emd/rt_propagator_init.F
+  emd/rt_bse.F
+  emd/rt_bse_io.F
+  emd/rt_bse_types.F)
 
 list(
   APPEND
   CP2K_SRCS_F
   fm/cp_blacs_env.F
   fm/cp_blacs_types.F
+  fm/cp_cfm_cholesky.F
   fm/cp_cfm_basic_linalg.F
   fm/cp_cfm_diag.F
   fm/cp_cfm_basic_linalg.F
@@ -977,7 +1032,8 @@ list(
 
 list(APPEND CP2K_SRCS_C fm/cp_fm_cusolver.c)
 
-list(APPEND CP2K_SRCS_F fm/cp_dlaf_utils_api.F fm/cp_fm_dlaf_api.F)
+list(APPEND CP2K_SRCS_F fm/cp_dlaf_utils_api.F fm/cp_fm_dlaf_api.F
+     fm/cp_cfm_dlaf_api.F)
 
 list(APPEND CP2K_SRCS_F hfxbase/hfx_compression_core_methods.F
      hfxbase/hfx_contract_block.F hfxbase/hfx_contraction_methods.F)
@@ -1308,7 +1364,7 @@ list(
   xc/xc_xpbe_hole_t_c_lr.F
   xc/xc_xwpbe.F)
 
-list(APPEND CP2K_SRCS_C sockets.c base/machine_cpuid.c)
+list(APPEND CP2K_SRCS_C sockets.c base/machine_cpuid.c base/openmp_trace.c)
 
 set(CP2K_DBM_SRCS_C
     dbm/dbm_distribution.c
@@ -1367,7 +1423,8 @@ set(CP2K_GRID_SRCS_HIP
     grid/hip/grid_hip_context.cu)
 
 set(CP2K_DBM_SRCS_GPU dbm/dbm_multiply_gpu_kernel.cu)
-set(CP2K_DBM_SRCS_GPU_C dbm/dbm_multiply_gpu.c)
+set(CP2K_DBM_SRCS_GPU_C dbm/dbm_multiply_opencl.c dbm/dbm_multiply_gpu.c)
+set(CP2K_DBM_SRCS_OPENCL dbm/dbm_multiply_opencl.cl)
 
 set(CP2K_PW_SRCS_GPU pw/gpu/pw_gpu_kernels.cu)
 
@@ -1443,9 +1500,9 @@ if(CP2K_USE_CUDA)
   else()
     target_link_libraries(
       cp2k_cuda_libs
-      INTERFACE $<$<BOOL:${CP2K_USE_CUSOLVER_MP}>:cp2k::CUSOLVER_MP::cusolvermp>
-                CUDA::cufft CUDA::cufftw CUDA::cublas CUDA::cudart
-                CUDA::cuda_driver)
+      INTERFACE
+        $<$<BOOL:${CP2K_USE_CUSOLVER_MP}>:cp2k::CUSOLVER_MP::cusolver_mp>
+        CUDA::cufft CUDA::cufftw CUDA::cublas CUDA::cudart CUDA::cuda_driver)
   endif()
 endif()
 
@@ -1508,8 +1565,7 @@ set_target_properties(
   PROPERTIES IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
              Fortran_MODULE_DIRECTORY mod_files
              POSITION_INDEPENDENT_CODE ON
-             VERSION ${cp2k_VERSION}
-             SOVERSION ${cp2k_APIVERSION})
+             VERSION ${cp2k_VERSION})
 
 if(CP2K_USE_ACCEL MATCHES "CUDA")
   set_property(TARGET cp2k PROPERTY CUDA_ARCHITECTURES
@@ -1544,17 +1600,22 @@ endif()
 
 add_library(cp2k_link_libs INTERFACE)
 
+include_directories(${DFTD4_DFTD4})
+include_directories(${DFTD4_MCTC})
+
 # the order is important so keep it that way
 target_link_libraries(
   cp2k_link_libs
   INTERFACE
+    $<$<BOOL:${CP2K_USE_DFTD4}>:dftd4::dftd4>
     $<$<BOOL:${CP2K_USE_SIRIUS}>:sirius::sirius>
     $<$<BOOL:${CP2K_USE_VORI}>:cp2k::VORI::vori>
     $<$<BOOL:${CP2K_USE_PEXSI}>:cp2k::PEXSI::pexsi>
     $<$<BOOL:${CP2K_USE_PEXSI}>:cp2k::ptscotch::ptscotch>
-    $<$<BOOL:${CP2K_USE_SPGLIB}>:cp2k::LIBSPG::libspg>
+    $<$<BOOL:${CP2K_USE_SPGLIB}>:Spglib::symspg>
     $<$<BOOL:${CP2K_USE_LIBXC}>:cp2k::Libxc::xc>
     $<$<BOOL:${CP2K_USE_ELPA}>:cp2k::ELPA::elpa>
+    $<$<BOOL:${CP2K_USE_PLUMED}>:cp2k::plumed::plumed>
     $<$<BOOL:${CP2K_USE_FFTW3_}>:cp2k::FFTW3::fftw3>
     $<$<AND:$<BOOL:${CP2K_USE_FFTW3_}>,$<BOOL:${CP2K_ENABLE_FFTW3_THREADS_SUPPORT}>>:cp2k::FFTW3::fftw3_threads>
     $<$<AND:$<BOOL:${CP2K_USE_FFTW3_}>,$<BOOL:${CP2K_ENABLE_FFTW3_OPENMP_SUPPORT}>>:cp2k::FFTW3::fftw3_omp>
@@ -1563,7 +1624,7 @@ target_link_libraries(
     $<$<BOOL:${CP2K_USE_TORCH}>:${TORCH_LIBRARIES}>
     $<$<BOOL:${CP2K_USE_COSMA}>:cosma::cosma_prefixed_pxgemm>
     $<$<BOOL:${CP2K_USE_COSMA}>:cosma::cosma>
-    $<$<BOOL:${CP2K_USE_DLAF}>:DLAF::DLAF>
+    $<$<BOOL:${CP2K_USE_DLAF}>:DLAF::Fortran>
     DBCSR::dbcsr
     $<$<BOOL:${CP2K_USE_MPI}>:cp2k::SCALAPACK::scalapack>
     cp2k_linalg_libs
@@ -1571,27 +1632,31 @@ target_link_libraries(
 
 string(TIMESTAMP CP2K_TIMESTAMP "%Y-%m-%d %H:%M:%S")
 
+if(CP2K_DATA_DIR STREQUAL "default")
+  set(CP2K_DATA_DIR "${CMAKE_INSTALL_FULL_DATAROOTDIR}/${PROJECT_NAME}/data")
+endif()
+
 target_link_libraries(cp2k PUBLIC cp2k_link_libs)
 target_compile_definitions(
   cp2k
   PUBLIC
     $<$<BOOL:${CP2K_USE_MPI}>:__parallel>
-    $<$<BOOL:${CP2K_USE_MPI}>:__SCALAPACK>
     $<$<BOOL:${CP2K_USE_MPI_F08}>:__MPI_F08>
     __COMPILE_DATE=\"${CP2K_TIMESTAMP}\"
     __COMPILE_HOST=\"${CP2K_HOST_NAME}\"
     __COMPILE_REVISION=\"${CP2K_GIT_HASH}\"
-    __DATA_DIR=\"${CMAKE_INSTALL_FULL_DATAROOTDIR}/cp2k/data\"
+    __DATA_DIR=\"${CP2K_DATA_DIR}\"
     __COMPILE_ARCH=\"${CMAKE_SYSTEM_PROCESSOR}\"
     $<$<CONFIG:COVERAGE>:__NO_ABORT>
     $<$<CONFIG:DEBUG>:__HAS_IEEE_EXCEPTIONS>
     $<$<CONFIG:DEBUG>:__CHECK_DIAG>
     $<$<BOOL:${CP2K_USE_PEXSI}>:__PEXSI>
-    $<$<BOOL:${CP2K_USE_PLUMED2}>:__PLUMED2>
+    $<$<BOOL:${CP2K_USE_PLUMED}>:__PLUMED2>
     $<$<BOOL:${CP2K_USE_QUIP}>:__QUIP>
     $<$<BOOL:${CP2K_USE_MAXWELL}>:__LIBMAXWELL>
     $<$<BOOL:${CP2K_USE_VORI}>:__LIBVORI>
     $<$<BOOL:${CP2K_USE_SPGLIB}>:__SPGLIB>
+    $<$<BOOL:${CP2K_USE_DFTD4}>:__DFTD4>
     $<$<BOOL:${CP2K_USE_SIRIUS}>:__SIRIUS>
     $<$<BOOL:${CP2K_USE_SPLA}>:__SPLA>
     $<$<BOOL:${CP2K_USE_SpFFT}>:__SPFFT>
@@ -1775,8 +1840,7 @@ install(
   INCLUDES
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}")
 
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/data"
-        DESTINATION "${CMAKE_INSTALL_FULL_DATAROOTDIR}/${PROJECT_NAME}")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/data/" DESTINATION "${CP2K_DATA_DIR}")
 
 # ##############################################################################
 # cp2kConfig.cmake, etc...

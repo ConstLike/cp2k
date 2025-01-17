@@ -1,6 +1,6 @@
 #!-------------------------------------------------------------------------------------------------!
 #!   CP2K: A general program to perform molecular dynamics simulations                             !
-#!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                  !
+#!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                  !
 #!                                                                                                 !
 #!   SPDX-License-Identifier: GPL-2.0-or-later                                                     !
 #!-------------------------------------------------------------------------------------------------!
@@ -12,25 +12,23 @@ include(cp2k_utils)
 cp2k_set_default_paths(LIBXC "LibXC")
 
 if(PKG_CONFIG_FOUND)
-  pkg_check_modules(CP2K_LIBXC IMPORTED_TARGET GLOBAL libxcf90 libxcf03
-                    libxc>=${LibXC_FIND_VERSION})
+  # For LibXC >= 7, the Fortran interface is only libxcf03
+  pkg_check_modules(CP2K_LIBXC IMPORTED_TARGET GLOBAL libxcf03 libxc>=7)
 endif()
 
 if(NOT CP2K_LIBXC_FOUND)
   # Revert pkg_check_modules side effects
   cp2k_set_default_paths(LIBXC "LibXC")
-  foreach(_var xc xcf03 xcf90)
+  foreach(_var xc xcf03)
     string(TOUPPER LIB${_var} _var_up)
     cp2k_find_libraries(${_var_up} ${_var})
   endforeach()
 endif()
 
-if(CP2K_LIBXC_FOUND
-   AND CP2K_LIBXCF90_FOUND
-   AND CP2K_LIBXCF03_FOUND)
+if(CP2K_LIBXC_FOUND)
+  # Require both libxc + libxcf03 for LibXC 7
   set(CP2K_LIBXC_LINK_LIBRARIES
-      "${CP2K_LIBXCF03_LIBRARIES};${CP2K_LIBXCF90_LIBRARIES};${CP2K_LIBXC_LIBRARIES}"
-  )
+      "${CP2K_LIBXCF03_LIBRARIES};${CP2K_LIBXC_LIBRARIES}")
 endif()
 
 if(NOT CP2K_LIBXC_INCLUDE_DIRS)

@@ -1,11 +1,12 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2025 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
 
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -19,10 +20,23 @@
 #include "dbm_multiply_internal.h"
 
 /*******************************************************************************
- * \brief Returns the larger of two given integer (missing from the C standard)
+ * \brief Returns the larger of two given integer (missing from the C standard).
  * \author Ole Schuett
  ******************************************************************************/
 static inline int imax(int x, int y) { return (x > y ? x : y); }
+
+/*******************************************************************************
+ * \brief Updates the min/max of a range of values (initially {INT_MAX, 0}).
+ * \author Hans Pabst
+ ******************************************************************************/
+static inline void min_max(int result[2], int value) {
+  if (value < result[0]) {
+    result[0] = value;
+  }
+  if (result[1] < value) {
+    result[1] = value;
+  }
+}
 
 /*******************************************************************************
  * \brief Private routine for computing the max filter threshold for each row.
@@ -33,6 +47,7 @@ static float *compute_rows_max_eps(const bool trans, const dbm_matrix_t *matrix,
   const int nrows = (trans) ? matrix->ncols : matrix->nrows;
   int *nblocks_per_row = calloc(nrows, sizeof(int));
   float *row_max_eps = malloc(nrows * sizeof(float));
+  assert(row_max_eps != NULL);
 
 #pragma omp parallel
   {
@@ -99,7 +114,7 @@ static void backend_upload_packs(const dbm_pack_t *pack_a,
 #if defined(__OFFLOAD) && !defined(__NO_OFFLOAD_DBM)
   dbm_multiply_gpu_upload_packs(pack_a, pack_b, &ctx->gpu);
 #else
-  (void)pack_a;   // mark as used
+  (void)pack_a; // mark as used
   (void)pack_b;
   (void)ctx;
 #endif
@@ -110,7 +125,8 @@ static void backend_upload_packs(const dbm_pack_t *pack_a,
  * \author Ole Schuett
  ******************************************************************************/
 static void backend_process_batch(const int ntasks, dbm_task_t batch[ntasks],
-                                  const double alpha, const dbm_pack_t *pack_a,
+                                  const int mnk_range[3][2], const double alpha,
+                                  const dbm_pack_t *pack_a,
                                   const dbm_pack_t *pack_b, const int kshard,
                                   dbm_shard_t *shard_c,
                                   backend_context_t *ctx) {
@@ -118,9 +134,11 @@ static void backend_process_batch(const int ntasks, dbm_task_t batch[ntasks],
   (void)pack_a; // mark as used
   (void)pack_b;
   (void)shard_c;
-  dbm_multiply_gpu_process_batch(ntasks, batch, alpha, kshard, &ctx->gpu);
+  dbm_multiply_gpu_process_batch(ntasks, batch, mnk_range, alpha, kshard,
+                                 &ctx->gpu);
 #else
-  (void)kshard; // mark as used
+  (void)mnk_range; // mark as used
+  (void)kshard;
   (void)ctx;
   dbm_multiply_cpu_process_batch(ntasks, batch, alpha, pack_a, pack_b, shard_c);
 #endif
@@ -181,9 +199,8 @@ static void multiply_packs(const bool transa, const bool transb,
 
 #pragma omp parallel reduction(+ : flop_sum)
   {
-
     // Blocks are ordered first by shard. Creating lookup tables of boundaries.
-#pragma omp for
+#pragma omp for nowait
     for (int iblock = 1; iblock < pack_a->nblocks; iblock++) {
       const int shard_row = pack_a->blocks[iblock].free_index % nshard_rows;
       const int prev_shard_row =
@@ -202,12 +219,13 @@ static void multiply_packs(const bool transa, const bool transb,
       }
     }
 
-#pragma omp for collapse(2) schedule(dynamic)
+#pragma omp for collapse(2) schedule(dynamic, 1)
     for (int shard_row = 0; shard_row < nshard_rows; shard_row++) {
       for (int shard_col = 0; shard_col < nshard_cols; shard_col++) {
         const int ishard = shard_row * nshard_cols + shard_col;
         dbm_shard_t *shard_c = &matrix_c->shards[ishard];
         dbm_task_t batch[MAX_BATCH_SIZE];
+        int mnk_range[][2] = {{INT_MAX, 0}, {INT_MAX, 0}, {INT_MAX, 0}};
         int ntasks = 0;
 
         // Use a merge-join to find pairs of blocks with matching sum indices.
@@ -260,12 +278,12 @@ static void multiply_packs(const bool transa, const bool transb,
             }
 
             // Count flops.
-            dbm_library_counter_increment(m, n, k);
-            const int task_flops = 2 * m * n * k;
-            flop_sum += task_flops;
+            const int64_t task_flops = 2LL * m * n * k;
             if (task_flops == 0) {
               continue;
             }
+            flop_sum += task_flops;
+            dbm_library_counter_increment(m, n, k);
 
             // Add block multiplication to batch.
             batch[ntasks].m = m;
@@ -276,15 +294,22 @@ static void multiply_packs(const bool transa, const bool transb,
             batch[ntasks].offset_c = blk_c->offset;
             ntasks++;
 
+            // track MxN-shape covering an entire batch
+            min_max(mnk_range[0], m);
+            min_max(mnk_range[1], n);
+            min_max(mnk_range[2], k);
+
             if (ntasks == MAX_BATCH_SIZE) {
-              backend_process_batch(ntasks, batch, alpha, pack_a, pack_b,
-                                    ishard, shard_c, ctx);
+              backend_process_batch(ntasks, batch, mnk_range, alpha, pack_a,
+                                    pack_b, ishard, shard_c, ctx);
+              mnk_range[0][0] = mnk_range[1][0] = mnk_range[2][0] = INT_MAX;
+              mnk_range[0][1] = mnk_range[1][1] = mnk_range[2][1] = 0;
               ntasks = 0;
             }
           }
         }
-        backend_process_batch(ntasks, batch, alpha, pack_a, pack_b, ishard,
-                              shard_c, ctx);
+        backend_process_batch(ntasks, batch, mnk_range, alpha, pack_a, pack_b,
+                              ishard, shard_c, ctx);
       }
     }
   }

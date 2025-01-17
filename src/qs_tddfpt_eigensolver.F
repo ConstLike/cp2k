@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -10,6 +10,8 @@ MODULE qs_tddfpt_eigensolver
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: dft_control_type,&
                                               tddfpt_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type,&
+                                              dbcsr_set
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_plus_fm_fm_t,&
                                               cp_dbcsr_sm_fm_multiply
    USE cp_fm_basic_linalg,              ONLY: cp_fm_scale_and_add,&
@@ -32,8 +34,6 @@ MODULE qs_tddfpt_eigensolver
                                               cp_fm_type
    USE cp_log_handling,                 ONLY: cp_logger_get_default_io_unit,&
                                               cp_to_string
-   USE dbcsr_api,                       ONLY: dbcsr_p_type,&
-                                              dbcsr_set
    USE input_constants,                 ONLY: tddfpt_davidson,&
                                               tddfpt_lanczos
    USE kinds,                           ONLY: default_string_length,&
@@ -232,7 +232,7 @@ CONTAINS
       IF (max_krylovspace_dim <= max_kv) THEN
          max_kv = max_krylovspace_dim
          IF (output_unit > 0) THEN
-            WRITE (output_unit, *) "  Setting the maximum number of krylov vectors to ", max_kv, "!!"
+            WRITE (output_unit, *) "  Setting the maximum number of krylov vectors to ", max_kv, "!"
          END IF
       END IF
 

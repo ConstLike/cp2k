@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -518,9 +518,7 @@ CONTAINS
       END IF
 
       CALL elpa_obj%set("real_kernel", elpa_kernel, success)
-      IF (success /= elpa_ok) THEN
-         CPWARN("Setting real_kernel for ELPA failed")
-      END IF
+      CPWARN_IF(success /= elpa_ok, "Setting real_kernel for ELPA failed")
 
       IF (use_qr) THEN
          CALL elpa_obj%set("qr", 1, success)

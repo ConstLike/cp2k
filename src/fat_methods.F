@@ -4,7 +4,7 @@ module fat_methods
   use cp_files, only: open_file, close_file
   use cp_log_handling, only: cp_logger_type, cp_logger_get_default_io_unit, cp_get_default_logger
   use cp_realspace_grid_cube, only: cp_pw_to_cube, cp_cube_to_pw
-  use dbcsr_api, only: dbcsr_p_type
+  USE dbcsr_api, ONLY: dbcsr_type, dbcsr_p_type
   use fat_types, only: fat_env_type
   use force_env_types, only: force_env_type
   use input_section_types, only: section_vals_type, section_vals_val_get, section_vals_get_subs_vals
@@ -17,7 +17,7 @@ module fat_methods
   use pw_poisson_methods, only: pw_poisson_solve
   use pw_poisson_types, only: pw_poisson_type
   use pw_pool_types, only: pw_pool_type
-  use pw_types, only: pw_type, pw_p_type, REALDATA3D, COMPLEXDATA1D, REALSPACE, RECIPROCALSPACE
+  USE pw_types, ONLY: pw_r3d_rs_type, pw_c1d_gs_type
   use qs_collocate_density, only: calculate_drho_elec_dR, calculate_drho_core
   use qs_energy_types, only: qs_energy_type
   use qs_environment_types, only: qs_environment_type, get_qs_env, set_qs_env
@@ -61,8 +61,8 @@ contains
 ! **************************************************************************************************
   subroutine fat_pw_create_frag(fat_env, pw_r, pw_g, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), optional, pointer :: pw_r
-    type(pw_type), optional, pointer :: pw_g
+    type(pw_r3d_rs_type), optional, pointer :: pw_r
+    type(pw_c1d_gs_type), optional, pointer :: pw_g
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_pw_create_frag"
@@ -80,15 +80,13 @@ contains
 
     IF (PRESENT(pw_r)) THEN
        ALLOCATE(pw_r)
-       CALl fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw_r, &
-          use_data=realdata3d, in_space=realspace)
+       CALl fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw_r)
        CALL pw_zero(pw_r)
     END IF
 
     IF (PRESENT(pw_g)) THEN
        ALLOCATE(pw_g)
-       CALl fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw_g, &
-          use_data=complexdata1d, in_space=reciprocalspace)
+       CALl fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw_g)
        CALL pw_zero(pw_g)
     END IF
 
@@ -101,8 +99,8 @@ contains
 ! **************************************************************************************************
   subroutine fat_pw_release_frag(fat_env, pw_r, pw_g, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), optional, pointer :: pw_r
-    type(pw_type), optional, pointer :: pw_g
+    type(pw_r3d_rs_type), optional, pointer :: pw_r
+    type(pw_c1d_gs_type), optional, pointer :: pw_g
     integer :: i_frag, handle
 
     character(len=*), parameter :: routinen = "fat_pw_release_frag"
@@ -136,8 +134,8 @@ contains
 ! **************************************************************************************************
   subroutine fat_pw_create_ref(fat_env, pw_r, pw_g)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), optional, intent(out) :: pw_r
-    type(pw_type), optional, intent(out) :: pw_g
+    type(pw_r3d_rs_type), optional, intent(out) :: pw_r
+    type(pw_c1d_gs_type), optional, intent(out) :: pw_g
 
     character(len=*), parameter :: routinen = "fat_pw_create_ref"
 
@@ -151,14 +149,12 @@ contains
     CPASSERT(ASSOCIATED(fat_env%pw_pool_ref))
 
     IF (PRESENT(pw_r)) THEN
-       call fat_env%pw_pool_ref%create_pw(pw_r, &
-          use_data=realdata3d, in_space=realspace)
+       call fat_env%pw_pool_ref%create_pw(pw_r)
        call pw_zero(pw_r)
     END IF
 
     IF (PRESENT(pw_g)) THEN
-       call fat_env%pw_pool_ref%create_pw(pw_g, &
-          use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+       call fat_env%pw_pool_ref%create_pw(pw_g)
        call pw_zero(pw_g)
     END IF
 
@@ -171,8 +167,8 @@ contains
 ! **************************************************************************************************
   subroutine fat_pw_release_ref(fat_env, pw_r, pw_g)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), optional, intent(inout) :: pw_r
-    type(pw_type), optional, intent(inout) :: pw_g
+    type(pw_r3d_rs_type), optional, intent(inout) :: pw_r
+    type(pw_c1d_gs_type), optional, intent(inout) :: pw_g
 
     character(len=*), parameter :: routinen = "fat_pw_release_ref"
 
@@ -203,8 +199,8 @@ contains
 ! **************************************************************************************************
   subroutine fat_pws_create_ref(fat_env, pws_r, pws_g, n_pws)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), optional, pointer :: pws_r(:)
-    type(pw_type), optional, pointer :: pws_g(:)
+    type(pw_r3d_rs_type), optional, pointer :: pws_r(:)
+    type(pw_c1d_gs_type), optional, pointer :: pws_g(:)
     integer :: n_pws
 
     character(len=*), parameter :: routinen = "fat_pws_create_ref"
@@ -240,8 +236,8 @@ contains
 ! **************************************************************************************************
   subroutine fat_pws_release_ref(fat_env, pws_r, pws_g)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), optional, pointer :: pws_r(:)
-    type(pw_type), optional, pointer :: pws_g(:)
+    type(pw_r3d_rs_type), optional, pointer :: pws_r(:)
+    type(pw_c1d_gs_type), optional, pointer :: pws_g(:)
 
     character(len=*), parameter :: routinen = "fat_pws_release_ref"
 
@@ -280,8 +276,8 @@ contains
 ! **************************************************************************************************
   SUBROUTINE fat_pws_create_frag(fat_env, pws_r, pws_g, i_frag, n_pws)
     TYPE(fat_env_type), POINTER                       :: fat_env
-    TYPE(pw_type), OPTIONAL, POINTER                  :: pws_r(:)
-    TYPE(pw_type), OPTIONAL, POINTER                  :: pws_g(:)
+    TYPE(pw_r3d_rs_type), OPTIONAL, POINTER           :: pws_r(:)
+    TYPE(pw_c1d_gs_type), OPTIONAL, POINTER           :: pws_g(:)
     INTEGER, INTENT(IN)                               :: i_frag
     INTEGER, INTENT(IN)                               :: n_pws
 
@@ -298,8 +294,7 @@ contains
     IF (PRESENT(pws_r)) THEN
        allocate(pws_r(n_pws))
        DO i = 1, n_pws
-          call fat_env%pw_pool_sub(i_frag)%pool%create_pw( &
-             pws_r(i), use_data=REALDATA3D, in_space=REALSPACE)
+          call fat_env%pw_pool_sub(i_frag)%pool%create_pw(pws_r(i))
           call pw_zero(pws_r(i))
        END DO
     END IF
@@ -307,8 +302,7 @@ contains
     IF (PRESENT(pws_g)) THEN
        allocate(pws_g(n_pws))
        DO i = 1, n_pws
-          call fat_env%pw_pool_sub(i_frag)%pool%create_pw( &
-             pws_g(i), use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+          call fat_env%pw_pool_sub(i_frag)%pool%create_pw(pws_g(i))
           call pw_zero(pws_g(i))
        END DO
     END IF
@@ -322,14 +316,14 @@ contains
 ! **************************************************************************************************
   subroutine fat_pws_release_frag(fat_env, pws_r, pws_g, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), optional, pointer :: pws_r(:)
-    type(pw_type), optional, pointer :: pws_g(:)
+    type(pw_r3d_rs_type), optional, pointer :: pws_r(:)
+    type(pw_c1d_gs_type), optional, pointer :: pws_g(:)
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_pws_release_frag"
 
-    type(pw_type), pointer :: pw_r_tmp
-    type(pw_type), pointer :: pw_g_tmp
+    type(pw_r3d_rs_type), pointer :: pw_r_tmp
+    type(pw_c1d_gs_type), pointer :: pw_g_tmp
     integer :: i, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -365,8 +359,8 @@ contains
 ! **************************************************************************************************
   subroutine fat_get_rho_frag(fat_env, rho_r, rho_g, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), optional, pointer :: rho_r(:)
-    type(pw_type), optional, pointer :: rho_g(:)
+    type(pw_r3d_rs_type), optional, pointer :: rho_r(:)
+    type(pw_c1d_gs_type), optional, pointer :: rho_g(:)
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_get_rho_frag"
@@ -374,7 +368,7 @@ contains
     character(len=default_string_length) :: label
     type(qs_environment_type), pointer :: qs_env
     type(qs_rho_type), pointer :: qs_rho
-    type(pw_type), pointer :: rho_r_tmp
+    type(pw_r3d_rs_type), pointer :: rho_r_tmp
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -421,8 +415,8 @@ contains
 
   subroutine write_pw_to_cube(fat_env, pw_r, pw_g, filename)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), optional, pointer :: pw_r
-    type(pw_type), optional, pointer :: pw_g
+    type(pw_r3d_rs_type), optional, pointer :: pw_r
+    type(pw_c1d_gs_type), optional, pointer :: pw_g
     character(len=*), intent(in) :: filename
 
     type(cp_logger_type), pointer :: logger
@@ -433,7 +427,7 @@ contains
     type(pw_env_type), pointer :: pw_env
     type(qs_subsys_type), pointer :: subsys
     type(pw_pool_type), pointer :: pw_pool
-    type(pw_type), pointer :: pw_r_tmp
+    type(pw_r3d_rs_type), pointer :: pw_r_tmp
     integer, pointer :: stride(:)
     integer :: unit_nr
 
@@ -493,138 +487,14 @@ contains
        end if
     END IF
 
-  end subroutine write_pw_to_cube
-
-  subroutine print_pw_statistics(pw, name, i_frag)
-    type(pw_type), intent(in) :: pw
-    character(len=*), intent(in) :: name
-    integer, intent(in) :: i_frag
-
-    real(dp) :: mean, std_dev, min_val, max_val, sum_val, norm_2
-    integer :: count, i
-    type(pw_grid_type), pointer :: grid
-    logical :: print_grid = .true.
-
-    grid => pw%pw_grid
-
-    if (pw%in_space == REALSPACE) then
-      sum_val = sum(abs(pw%cr3d))
-      count = size(pw%cr3d)
-      mean = sum_val / count
-      std_dev = sqrt(sum((abs(pw%cr3d) - mean)**2) / count)
-      min_val = minval(abs(pw%cr3d))
-      max_val = maxval(abs(pw%cr3d))
-      norm_2 = sqrt(sum(pw%cr3d**2))
-    else if (pw%in_space == RECIPROCALSPACE) then
-      sum_val = sum(abs(pw%cc))
-      count = size(pw%cc)
-      mean = real(sum_val) / count
-      std_dev = sqrt(sum(abs(pw%cc - mean)**2) / count)
-      min_val = minval(abs(pw%cc))
-      max_val = maxval(abs(pw%cc))
-      norm_2 = sqrt(sum(abs(pw%cc)**2))
-    else
-      print *, "KKK| Error: Unknown space type for PW"
-      return
-    end if
-
-    ! PW Type Information
-    print *, "KKK| Statistics for -> ", name, " <-(fragment ", i_frag, "):"
-    print *, "KKK|  PW Type Information:"
-    print *, "KKK|   In use:                ", pw%in_use
-    print *, "KKK|   Space:                 ", merge("REALSPACE      ", &
-      "RECIPROCALSPACE", pw%in_space == REALSPACE)
-    print *, "KKK|  Data Statistics:"
-    print *, "KKK|   Mean(abs):             ", mean
-    print *, "KKK|   Std Dev:               ", std_dev
-    print *, "KKK|   Min(abs):              ", min_val
-    print *, "KKK|   Max(abs):              ", max_val
-    print *, "KKK|   Sum(abs):              ", sum_val
-    print *, "KKK|   Norm-2:                ", norm_2
-    print *, "KKK|   Num of grid p.         ", count
-
-    if (print_grid) then
-      print *, "KKK|  Grid Information:"
-      print *, "KKK|   Total Grid Points:     ", grid%ngpts
-      print *, "KKK|   Grid Points in Cutoff: ", grid%ngpts_cut
-      print *, "KKK|   Dimensions:            ", grid%npts
-      print *, "KKK|   Local Grid Points:     ", grid%ngpts_local
-      print *, "KKK|   Local Points in Cutoff:", grid%ngpts_cut_local
-      print *, "KKK|   Grid Bounds:           ", grid%bounds
-      print *, "KKK|   Local Grid Bounds:     ", grid%bounds_local
-      print *, "KKK|   Grid Spacing:          ", grid%dr
-      print *, "KKK|   Cell Matrix:"
-      do i = 1, 3
-        print *, "KKK|                          ", grid%dh(:,i)
-      end do
-      print *, "KKK|   Inverse Cell Matrix:"
-      do i = 1, 3
-        print *, "KKK|                          ", grid%dh_inv(:,i)
-      end do
-      print *, "KKK|   Orthorhombic:          ", grid%orthorhombic
-      print *, "KKK|   Volume Element:        ", grid%dvol
-      print *, "KKK|   Total Volume:          ", grid%vol
-      print *, "KKK|   Cutoff:                ", grid%cutoff
-      print *, "KKK|   Grid Span:             ", merge("HALFSPACE", &
-        "FULLSPACE", grid%grid_span == HALFSPACE)
-      print *, "KKK|   Has G=0:               ", grid%have_g0
-      print *, "KKK|   First G≠0 index:       ", grid%first_gne0
-      print *, "KKK|   Grid ID:               ", grid%id_nr
-      print *, "KKK|   Reference Count:       ", grid%ref_count
-      print *, "KKK|   Spherical Cutoff:      ", grid%spherical
-      print *, "KKK|  Parallel Information:"
-      print *, "KKK|   Mode:                  ", merge("Distributed", &
-        "Local      ", grid%para%mode == PW_MODE_DISTRIBUTED)
-      print *, "KKK|   Ray Distribution:      ", grid%para%ray_distribution
-      print *, "KKK|   Blocked:               ", grid%para%blocked
-      print *, "KKK|   Group Size:            ", grid%para%group_size
-      print *, "KKK|   My Position:           ", grid%para%my_pos
-      print *, "KKK|   Group Head:            ", grid%para%group_head
-      print *, "KKK|   Group Head ID:         ", grid%para%group_head_id
-      print *, "KKK|   Real Space Dimensions: ", grid%para%rs_dims
-      print *, "KKK|   Real Space Position:   ", grid%para%rs_pos
-    end if
-
-    if (associated(grid%g)) then
-      print *, "KKK|  G-vector Statistics:"
-      print *, "KKK|   Mean G magnitude:      ", sum(sqrt(sum(grid%g**2, dim=1))) / size(grid%g, 2)
-      print *, "KKK|   Max G magnitude:       ", sqrt(maxval(sum(grid%g**2, dim=1)))
-    end if
-
-    if (associated(grid%gsq)) then
-      print *, "KKK|   Mean G^2:              ", sum(grid%gsq) / size(grid%gsq)
-      print *, "KKK|   Max G^2:               ", maxval(grid%gsq)
-    end if
-
-!#if defined(__parallel)
-!    print *, "KKK|  MPI Information:"
-!    print *, "KKK|   MPI Mode:               ", merge("DISTRIBUTED","LOCAL      ", &
-!             grid%para%mode == PW_MODE_DISTRIBUTED)
-!    print *, "KKK|   MPI Group Handle:       ", grid%para%group%get_handle()
-!    print *, "KKK|   MPI Group Size:         ", grid%para%group_size
-!    print *, "KKK|   MPI Position:           ", grid%para%my_pos
-!    print *, "KKK|   MPI Dims:               ", grid%para%rs_dims
-!    print *, "KKK|   MPI Ray Distribution:   ", grid%para%ray_distribution
-!    print *, "KKK|   MPI Blocked:            ", grid%para%blocked
-!    print *, "KKK|   MPI Task Rank:          ", grid%para%rs_dims
-!    print *, "KKK|   Real Space Group:       ", grid%para%rs_group%get_handle()
-!    print *, "KKK|   Real Space Position:    ", grid%para%rs_pos
-!    print *, "KKK|   Real Space MPO:         ", grid%para%rs_mpo
-!    print *, "KKK|   Has Bounds Array:       ", ALLOCATED(grid%para%bo)
-!    if (ALLOCATED(grid%para%bo)) then
-!      print *, "KKK|   Bounds Array Shape:     ", SHAPE(grid%para%bo)
-!    endif
-!    print *, "KKK|   Has YZ Ray Array:       ", ALLOCATED(grid%para%yzp)
-!    print *, "KKK|   Has YZ Count Array:     ", ALLOCATED(grid%para%nyzray)
-!#endif
-  end subroutine print_pw_statistics
+end subroutine write_pw_to_cube
 
 ! **************************************************************************************************
 !> \brief Gets the nuclear density for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
   subroutine fat_get_rhon_frag(fat_env, rhon_g, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: rhon_g
+    type(pw_c1d_gs_type), pointer :: rhon_g
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_get_rhon_frag"
@@ -651,7 +521,7 @@ contains
 ! **************************************************************************************************
   subroutine fat_get_drhon_frag(fat_env, drhon_g, i_frag, i_nuc, i_dir)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: drhon_g
+    type(pw_c1d_gs_type), pointer :: drhon_g
     integer :: i_frag, i_nuc, i_dir
 
     character(len=*), parameter :: routinen = "fat_get_drhon_frag"
@@ -676,15 +546,15 @@ contains
 ! **************************************************************************************************
   subroutine fat_get_drho_frag(fat_env, drho_r,  drho_g, i_frag, i_nuc, i_dir)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: drho_r
-    type(pw_type), pointer :: drho_g
+    type(pw_r3d_rs_type), pointer :: drho_r
+    type(pw_c1d_gs_type), pointer :: drho_g
     integer :: i_frag, i_nuc, i_dir
 
     character(len=*), parameter :: routinen = "fat_get_drho_frag"
 
     type(qs_environment_type), pointer :: qs_env
-    type(dbcsr_p_type), pointer :: p_mat(:)
-    type(qs_rho_type), pointer :: rho_r
+    type(dbcsr_p_type), pointer :: rho_ao(:)
+    type(qs_rho_type), pointer :: rho
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -694,12 +564,10 @@ contains
     CPASSERT(ASSOCIATED(drho_r) .AND. ASSOCIATED(drho_g))
 
     qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
-    call get_qs_env(qs_env, rho=rho_r)
-    call qs_rho_get(rho_r, rho_ao=p_mat)
+    call get_qs_env(qs_env, rho=rho)
+    call qs_rho_get(rho, rho_ao=rho_ao)
 
-    call calculate_drho_elec_dR( &
-       p_mat(1)%matrix, drho=drho_r, drho_gspace=drho_g, &
-       qs_env=qs_env, beta=i_dir, lambda=i_nuc)
+    call calculate_drho_elec_dR(matrix_p=rho_ao(1)%matrix, drho=drho_r, drho_gspace=drho_g, qs_env=qs_env, beta=i_dir, lambda=i_nuc)
 
     call timestop(handle)
 
@@ -710,12 +578,12 @@ contains
 ! **************************************************************************************************
   subroutine fat_get_rho_ref(fat_env, rho_r, rho_g)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), optional :: rho_r(:)
-    type(pw_type), pointer, optional :: rho_g(:)
+    type(pw_r3d_rs_type), optional :: rho_r(:)
+    type(pw_c1d_gs_type), pointer, optional :: rho_g(:)
 
     character(len=*), parameter :: routinen = "fat_get_rho_ref"
 
-    type(pw_type), pointer :: rho_r_tmp(:)
+    type(pw_r3d_rs_type), pointer :: rho_r_tmp(:)
     integer :: i, j, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -745,9 +613,9 @@ contains
 ! **************************************************************************************************
   subroutine fat_v_ts_frag(fat_env, rho_r, rho_g, v_kin_pot_frag, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: rho_r(:)
-    type(pw_type), pointer :: rho_g(:)
-    type(pw_type), pointer :: v_kin_pot_frag(:)
+    type(pw_r3d_rs_type), pointer :: rho_r(:)
+    type(pw_c1d_gs_type), pointer :: rho_g(:)
+    type(pw_r3d_rs_type), pointer :: v_kin_pot_frag(:)
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_v_ts_frag"
@@ -755,8 +623,8 @@ contains
     type(qs_environment_type), pointer :: qs_env
     type(section_vals_type), pointer :: input
     type(section_vals_type), pointer :: kin_section
-    type(pw_type), pointer :: tau(:)
-    type(pw_type), pointer :: v_tau(:)
+    type(pw_r3d_rs_type), pointer :: tau(:)
+    type(pw_r3d_rs_type), pointer :: v_tau(:)
     real(dp) :: virial(3, 3)
     real(dp) :: e_kin_frag
     integer :: handle
@@ -789,17 +657,17 @@ contains
 ! **************************************************************************************************
   subroutine fat_v_ts_ref(fat_env, v_kin_pot_ref)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v_kin_pot_ref(:)
+    type(pw_r3d_rs_type), pointer :: v_kin_pot_ref(:)
 
     character(len=*), parameter :: routinen = "fat_v_ts_ref"
 
     type(qs_environment_type), pointer :: qs_env
     type(section_vals_type), pointer :: input
     type(section_vals_type), pointer :: kin_section
-    type(pw_type), pointer :: rho_r(:)
-    type(pw_type), pointer :: rho_g(:)
-    type(pw_type), pointer :: tau(:)
-    type(pw_type), pointer :: v_tau(:)
+    type(pw_r3d_rs_type), pointer :: rho_r(:)
+    type(pw_c1d_gs_type), pointer :: rho_g(:)
+    type(pw_r3d_rs_type), pointer :: tau(:)
+    type(pw_r3d_rs_type), pointer :: v_tau(:)
     real(dp) :: virial(3, 3)
     real(dp) :: e_kin_ref
     integer :: handle
@@ -841,9 +709,9 @@ contains
 ! **************************************************************************************************
   subroutine fat_v_xc_frag(fat_env, rho_r, rho_g, v_xc_pot_frag, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: rho_r(:)
-    type(pw_type), pointer :: rho_g(:)
-    type(pw_type), pointer :: v_xc_pot_frag(:)
+    type(pw_r3d_rs_type), pointer :: rho_r(:)
+    type(pw_c1d_gs_type), pointer :: rho_g(:)
+    type(pw_r3d_rs_type), pointer :: v_xc_pot_frag(:)
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_v_xc_frag"
@@ -851,8 +719,8 @@ contains
     type(qs_environment_type), pointer :: qs_env
     type(section_vals_type), pointer :: input
     type(section_vals_type), pointer :: xc_section
-    type(pw_type), pointer :: tau(:)
-    type(pw_type), pointer :: v_tau(:)
+    type(pw_r3d_rs_type), pointer :: tau(:)
+    type(pw_r3d_rs_type), pointer :: v_tau(:)
     real(dp) :: virial(3, 3)
     real(dp) :: e_xc_frag
     integer :: handle
@@ -885,17 +753,17 @@ contains
 ! **************************************************************************************************
   subroutine fat_v_xc_ref(fat_env, v_xc_pot_ref)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v_xc_pot_ref(:)
+    type(pw_r3d_rs_type), pointer :: v_xc_pot_ref(:)
 
     character(len=*), parameter :: routinen = "fat_v_xc_ref"
 
     type(qs_environment_type), pointer :: qs_env
     type(section_vals_type), pointer :: input
     type(section_vals_type), pointer :: xc_section
-    type(pw_type), pointer :: rho_r(:)
-    type(pw_type), pointer :: rho_g(:)
-    type(pw_type), pointer :: tau(:)
-    type(pw_type), pointer :: v_tau(:)
+    type(pw_r3d_rs_type), pointer :: rho_r(:)
+    type(pw_c1d_gs_type), pointer :: rho_g(:)
+    type(pw_r3d_rs_type), pointer :: tau(:)
+    type(pw_r3d_rs_type), pointer :: v_tau(:)
     real(dp) :: virial(3, 3)
     real(dp) :: e_xc_ref
     integer ::  handle
@@ -937,7 +805,7 @@ contains
 ! **************************************************************************************************
   subroutine fat_v_e_frag(fat_env, v_elec_pot, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v_elec_pot
+    type(pw_r3d_rs_type), pointer :: v_elec_pot
     integer :: i_frag
 
     character(len=*), parameter :: routineN = "fat_v_e_frag"
@@ -945,7 +813,7 @@ contains
     type(qs_environment_type), pointer :: qs_env
     type(pw_poisson_type), pointer :: poisson_env
     type(pw_env_type), pointer :: pw_env
-    type(pw_type), pointer :: rho_g(:)
+    type(pw_c1d_gs_type), pointer :: rho_g(:)
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -969,7 +837,7 @@ contains
 ! **************************************************************************************************
   subroutine fat_v_n_frag(fat_env, v_nuc_pot, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v_nuc_pot
+    type(pw_r3d_rs_type), pointer :: v_nuc_pot
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_v_n_frag"
@@ -977,7 +845,7 @@ contains
     type(qs_environment_type), pointer :: qs_env
     type(pw_poisson_type), pointer :: poisson_env
     type(pw_env_type), pointer :: pw_env
-    type(pw_type), pointer :: rhon_g
+    type(pw_c1d_gs_type), pointer :: rhon_g
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1002,14 +870,14 @@ contains
 ! **************************************************************************************************
   subroutine fat_vemb_tsna_frag(fat_env, rho_r, rho_g, v_emb, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: rho_r(:)
-    type(pw_type), pointer :: rho_g(:)
-    type(pw_type), pointer :: v_emb
+    type(pw_r3d_rs_type), pointer :: rho_r(:)
+    type(pw_c1d_gs_type), pointer :: rho_g(:)
+    type(pw_r3d_rs_type), pointer :: v_emb
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_vemb_tsna_frag"
 
-    type(pw_type), pointer :: v(:)
+    type(pw_r3d_rs_type), pointer :: v(:)
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1041,14 +909,14 @@ contains
 ! **************************************************************************************************
   subroutine fat_vemb_xcna_frag(fat_env, rho_r, rho_g, v_emb, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: rho_r(:)
-    type(pw_type), pointer :: rho_g(:)
-    type(pw_type), pointer :: v_emb
+    type(pw_r3d_rs_type), pointer :: rho_r(:)
+    type(pw_c1d_gs_type), pointer :: rho_g(:)
+    type(pw_r3d_rs_type), pointer :: v_emb
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_vemb_xcna_frag"
 
-    type(pw_type), pointer :: v(:)
+    type(pw_r3d_rs_type), pointer :: v(:)
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1079,12 +947,12 @@ contains
 ! **************************************************************************************************
   subroutine fat_vemb_e_frag(fat_env, v_emb, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v_emb
+    type(pw_r3d_rs_type), pointer :: v_emb
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_vemb_e_frag"
 
-    type(pw_type), pointer :: v
+    type(pw_r3d_rs_type), pointer :: v
     integer :: i, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1114,12 +982,12 @@ contains
 ! **************************************************************************************************
   subroutine fat_vemb_n_frag(fat_env, v_emb, i_frag)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v_emb
+    type(pw_r3d_rs_type), pointer :: v_emb
     integer :: i_frag
 
     character(len=*), parameter :: routinen = "fat_vemb_n_frag"
 
-    type(pw_type), pointer :: v
+    type(pw_r3d_rs_type), pointer :: v
     integer :: i, handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1144,7 +1012,8 @@ contains
     call timestop(handle)
 
   end subroutine fat_vemb_n_frag
-  ! **************************************************************************************************
+
+! **************************************************************************************************
 !> \brief Write embedding potential to cube and dat files
 !> \param fat_env The freeze-and-thaw environment
 !> \param v_emb The embedding potential to write
@@ -1155,8 +1024,8 @@ contains
 ! **************************************************************************************************
   SUBROUTINE fat_write_embedding_potential(fat_env, v_emb, work_tmp, i_frag)
     TYPE(fat_env_type), POINTER                       :: fat_env
-    TYPE(pw_type), POINTER                            :: v_emb
-    TYPE(pw_type), POINTER                            :: work_tmp
+    TYPE(pw_r3d_rs_type), POINTER                     :: v_emb
+    TYPE(pw_r3d_rs_type), POINTER                     :: work_tmp
     INTEGER, INTENT(IN)                               :: i_frag
 
     CHARACTER(len=*), PARAMETER :: routineN = 'fat_write_embedding_potential'
@@ -1283,15 +1152,15 @@ contains
 ! **************************************************************************************************
   subroutine fat_vemb_frag(fat_env, v_emb, i_frag, to_file)
     type(fat_env_type), pointer :: fat_env
-    type(pw_type), pointer :: v_emb
+    type(pw_r3d_rs_type), pointer :: v_emb
     integer :: i_frag
     logical :: to_file
 
     character(len=*), parameter :: routinen = "fat_vemb_frag"
 
-    type(pw_type), pointer :: rho_r(:)
-    type(pw_type), pointer :: rho_g(:)
-    type(pw_type), pointer :: vemb_tmp
+    type(pw_r3d_rs_type), pointer :: rho_r(:)
+    type(pw_c1d_gs_type), pointer :: rho_g(:)
+    type(pw_r3d_rs_type), pointer :: vemb_tmp
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1404,7 +1273,9 @@ contains
 
     character(len=*), parameter :: routinen = "fat_eint_ee"
 
-    type(pw_type), pointer :: v_ee, rho, rho_tmp(:)
+    type(pw_r3d_rs_type), pointer :: rho_r
+    type(pw_r3d_rs_type), pointer :: rho_r_tmp(:)
+    type(pw_r3d_rs_type), pointer :: v_ee
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1412,16 +1283,18 @@ contains
     call timeset(routinen, handle)
 
     call fat_pw_create_frag(fat_env, pw_r=v_ee, i_frag=i)
+    call fat_pw_create_frag(fat_env, pw_r=rho_r, i_frag=i)
+
     call fat_v_e_frag(fat_env, v_ee, i)
 
-    call fat_pw_create_frag(fat_env, pw_r=rho, i_frag=i)
-    call fat_get_rho_frag(fat_env, rho_r=rho_tmp, i_frag=j)
+    call fat_get_rho_frag(fat_env, rho_r=rho_r_tmp, i_frag=j)
 
-    call pw_transfer(rho_tmp(1), rho)
-    e = pw_integral_ab(v_ee, rho)
+    call pw_transfer(rho_r_tmp(1), rho_r)
+
+    e = pw_integral_ab(v_ee, rho_r)
 
     call fat_pw_release_frag(fat_env, pw_r=v_ee, i_frag=i)
-    call fat_pw_release_frag(fat_env, pw_r=rho, i_frag=i)
+    call fat_pw_release_frag(fat_env, pw_r=rho_r, i_frag=i)
 
     call timestop(handle)
 
@@ -1437,9 +1310,9 @@ contains
 
     character(len=*), parameter :: routinen = "fat_eint_ne"
 
-    type(pw_type), pointer :: rho_r
-    type(pw_type), pointer :: rho_r_tmp(:)
-    type(pw_type), pointer :: v_ne
+    type(pw_r3d_rs_type), pointer :: rho_r
+    type(pw_r3d_rs_type), pointer :: rho_r_tmp(:)
+    type(pw_r3d_rs_type), pointer :: v_ne
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1473,9 +1346,9 @@ contains
 
     character(len=*), parameter :: routinen = "fat_eint_nn"
 
-    type(pw_type), pointer :: v_nn
-    type(pw_type), pointer :: rhon_r
-    type(pw_type), pointer :: rhon_g_tmp
+    type(pw_r3d_rs_type), pointer :: v_nn
+    type(pw_r3d_rs_type), pointer :: rhon_r
+    type(pw_c1d_gs_type), pointer :: rhon_g_tmp
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1497,7 +1370,7 @@ contains
     e = pw_integral_ab(v_nn, rhon_r)
 
     call fat_pw_release_frag(fat_env, pw_r=v_nn, i_frag=i)
-    call fat_pw_release_frag(fat_env, pw_g=rhon_r, i_frag=i)
+    call fat_pw_release_frag(fat_env, pw_r=rhon_r, i_frag=i)
 
     call timestop(handle)
 
@@ -1660,7 +1533,9 @@ contains
 
     type(dft_control_type), pointer :: dft_control
     type(force_env_type), pointer :: force_env_tmp
-    type(pw_type), pointer :: rho(:), v_emb, weights
+    type(pw_r3d_rs_type), pointer :: rho(:)
+    type(pw_r3d_rs_type), pointer :: v_emb
+    type(pw_r3d_rs_type), pointer :: weights
     type(qs_energy_type), pointer :: energy
     type(qs_environment_type), pointer :: qs_env_tmp
     integer :: handle
@@ -1928,9 +1803,9 @@ contains
     integer :: a, i, j, k, handle
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: v_r
-    type(pw_type), pointer :: drho_r
-    type(pw_type), pointer :: drho_g
+    type(pw_r3d_rs_type), pointer :: v_r
+    type(pw_r3d_rs_type), pointer :: drho_r
+    type(pw_c1d_gs_type), pointer :: drho_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -1973,11 +1848,11 @@ contains
     integer :: a, i, j, k, handle
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: rho_r(:)
-    type(pw_type), pointer :: rho_g(:)
-    type(pw_type), pointer :: v_emb
-    type(pw_type), pointer :: drho_r
-    type(pw_type), pointer :: drho_g
+    type(pw_r3d_rs_type), pointer :: rho_r(:)
+    type(pw_c1d_gs_type), pointer :: rho_g(:)
+    type(pw_r3d_rs_type), pointer :: v_emb
+    type(pw_r3d_rs_type), pointer :: drho_r
+    type(pw_c1d_gs_type), pointer :: drho_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2035,11 +1910,11 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: v_emb
-    type(pw_type), pointer :: rho_r(:)
-    type(pw_type), pointer :: rho_g(:)
-    type(pw_type), pointer :: drho_r
-    type(pw_type), pointer :: drho_g
+    type(pw_r3d_rs_type), pointer :: v_emb
+    type(pw_r3d_rs_type), pointer :: rho_r(:)
+    type(pw_c1d_gs_type), pointer :: rho_g(:)
+    type(pw_r3d_rs_type), pointer :: drho_r
+    type(pw_c1d_gs_type), pointer :: drho_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2092,9 +1967,9 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: v_r
-    type(pw_type), pointer :: drho_r
-    type(pw_type), pointer :: drho_g
+    type(pw_r3d_rs_type), pointer :: v_r
+    type(pw_r3d_rs_type), pointer :: drho_r
+    type(pw_c1d_gs_type), pointer :: drho_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2132,11 +2007,12 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: ve_r
-    type(pw_type), pointer :: vn_r
-    type(pw_type), pointer :: drho_r
-    type(pw_type), pointer :: drho_g
-    type(pw_type), pointer :: drhon_g
+    type(pw_r3d_rs_type), pointer :: ve_r
+    type(pw_r3d_rs_type), pointer :: vn_r
+    type(pw_r3d_rs_type), pointer :: drho_r
+    TYPE(pw_r3d_rs_type), POINTER :: rho_r_tmp
+    type(pw_c1d_gs_type), pointer :: drho_g
+    type(pw_c1d_gs_type), pointer :: drhon_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2154,19 +2030,21 @@ contains
 
        call get_qs_env(qs_env, particle_set=particles)
        call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
-       call fat_pw_create_frag(fat_env, pw_r=drhon_g, i_frag=i)
+       call fat_pw_create_frag(fat_env, pw_r=rho_r_tmp, pw_g=drhon_g, i_frag=i)
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
              call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
-             forces(k, a) = pw_integral_ab(vn_r, drho_r)
+             CALL pw_transfer(drho_g, rho_r_tmp)
+             forces(k, a) = pw_integral_ab(vn_r, rho_r_tmp)
 
              call fat_get_drhon_frag(fat_env, drhon_g=drhon_g, i_frag=i, i_nuc=j, i_dir=a)
-             forces(k, a) = pw_integral_ab(ve_r, drhon_g)
+             CALL pw_transfer(drhon_g, rho_r_tmp)
+             forces(k, a) = pw_integral_ab(ve_r, rho_r_tmp)
           end do
        end do
        call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
-       call fat_pw_release_frag(fat_env, pw_g=drhon_g, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=rho_r_tmp, pw_g=drhon_g, i_frag=i)
 
        call fat_pw_release_frag(fat_env, pw_r=ve_r, i_frag=i)
        call fat_pw_release_frag(fat_env, pw_r=vn_r, i_frag=i)
@@ -2186,7 +2064,9 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: v_pot, drho
+    type(pw_r3d_rs_type), pointer :: v_pot
+    type(pw_r3d_rs_type), pointer :: rho_r_tmp
+    type(pw_c1d_gs_type), pointer :: drho_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2198,15 +2078,16 @@ contains
        call fat_vemb_n_frag(fat_env, v_pot, i)
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
-       call fat_pw_create_frag(fat_env, pw_r=drho, i_frag=i)
+       call fat_pw_create_frag(fat_env, pw_r=rho_r_tmp, pw_g=drho_g, i_frag=i)
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_get_drhon_frag(fat_env, drhon_g=drho, i_frag=i, i_nuc=j, i_dir=a)
-             forces(k, a) = pw_integral_ab(v_pot, drho)
+             call fat_get_drhon_frag(fat_env, drhon_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
+             call pw_transfer(drho_g, rho_r_tmp)
+             forces(k, a) = pw_integral_ab(v_pot, rho_r_tmp)
           end do
        end do
-       call fat_pw_release_frag(fat_env, pw_r=drho, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=rho_r_tmp, pw_g=drho_g, i_frag=i)
        call fat_pw_release_frag(fat_env, pw_r=v_pot, i_frag=i)
     end do
 
@@ -2319,8 +2200,8 @@ contains
     character(len=*), parameter :: routinen = "fat_force"
 
     integer :: i, j
-    real(dp), allocatable :: forces(:, :)
-    real(dp), allocatable :: forces_tmp(:, :)
+    real(kind=dp), allocatable :: forces(:, :)
+    real(kind=dp), allocatable :: forces_tmp(:, :)
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2409,7 +2290,7 @@ contains
 
     logical :: my_do_forces
     integer :: i, j
-    real(dp) :: e_tmp
+    real(kind=dp) :: e_tmp
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2505,7 +2386,7 @@ contains
     character(len=*), parameter :: routinen = "fat_init"
 
     integer :: handle, i, j, n_iter
-    real(dp) :: eps
+    real(kind=dp) :: eps
     type(force_env_type), pointer :: force_env_tmp
     type(pw_env_type), pointer :: pw_env_tmp
     type(qs_environment_type), pointer :: qs_env_tmp

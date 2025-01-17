@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2025 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -12,10 +12,10 @@
 #if defined(__LIBXSMM)
 #include <libxsmm.h>
 #if !defined(DBM_LIBXSMM_PREFETCH)
-//#define DBM_LIBXSMM_PREFETCH LIBXSMM_GEMM_PREFETCH_AL2_AHEAD
+// #define DBM_LIBXSMM_PREFETCH LIBXSMM_GEMM_PREFETCH_AL2_AHEAD
 #define DBM_LIBXSMM_PREFETCH LIBXSMM_GEMM_PREFETCH_NONE
 #endif
-#if 2 > LIBXSMM_VERSION_MAJOR
+#if LIBXSMM_VERSION4(1, 17, 0, 3710) > LIBXSMM_VERSION_NUMBER
 #define libxsmm_dispatch_gemm libxsmm_dispatch_gemm_v2
 #endif
 #endif
@@ -54,12 +54,14 @@ static inline void dbm_dgemm(const char transa, const char transb, const int m,
  *        http://szudzik.com/ElegantPairing.pdf
  * \author Ole Schuett
  ******************************************************************************/
+#if defined(__LIBXSMM)
 static inline unsigned int hash(const dbm_task_t task) {
   const unsigned int m = task.m, n = task.n, k = task.k;
   const unsigned int mn = (m >= n) ? m * m + m + n : m + n * n;
   const unsigned int mnk = (mn >= k) ? mn * mn + mn + k : mn + k * k;
   return mnk;
 }
+#endif
 
 /*******************************************************************************
  * \brief Internal routine for executing the tasks in given batch on the CPU.
@@ -81,7 +83,7 @@ void dbm_multiply_cpu_process_batch(const int ntasks, dbm_task_t batch[ntasks],
   // Sort tasks approximately by m,n,k via bucket sort.
   int buckets[BATCH_NUM_BUCKETS];
   memset(buckets, 0, BATCH_NUM_BUCKETS * sizeof(int));
-  for (int itask = 0; itask < ntasks; itask++) {
+  for (int itask = 0; itask < ntasks; ++itask) {
     const int i = hash(batch[itask]) % BATCH_NUM_BUCKETS;
     ++buckets[i];
   }
@@ -120,7 +122,7 @@ void dbm_multiply_cpu_process_batch(const int ntasks, dbm_task_t batch[ntasks],
     if (task.m != kernel_m || task.n != kernel_n || task.k != kernel_k) {
 #if LIBXSMM_VERSION2(1, 17) < LIBXSMM_VERSION_NUMBER
       const libxsmm_gemm_shape shape = libxsmm_create_gemm_shape(
-          task.m, task.n, task.k, task.m /*lda*/, task.n /*ldb/transb*/,
+          task.m, task.n, task.k, task.m /*lda*/, task.n /*ldb*/,
           task.m /*ldc*/, LIBXSMM_DATATYPE_F64 /*aprec*/,
           LIBXSMM_DATATYPE_F64 /*bprec*/, LIBXSMM_DATATYPE_F64 /*cprec*/,
           LIBXSMM_DATATYPE_F64 /*calcp*/);
@@ -169,7 +171,7 @@ void dbm_multiply_cpu_process_batch(const int ntasks, dbm_task_t batch[ntasks],
   }
 #else
   // Fallback to BLAS when libxsmm is not available.
-  for (int itask = 0; itask < ntasks; itask++) {
+  for (int itask = 0; itask < ntasks; ++itask) {
     const dbm_task_t task = batch[itask];
     const double *data_a = &pack_a->data[task.offset_a];
     const double *data_b = &pack_b->data[task.offset_b];
