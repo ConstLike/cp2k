@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -25,14 +25,14 @@ MODULE task_list_methods
                          cube_info_type, &
                          return_cube, &
                          return_cube_nonortho
-   USE dbcsr_api, ONLY: dbcsr_convert_sizes_to_offsets, &
-                        dbcsr_finalize, &
-                        dbcsr_get_block_p, &
-                        dbcsr_get_info, &
-                        dbcsr_p_type, &
-                        dbcsr_put_block, &
-                        dbcsr_type, &
-                        dbcsr_work_create
+   USE cp_dbcsr_api, ONLY: dbcsr_convert_sizes_to_offsets, &
+                           dbcsr_finalize, &
+                           dbcsr_get_block_p, &
+                           dbcsr_get_info, &
+                           dbcsr_p_type, &
+                           dbcsr_put_block, &
+                           dbcsr_type, &
+                           dbcsr_work_create
    USE gaussian_gridlevels, ONLY: gaussian_gridlevel, &
                                   gridlevel_info_type
    USE kinds, ONLY: default_string_length, &

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -37,8 +37,9 @@ MODULE cp2k_info
    CHARACTER(LEN=*), PARAMETER :: compile_revision = "unknown"
 #endif
 
-   CHARACTER(LEN=*), PARAMETER :: cp2k_version = "CP2K version 2024.1"
-   CHARACTER(LEN=*), PARAMETER :: cp2k_year = "2024"
+   !!! Keep version in sync with CMakeLists.txt !!!
+   CHARACTER(LEN=*), PARAMETER :: cp2k_version = "CP2K version 2025.1 (Development Version)"
+   CHARACTER(LEN=*), PARAMETER :: cp2k_year = "2025"
    CHARACTER(LEN=*), PARAMETER :: cp2k_home = "https://www.cp2k.org/"
 
    ! compile time information
@@ -117,13 +118,10 @@ CONTAINS
       flags = TRIM(flags)//" elpa_intel_gpu"
 #endif
 #if defined(__parallel)
-      flags = TRIM(flags)//" parallel"
+      flags = TRIM(flags)//" parallel scalapack"
 #endif
 #if defined(__MPI_F08)
       flags = TRIM(flags)//" mpi_f08"
-#endif
-#if defined(__SCALAPACK)
-      flags = TRIM(flags)//" scalapack"
 #endif
 #if defined(__COSMA)
       flags = TRIM(flags)//" cosma"
@@ -137,9 +135,14 @@ CONTAINS
       flags = TRIM(flags)//" patched_cufft_70"
 #endif
 
+#if defined(__DEEPMD)
+      flags = TRIM(flags)//" deepmd"
+#endif
+
 #if defined(__PW_FPGA)
       flags = TRIM(flags)//" pw_fpga"
 #endif
+
 #if defined(__PW_FPGA_SP)
       flags = TRIM(flags)//" pw_fpga_sp"
 #endif
@@ -203,6 +206,9 @@ CONTAINS
 #if defined(__MKL)
       flags = TRIM(flags)//" mkl"
 #endif
+#if defined(__DFTD4)
+      flags = TRIM(flags)//" libdftd4"
+#endif
 #if defined(__SIRIUS)
       flags = TRIM(flags)//" sirius"
 #endif
@@ -224,6 +230,9 @@ CONTAINS
 #endif
 #if defined(__OFFLOAD_HIP)
       flags = TRIM(flags)//" offload_hip"
+#endif
+#if defined(__OFFLOAD_OPENCL)
+      flags = TRIM(flags)//" offload_opencl"
 #endif
 #if defined(__NO_OFFLOAD_GRID)
       flags = TRIM(flags)//" no_offload_grid"
@@ -258,8 +267,16 @@ CONTAINS
       flags = TRIM(flags)//" hdf5"
 #endif
 
+#if defined(__TREXIO)
+      flags = TRIM(flags)//" trexio"
+#endif
+
 #if defined(__OFFLOAD_UNIFIED_MEMORY)
       flags = TRIM(flags)//" offload_unified_memory"
+#endif
+
+#if defined(__SMEAGOL)
+      flags = TRIM(flags)//" libsmeagol"
 #endif
 
    END FUNCTION cp2k_flags
@@ -276,7 +293,7 @@ CONTAINS
          "******************************************************************************", &
          "*                                                                            *", &
          "*   CP2K: A general program to perform molecular dynamics simulations        *", &
-         "*   Copyright (C) 2000-2024  CP2K developer group <https://www.cp2k.org/>    *", &
+         "*   Copyright (C) 2000-2025  CP2K developer group <https://www.cp2k.org/>    *", &
          "*                                                                            *", &
          "*   This program is free software: you can redistribute it and/or modify     *", &
          "*   it under the terms of the GNU General Public License as published by     *", &

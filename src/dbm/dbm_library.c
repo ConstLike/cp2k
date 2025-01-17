@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2025 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -41,6 +41,7 @@ void dbm_library_init(void) {
 
   max_threads = omp_get_max_threads();
   per_thread_counters = malloc(max_threads * sizeof(int64_t *));
+  assert(per_thread_counters != NULL);
 
   // Using parallel regions to ensure memory is allocated near a thread's core.
 #pragma omp parallel default(none) shared(per_thread_counters)                 \
@@ -49,6 +50,7 @@ void dbm_library_init(void) {
     const int ithread = omp_get_thread_num();
     const size_t counters_size = DBM_NUM_COUNTERS * sizeof(int64_t);
     per_thread_counters[ithread] = malloc(counters_size);
+    assert(per_thread_counters[ithread] != NULL);
     memset(per_thread_counters[ithread], 0, counters_size);
   }
 
@@ -82,12 +84,15 @@ void dbm_library_finalize(void) {
  * \author Ole Schuett
  ******************************************************************************/
 static int floorlog10(const int x) {
-  if (x >= 1000)
+  if (x >= 1000) {
     return 3;
-  if (x >= 100)
+  }
+  if (x >= 100) {
     return 2;
-  if (x >= 10)
+  }
+  if (x >= 10) {
     return 1;
+  }
   return 0;
 }
 
@@ -107,7 +112,7 @@ void dbm_library_counter_increment(const int m, const int n, const int k) {
  * \author Ole Schuett
  ******************************************************************************/
 static int compare_counters(const void *a, const void *b) {
-  return *(int64_t *)b - *(int64_t *)a;
+  return *(const int64_t *)b - *(const int64_t *)a;
 }
 
 /*******************************************************************************
@@ -164,8 +169,9 @@ void dbm_library_print_stats(const int fortran_comm,
 
   const char *labels[] = {"?", "??", "???", ">999"};
   for (int i = 0; i < DBM_NUM_COUNTERS; i++) {
-    if (counters[i][0] == 0)
+    if (counters[i][0] == 0) {
       continue; // skip empty counters
+    }
     const double percent = 100.0 * counters[i][0] / total;
     const int idx = counters[i][1];
     const int m = (idx % 64) / 16;

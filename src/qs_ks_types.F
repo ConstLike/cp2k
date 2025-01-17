@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -20,12 +20,12 @@ MODULE qs_ks_types
                                               cp_blacs_env_type
    USE cp_control_types,                ONLY: dft_control_release,&
                                               dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_distribution_release,&
+                                              dbcsr_distribution_type,&
+                                              dbcsr_p_type
    USE cp_dbcsr_operations,             ONLY: dbcsr_deallocate_matrix_set
    USE cp_result_types,                 ONLY: cp_result_type
    USE cp_subsys_types,                 ONLY: cp_subsys_type
-   USE dbcsr_api,                       ONLY: dbcsr_distribution_release,&
-                                              dbcsr_distribution_type,&
-                                              dbcsr_p_type
    USE distribution_1d_types,           ONLY: distribution_1d_type
    USE distribution_2d_types,           ONLY: distribution_2d_release,&
                                               distribution_2d_retain,&
@@ -46,7 +46,8 @@ MODULE qs_ks_types
    USE pw_env_types,                    ONLY: pw_env_release,&
                                               pw_env_retain,&
                                               pw_env_type
-   USE pw_types,                        ONLY: pw_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
    USE qs_energy_types,                 ONLY: qs_energy_type
    USE qs_force_types,                  ONLY: qs_force_type
    USE qs_kind_types,                   ONLY: qs_kind_type
@@ -108,6 +109,7 @@ MODULE qs_ks_types
 !>        Ewald terms (DFTB)
 !> \param sab_core neighbor lists for the calculation of the core interactions
 !> \param sab_xb neighbor lists for the calculation of the XB interactions in xTB
+!> \param sab_xtb_pp neighbor lists for the calculation of the repulsive interactions in xTB
 !> \param sab_xtb_nonbond neighbor lists for the calculation of the nonbonded interactions in xTB
 !> \param sab_all neighbor lists for the calculation of the  matrix element of
 !>        non-symmetric operators
@@ -142,7 +144,7 @@ MODULE qs_ks_types
 
       ! hartree is supposed to contain the hartree potential (for cube output)
       ! ugly to keep it always around only for a cube output...
-      TYPE(pw_type), POINTER                                :: v_hartree_rspace => Null()
+      TYPE(pw_r3d_rs_type), POINTER                         :: v_hartree_rspace => Null()
 
       TYPE(kpoint_transitional_type)                        :: matrix_ks, &
                                                                matrix_s, &
@@ -154,18 +156,18 @@ MODULE qs_ks_types
                                                                matrix_ks_im, &
                                                                matrix_h_im
 
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_p_mp2 => Null(), &
-                                                            matrix_p_mp2_admm => Null()
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER             :: matrix_p_mp2 => Null(), &
+                                                               matrix_p_mp2_admm => Null()
 
       TYPE(qs_rho_type), POINTER                            :: rho => Null(), &
                                                                rho_xc => Null()
 
-      TYPE(pw_type), POINTER                              :: vppl => Null(), &
-                                                             rho_nlcc => Null(), &
-                                                             rho_nlcc_g => Null()
+      TYPE(pw_r3d_rs_type), POINTER                         :: vppl => Null(), &
+                                                               rho_nlcc => Null()
+      TYPE(pw_c1d_gs_type), POINTER                         :: rho_nlcc_g => Null()
 
-      TYPE(pw_type), POINTER :: rho_core => NULL(), &
-                                vee => NULL()
+      TYPE(pw_c1d_gs_type), POINTER                         :: rho_core => NULL()
+      TYPE(pw_r3d_rs_type), POINTER                         :: vee => NULL()
 
       INTEGER                                               :: neighbor_list_id = -1
       TYPE(neighbor_list_set_p_type), DIMENSION(:), POINTER :: sab_orb => Null(), &
@@ -181,6 +183,7 @@ MODULE qs_ks_types
                                                                sab_xtbe => Null(), &
                                                                sab_core => Null(), &
                                                                sab_xb => Null(), &
+                                                               sab_xtb_pp => Null(), &
                                                                sab_xtb_nonbond => Null(), &
                                                                sab_all => Null(), &
                                                                sab_lrc => Null(), &
@@ -194,7 +197,7 @@ MODULE qs_ks_types
       TYPE(kpoint_type), POINTER                            :: kpoints => Null()
       TYPE(qs_subsys_type), POINTER                         :: subsys => Null()
       TYPE(dft_control_type), POINTER                       :: dft_control => Null()
-      TYPE(dbcsr_distribution_type), POINTER                 :: dbcsr_dist => Null()
+      TYPE(dbcsr_distribution_type), POINTER                :: dbcsr_dist => Null()
       TYPE(distribution_2d_type), POINTER                   :: distribution_2d => Null()
       TYPE(pw_env_type), POINTER                            :: pw_env => Null()
       TYPE(mp_para_env_type), POINTER                       :: para_env => Null()
@@ -267,6 +270,7 @@ CONTAINS
 !> \param sab_tbe ...
 !> \param sab_core ...
 !> \param sab_xb ...
+!> \param sab_xtb_pp ...
 !> \param sab_xtb_nonbond ...
 !> \param sab_vdw ...
 !> \param sab_scp ...
@@ -317,8 +321,8 @@ CONTAINS
                          vppl, rho_core, rho_nlcc, rho_nlcc_g, vee, &
                          neighbor_list_id, &
                          sab_orb, sab_all, sac_ae, sac_ppl, sac_lri, sap_ppnl, sap_oce, sab_lrc, &
-                         sab_se, sab_xtbe, sab_tbe, sab_core, sab_xb, sab_xtb_nonbond, sab_vdw, sab_scp, &
-                         sab_almo, sab_kp, sab_kp_nosym, &
+                         sab_se, sab_xtbe, sab_tbe, sab_core, sab_xb, sab_xtb_pp, sab_xtb_nonbond, &
+                         sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym, &
                          task_list, task_list_soft, &
                          kpoints, do_kpoints, &
                          atomic_kind_set, qs_kind_set, cell, cell_ref, use_ref_cell, &
@@ -328,7 +332,7 @@ CONTAINS
                          para_env, blacs_env, nelectron_total, nelectron_spin)
 
       TYPE(qs_ks_env_type), INTENT(IN)                   :: ks_env
-      TYPE(pw_type), OPTIONAL, POINTER                   :: v_hartree_rspace
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: v_hartree_rspace
       LOGICAL, OPTIONAL                                  :: s_mstruct_changed, rho_changed, &
                                                             potential_changed, forces_up_to_date, &
                                                             complex_ks
@@ -339,11 +343,15 @@ CONTAINS
          matrix_ks_kp, matrix_vxc_kp, kinetic_kp, matrix_s_kp, matrix_w_kp, matrix_s_RI_aux_kp, &
          matrix_ks_im_kp
       TYPE(qs_rho_type), OPTIONAL, POINTER               :: rho, rho_xc
-      TYPE(pw_type), OPTIONAL, POINTER                   :: vppl, rho_core, rho_nlcc, rho_nlcc_g, vee
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: vppl
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_core
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: rho_nlcc
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_nlcc_g
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: vee
       INTEGER, OPTIONAL                                  :: neighbor_list_id
       TYPE(neighbor_list_set_p_type), DIMENSION(:), OPTIONAL, POINTER :: sab_orb, sab_all, sac_ae, &
          sac_ppl, sac_lri, sap_ppnl, sap_oce, sab_lrc, sab_se, sab_xtbe, sab_tbe, sab_core, &
-         sab_xb, sab_xtb_nonbond, sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym
+         sab_xb, sab_xtb_pp, sab_xtb_nonbond, sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym
       TYPE(task_list_type), OPTIONAL, POINTER            :: task_list, task_list_soft
       TYPE(kpoint_type), OPTIONAL, POINTER               :: kpoints
       LOGICAL, OPTIONAL                                  :: do_kpoints
@@ -433,6 +441,7 @@ CONTAINS
       IF (PRESENT(sab_xtbe)) sab_xtbe => ks_env%sab_xtbe
       IF (PRESENT(sab_core)) sab_core => ks_env%sab_core
       IF (PRESENT(sab_xb)) sab_xb => ks_env%sab_xb
+      IF (PRESENT(sab_xtb_pp)) sab_xtb_pp => ks_env%sab_xtb_pp
       IF (PRESENT(sab_xtb_nonbond)) sab_xtb_nonbond => ks_env%sab_xtb_nonbond
       IF (PRESENT(sab_almo)) sab_almo => ks_env%sab_almo
       IF (PRESENT(sab_kp)) sab_kp => ks_env%sab_kp
@@ -526,6 +535,7 @@ CONTAINS
 !> \param sab_tbe ...
 !> \param sab_core ...
 !> \param sab_xb ...
+!> \param sab_xtb_pp ...
 !> \param sab_xtb_nonbond ...
 !> \param sab_vdw ...
 !> \param sab_scp ...
@@ -554,14 +564,14 @@ CONTAINS
                          neighbor_list_id, &
                          kpoints, &
                          sab_orb, sab_all, sac_ae, sac_ppl, sac_lri, sap_ppnl, sap_oce, sab_lrc, &
-                         sab_se, sab_xtbe, sab_tbe, sab_core, sab_xb, sab_xtb_nonbond, sab_vdw, sab_scp, &
-                         sab_almo, sab_kp, sab_kp_nosym, &
+                         sab_se, sab_xtbe, sab_tbe, sab_core, sab_xb, sab_xtb_pp, sab_xtb_nonbond, &
+                         sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym, &
                          task_list, task_list_soft, &
                          subsys, dft_control, dbcsr_dist, distribution_2d, pw_env, &
                          para_env, blacs_env)
 
       TYPE(qs_ks_env_type), INTENT(INOUT)                :: ks_env
-      TYPE(pw_type), OPTIONAL, POINTER                   :: v_hartree_rspace
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: v_hartree_rspace
       LOGICAL, OPTIONAL                                  :: s_mstruct_changed, rho_changed, &
                                                             potential_changed, forces_up_to_date, &
                                                             complex_ks
@@ -571,12 +581,16 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:, :), OPTIONAL, POINTER :: matrix_h_kp, matrix_h_im_kp, &
          matrix_ks_kp, matrix_vxc_kp, kinetic_kp, matrix_s_kp, matrix_w_kp, matrix_s_RI_aux_kp, &
          matrix_ks_im_kp
-      TYPE(pw_type), OPTIONAL, POINTER                   :: vppl, rho_core, rho_nlcc, rho_nlcc_g, vee
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: vppl
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_core
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: rho_nlcc
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_nlcc_g
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: vee
       INTEGER, OPTIONAL                                  :: neighbor_list_id
       TYPE(kpoint_type), OPTIONAL, POINTER               :: kpoints
       TYPE(neighbor_list_set_p_type), DIMENSION(:), OPTIONAL, POINTER :: sab_orb, sab_all, sac_ae, &
          sac_ppl, sac_lri, sap_ppnl, sap_oce, sab_lrc, sab_se, sab_xtbe, sab_tbe, sab_core, &
-         sab_xb, sab_xtb_nonbond, sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym
+         sab_xb, sab_xtb_pp, sab_xtb_nonbond, sab_vdw, sab_scp, sab_almo, sab_kp, sab_kp_nosym
       TYPE(task_list_type), OPTIONAL, POINTER            :: task_list, task_list_soft
       TYPE(qs_subsys_type), OPTIONAL, POINTER            :: subsys
       TYPE(dft_control_type), OPTIONAL, POINTER          :: dft_control
@@ -647,6 +661,7 @@ CONTAINS
       IF (PRESENT(sab_xtbe)) ks_env%sab_xtbe => sab_xtbe
       IF (PRESENT(sab_core)) ks_env%sab_core => sab_core
       IF (PRESENT(sab_xb)) ks_env%sab_xb => sab_xb
+      IF (PRESENT(sab_xtb_pp)) ks_env%sab_xtb_pp => sab_xtb_pp
       IF (PRESENT(sab_xtb_nonbond)) ks_env%sab_xtb_nonbond => sab_xtb_nonbond
       IF (PRESENT(sab_almo)) ks_env%sab_almo => sab_almo
       IF (PRESENT(sab_kp)) ks_env%sab_kp => sab_kp
@@ -786,6 +801,7 @@ CONTAINS
       CALL release_neighbor_list_sets(ks_env%sab_xtbe)
       CALL release_neighbor_list_sets(ks_env%sab_core)
       CALL release_neighbor_list_sets(ks_env%sab_xb)
+      CALL release_neighbor_list_sets(ks_env%sab_xtb_pp)
       CALL release_neighbor_list_sets(ks_env%sab_xtb_nonbond)
       CALL release_neighbor_list_sets(ks_env%sab_all)
       CALL release_neighbor_list_sets(ks_env%sab_lrc)
@@ -879,6 +895,7 @@ CONTAINS
       CALL release_neighbor_list_sets(ks_env%sab_xtbe)
       CALL release_neighbor_list_sets(ks_env%sab_core)
       CALL release_neighbor_list_sets(ks_env%sab_xb)
+      CALL release_neighbor_list_sets(ks_env%sab_xtb_pp)
       CALL release_neighbor_list_sets(ks_env%sab_xtb_nonbond)
       CALL release_neighbor_list_sets(ks_env%sab_all)
       CALL release_neighbor_list_sets(ks_env%sab_lrc)

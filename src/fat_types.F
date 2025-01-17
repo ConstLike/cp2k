@@ -2,7 +2,6 @@ module fat_types
   use force_env_types, only: force_env_type, force_env_p_type
   use kinds, only: dp
   use pw_pool_types, only: pw_pool_type, pw_pool_p_type
-  use pw_types, only: pw_type
 
 #include "./base/base_uses.f90"
 
@@ -29,8 +28,8 @@ module fat_types
      integer                         :: i_iter, n_iter, n_frag
      logical                         :: is_converged
      logical, allocatable            :: extern(:)
-     real(dp)                        :: eps, e_old, ekin_ref, exc_ref, e_tot, eee, ene, enn
-     real(dp), allocatable           :: e_emb(:), e_sub(:), ekin_sub(:), exc_sub(:)
+     real(kind=dp)                   :: eps, e_old, ekin_ref, exc_ref, e_tot, eee, ene, enn
+     real(kind=dp), allocatable      :: e_emb(:), e_sub(:), ekin_sub(:), exc_sub(:)
      integer                         :: output_unit
   end type fat_env_type
 

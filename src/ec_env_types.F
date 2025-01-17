@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,8 +12,10 @@
 !> \author JGH
 ! **************************************************************************************************
 MODULE ec_env_types
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE cp_dbcsr_operations,             ONLY: dbcsr_deallocate_matrix_set
-   USE dbcsr_api,                       ONLY: dbcsr_p_type
+   USE cp_fm_types,                     ONLY: cp_fm_release,&
+                                              cp_fm_type
    USE dm_ls_scf_types,                 ONLY: ls_scf_env_type,&
                                               ls_scf_release
    USE hfx_types,                       ONLY: hfx_release,&
@@ -21,7 +23,7 @@ MODULE ec_env_types
    USE input_section_types,             ONLY: section_vals_release,&
                                               section_vals_type
    USE kinds,                           ONLY: dp
-   USE pw_types,                        ONLY: pw_type
+   USE pw_types,                        ONLY: pw_r3d_rs_type
    USE qs_dispersion_types,             ONLY: qs_dispersion_release,&
                                               qs_dispersion_type
    USE qs_force_types,                  ONLY: deallocate_qs_force,&
@@ -66,6 +68,7 @@ MODULE ec_env_types
       ! debug
       LOGICAL                                          :: debug_forces = .FALSE.
       LOGICAL                                          :: debug_stress = .FALSE.
+      LOGICAL                                          :: debug_external = .FALSE.
       ! basis set
       CHARACTER(len=20)                                :: basis = ""
       LOGICAL                                          :: mao = .FALSE.
@@ -101,15 +104,18 @@ MODULE ec_env_types
                                                           matrix_w => Null()
       ! reduce basis
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: mao_coef => Null()
+      ! external energy calclulation
+      TYPE(cp_fm_type), DIMENSION(:), POINTER          :: mo_occ => NULL()
+      TYPE(cp_fm_type), DIMENSION(:), POINTER          :: cpmos => NULL()
       ! CP equations
       TYPE(qs_p_env_type), POINTER                     :: p_env => Null()
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER        :: matrix_hz => Null(), matrix_wz => Null(), &
                                                           matrix_z => Null(), z_admm => Null()
       ! Harris (rhoout), and response density (rhoz) on grid
-      TYPE(pw_type), DIMENSION(:), POINTER             :: rhoout_r => Null(), rhoz_r => Null()
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER             :: rhoout_r => Null(), rhoz_r => Null()
       ! potentials from input density
-      TYPE(pw_type)                                    :: vh_rspace = pw_type()
-      TYPE(pw_type), DIMENSION(:), POINTER             :: vxc_rspace => Null(), vtau_rspace => Null(), vadmm_rspace => Null()
+      TYPE(pw_r3d_rs_type)                                    :: vh_rspace = pw_r3d_rs_type()
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER             :: vxc_rspace => Null(), vtau_rspace => Null(), vadmm_rspace => Null()
       ! efield
       TYPE(efield_berry_type), POINTER                 :: efield => NULL()
       ! LS matrices and types
@@ -205,6 +211,9 @@ CONTAINS
 
          IF (ASSOCIATED(ec_env%xc_section_aux)) CALL section_vals_release(ec_env%xc_section_aux)
          IF (ASSOCIATED(ec_env%xc_section_primary)) CALL section_vals_release(ec_env%xc_section_primary)
+
+         CALL cp_fm_release(ec_env%mo_occ)
+         CALL cp_fm_release(ec_env%cpmos)
 
          DEALLOCATE (ec_env)
 

@@ -1,12 +1,12 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
 
 MODULE se_fock_matrix_dbg
-   USE dbcsr_api,                       ONLY: dbcsr_dot,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_dot,&
                                               dbcsr_p_type,&
                                               dbcsr_set
    USE kinds,                           ONLY: dp

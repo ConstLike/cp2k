@@ -1,6 +1,6 @@
 #!-------------------------------------------------------------------------------------------------!
 #!   CP2K: A general program to perform molecular dynamics simulations                             !
-#!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                  !
+#!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                  !
 #!                                                                                                 !
 #!   SPDX-License-Identifier: GPL-2.0-or-later                                                     !
 #!-------------------------------------------------------------------------------------------------!
@@ -95,7 +95,7 @@ if(NOT CP2K_CONFIG_PACKAGE)
                                              CP2K_BLAS_LINK_LIBRARIES)
       message(
         FATAL_ERROR
-          "Setting CP2K_BLAS_VENDOR=CUSTOM imply setting CP2K_BLAS_LINK_LIBRARIES\n and CP2K_LAPACK_LINK_LIBRARIES to the right libraries. See the README_cmake.md for more details"
+          "Setting CP2K_BLAS_VENDOR=CUSTOM imply setting CP2K_BLAS_LINK_LIBRARIES\n and CP2K_LAPACK_LINK_LIBRARIES to the right libraries."
       )
     endif()
 

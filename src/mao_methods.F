@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -21,6 +21,12 @@ MODULE mao_methods
                                               gto_basis_set_type,&
                                               write_gto_basis_set
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_create, dbcsr_desymmetrize, dbcsr_distribution_type, dbcsr_dot, dbcsr_get_block_p, &
+        dbcsr_get_info, dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, &
+        dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_multiply, &
+        dbcsr_p_type, dbcsr_release, dbcsr_reserve_diag_blocks, dbcsr_set, dbcsr_type, &
+        dbcsr_type_no_symmetry
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               cp_dbcsr_plus_fm_fm_t,&
@@ -32,12 +38,6 @@ MODULE mao_methods
    USE cp_fm_types,                     ONLY: cp_fm_create,&
                                               cp_fm_release,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_create, dbcsr_desymmetrize, dbcsr_distribution_type, dbcsr_dot, dbcsr_get_block_p, &
-        dbcsr_get_info, dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, &
-        dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_multiply, &
-        dbcsr_p_type, dbcsr_release, dbcsr_reserve_diag_blocks, dbcsr_set, dbcsr_type, &
-        dbcsr_type_no_symmetry
    USE input_constants,                 ONLY: mao_basis_ext,&
                                               mao_basis_orb,&
                                               mao_basis_prim
@@ -46,8 +46,6 @@ MODULE mao_methods
    USE kpoint_methods,                  ONLY: rskp_transform
    USE kpoint_types,                    ONLY: get_kpoint_info,&
                                               kpoint_type
-   USE lapack,                          ONLY: lapack_ssyev,&
-                                              lapack_ssygv
    USE message_passing,                 ONLY: mp_comm_type,&
                                               mp_para_env_type
    USE particle_types,                  ONLY: particle_type
@@ -65,9 +63,9 @@ MODULE mao_methods
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'mao_methods'
 
    TYPE mblocks
-      INTEGER                                        :: n, ma
-      REAL(KIND=dp), DIMENSION(:, :), POINTER        :: mat
-      REAL(KIND=dp), DIMENSION(:), POINTER           :: eig
+      INTEGER                                        :: n = -1, ma = -1
+      REAL(KIND=dp), DIMENSION(:, :), POINTER        :: mat => NULL()
+      REAL(KIND=dp), DIMENSION(:), POINTER           :: eig => NULL()
    END TYPE mblocks
 
    PUBLIC :: mao_initialization, mao_function, mao_function_gradient, mao_orthogonalization, &
@@ -127,7 +125,7 @@ CONTAINS
          amat(1:n, 1:n) = pblock(1:n, 1:n)
          bmat(1:n, 1:n) = sblock(1:n, 1:n)
          info = 0
-         CALL lapack_ssygv(1, "V", "U", n, amat, n, bmat, n, w, work, lwork, info)
+         CALL dsygv(1, "V", "U", n, amat, n, bmat, n, w, work, lwork, info)
          CPASSERT(info == 0)
          ALLOCATE (mbl(iatom)%mat(n, n), mbl(iatom)%eig(n))
          mbl(iatom)%n = n
@@ -343,7 +341,7 @@ CONTAINS
          amat(1:n, 1:m) = MATMUL(sblock(1:n, 1:n), cblock(1:n, 1:m))
          bmat(1:m, 1:m) = MATMUL(TRANSPOSE(cblock(1:n, 1:m)), amat(1:n, 1:m))
          info = 0
-         CALL lapack_ssyev("V", "U", m, bmat, m, w, work, lwork, info)
+         CALL dsyev("V", "U", m, bmat, m, w, work, lwork, info)
          CPASSERT(info == 0)
          CPASSERT(ALL(w > 0.0_dp))
          w = 1.0_dp/SQRT(w)

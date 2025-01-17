@@ -7,13 +7,21 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = "CP2K"
-copyright = "2000-2024, CP2K Developers"
+copyright = "2000-2025, CP2K Developers"
 author = "CP2K Developers"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
-extensions = ["myst_parser", "sphinx_rtd_theme", "sphinx.ext.mathjax"]
+extensions = [
+    "myst_parser",
+    "sphinx_rtd_theme",
+    "sphinx_reredirects",
+    "sphinx.ext.mathjax",
+    "sphinx.ext.intersphinx",
+    "sphinxcontrib.youtube",
+    "sphinxcontrib.mermaid",
+]
 
 myst_enable_extensions = [
     "attrs_inline",
@@ -21,6 +29,8 @@ myst_enable_extensions = [
     "smartquotes",
     "strikethrough",
 ]
+
+myst_fence_as_directive = ["mermaid"]
 
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "README.md"]
@@ -45,6 +55,17 @@ html_context = {
     "github_repo": "cp2k",
     "github_version": "master",
     "conf_py_path": "/docs/",
+}
+
+# https://sphinx-rtd-theme.readthedocs.io/en/stable/configuring.html
+
+html_theme_options = {
+    "collapse_navigation": False,
+}
+
+redirects = {
+    "getting-started/CMake": "build-from-source.html",
+    "getting-started/spack": "build-with-spack.html",
 }
 
 # EOF

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,10 +13,10 @@
 ! **************************************************************************************************
 MODULE qs_active_space_utils
 
+   USE cp_dbcsr_api,                    ONLY: dbcsr_csr_type
    USE cp_fm_types,                     ONLY: cp_fm_get_element,&
                                               cp_fm_get_info,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_csr_type
    USE kinds,                           ONLY: dp
    USE message_passing,                 ONLY: mp_comm_type
    USE qs_active_space_types,           ONLY: csr_idx_from_combined,&

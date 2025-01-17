@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -40,10 +40,10 @@ MODULE input_cp2k_properties_dft
       tddfpt_kernel_none, tddfpt_kernel_stda, use_mom_ref_coac, use_mom_ref_com, &
       use_mom_ref_user, use_mom_ref_zero
    USE input_cp2k_atprop, ONLY: create_atprop_section
-   USE input_cp2k_dft, ONLY: create_ddapc_restraint_section, &
-                             create_interp_section, &
-                             create_lrigpw_section, &
+   USE input_cp2k_dft, ONLY: create_interp_section, &
                              create_mgrid_section
+   USE input_cp2k_qs, ONLY: create_ddapc_restraint_section, &
+                            create_lrigpw_section
    USE input_cp2k_kpoints, ONLY: create_kpoint_set_section
    USE input_cp2k_loc, ONLY: create_localize_section
    USE input_cp2k_resp, ONLY: create_resp_section
@@ -238,6 +238,12 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+      CALL keyword_create(keyword, __LOCATION__, name="EVERY_N_STEP", &
+                          description="Perform a linear response calculation every N-th step for MD run", &
+                          usage="EVERY_N_STEP 50", default_i_val=1)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
       CALL keyword_create(keyword, __LOCATION__, name="RESTART", &
                           description="Restart the response calculation if the restart file exists", &
                           usage="RESTART", &
@@ -398,6 +404,13 @@ CONTAINS
                              description="User-defined reference point of the velocity gauge factor.", &
                              usage="REFERENCE_POINT x y z", &
                              repeats=.FALSE., n_var=3, type_of_var=real_t, unit_str='bohr')
+         CALL section_add_keyword(section, keyword)
+         CALL keyword_release(keyword)
+
+         CALL keyword_create(keyword, __LOCATION__, name="Z_MATRIX_METHOD", &
+                             description="Use Z_matrix method to solve the response equation", &
+                             usage="Z_MATRIX_METHOD T", &
+                             default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
          CALL section_add_keyword(section, keyword)
          CALL keyword_release(keyword)
 
@@ -1561,7 +1574,7 @@ CONTAINS
                           description="ADMM correction functional in kernel is applied symmetrically. "// &
                           "Original implementation is using a non-symmetric formula.", &
                           n_var=1, type_of_var=logical_t, &
-                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+                          default_l_val=.TRUE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -1577,6 +1590,28 @@ CONTAINS
                           "Options={small,medium,large,huge}", &
                           usage="AUTO_BASIS {basis_type} {basis_size}", &
                           type_of_var=char_t, repeats=.TRUE., n_var=-1, default_c_vals=(/"X", "X"/))
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="DO_SMEARING", &
+                          description="Implying smeared occupation. ", &
+                          n_var=1, type_of_var=logical_t, &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="EXCITON_DESCRIPTORS", &
+                          description="Compute exciton descriptors. "// &
+                          "Details given in Manual section about Bethe Salpeter equation.", &
+                          n_var=1, type_of_var=logical_t, &
+                          default_l_val=.FALSE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="DIRECTIONAL_EXCITON_DESCRIPTORS", &
+                          description="Print cartesian components of exciton descriptors.", &
+                          n_var=1, type_of_var=logical_t, &
+                          default_l_val=.FALSE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -2064,6 +2099,27 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
+      CALL keyword_create(keyword, __LOCATION__, name="REGULARIZATION_RI", &
+                          description="Parameter for RI regularization, setting a negative "// &
+                          "value triggers the default value. Affects RI basis set convergence "// &
+                          "but in any case large RI basis will give RI basis set convergence.", &
+                          usage="REGULARIZATION_RI 1.0E-4", &
+                          default_r_val=-1.0_dp)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="CUTOFF_RADIUS_RI", &
+                          description="The cutoff radius (in Angstrom) for the truncated  "// &
+                          "Coulomb operator. The larger the cutoff radius, the faster "// &
+                          "converges the resolution of the identity (RI) with respect to the "// &
+                          "RI basis set size. Larger cutoff radius means higher computational "// &
+                          "cost.", &
+                          usage="CUTOFF_RADIUS_RI 3.0", &
+                          default_r_val=cp_unit_to_cp2k(value=3.0_dp, unit_str="angstrom"), &
+                          type_of_var=real_t, unit_str="angstrom")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
       CALL keyword_create(keyword, __LOCATION__, name="MEMORY_PER_PROC", &
                           description="Specify the available memory per MPI process. Set "// &
                           "`MEMORY_PER_PROC` as accurately as possible for good performance. If "// &
@@ -2093,6 +2149,44 @@ CONTAINS
                           "is done approximately from $W_{PQ}(i\omega_1,\mathbf{q})$.", &
                           usage="APPROX_KP_EXTRAPOL", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="SIZE_LATTICE_SUM", &
+                          description="Parameter determines how many neighbor cells $\mathbf{R}$ "// &
+                          "are used for computing "// &
+                          "$V_{PQ}(\mathbf{k}) = "// &
+                          "\sum_{\mathbf{R}} e^{i\mathbf{k}\cdot\mathbf{R}}\,\langle P, "// &
+                          "\text{cell}{=}\mathbf{0}|1/r|Q,\text{cell}{=}\mathbf{R}\rangle$. "// &
+                          "Normally, parameter does not need to be touched.", &
+                          usage="SIZE_LATTICE_SUM 4", &
+                          default_i_val=3)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create( &
+         keyword, __LOCATION__, name="KPOINTS_W", &
+         description="Monkhorst-Pack k-point mesh of size N_x, N_y, N_z for calculating "// &
+         "$W_{PQ}^\mathbf{R}=\int_\text{BZ}\frac{d\mathbf{k}}{\Omega_\text{BZ}}\, "// &
+         "e^{-i\mathbf{k}\cdot\mathbf{R}}\,W_{PQ}(\mathbf{k})$. "// &
+         "For non-periodic directions α, choose N_α = 1. "// &
+         "Automatic choice of the k-point mesh for negative "// &
+         "values, i.e. KPOINTS_W -1 -1 -1. "// &
+         "K-point extrapolation of W is automatically switched on.", &
+         usage="KPOINTS N_x  N_y  N_z", &
+         n_var=3, type_of_var=integer_t, default_i_vals=(/-1, -1, -1/))
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="HEDIN_SHIFT", &
+                          description="If true, use Hedin's shift in G0W0, evGW and evGW0. "// &
+                          "Details see in Li et al. JCTC 18, 7570 "// &
+                          "(2022), Figure 1. G0W0 with Hedin's shift should give "// &
+                          "similar GW eigenvalues as evGW0; at a lower "// &
+                          "computational cost.", &
+                          usage="HEDIN_SHIFT", &
+                          default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -2132,7 +2226,8 @@ CONTAINS
                           "<https://doi.org/10.1103/PhysRevB.58.3641>, "// &
                           "$V_{\mu\nu}^{\mathrm{SOC}, (\alpha)} = "// &
                           "(\hbar/2) \langle \phi_\mu | \sum_l \Delta "// &
-                          "V_l^\mathrm{SO}(\mathbf{r},\mathbf{r}') L^{(\alpha)} | \phi_\nu \rangle, "// &
+                          "V_l^\mathrm{SO}(\mathbf{r},\mathbf{r}') "// &
+                          "L^{(\alpha)} | \phi_\nu \rangle, "// &
                           "\alpha = x, y, z$.", &
                           n_keywords=1, n_subsections=1, repeats=.FALSE.)
 
@@ -2151,7 +2246,7 @@ CONTAINS
                           "\varepsilon_\mathrm{CBM}+E_\mathrm{window}/2]$. Might be necessary "// &
                           "to use for large systems to prevent numerical instabilities.", &
                           usage="ENERGY_WINDOW 5.0", &
-                          default_r_val=cp_unit_to_cp2k(value=-1.0_dp, unit_str="eV"), &
+                          default_r_val=cp_unit_to_cp2k(value=40.0_dp, unit_str="eV"), &
                           unit_str="eV")
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -2223,7 +2318,7 @@ CONTAINS
          "the density of states (DOS). In GW, the KPOINT_DOS mesh is thus used as k-point "// &
          "mesh for the self-energy. For non-periodic directions α, choose N_α = 1. "// &
          "Automatic choice of the k-point mesh for negative "// &
-         "values, e.g. KPOINTS_DOS -1 -1 -1 (automatic choice: N_α = 1 in non-periodic "// &
+         "values, i.e. KPOINTS_DOS -1 -1 -1 (automatic choice: N_α = 1 in non-periodic "// &
          "direction, 8 k-points in periodic direction). If you like to compute a "// &
          "band structure along a k-path, you can specify the k-path in "// &
          "&KPOINT_SET.", &
