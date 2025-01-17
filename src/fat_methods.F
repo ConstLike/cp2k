@@ -1153,13 +1153,13 @@ contains
 !> \par History
 !>      09.2024 Created [Konstantin Komarov]
 ! **************************************************************************************************
-  SUBROUTINE write_embedding_potential(fat_env, v_emb, work_tmp, i_frag)
+  SUBROUTINE fat_write_embedding_potential(fat_env, v_emb, work_tmp, i_frag)
     TYPE(fat_env_type), POINTER                       :: fat_env
     TYPE(pw_type), POINTER                            :: v_emb
     TYPE(pw_type), POINTER                            :: work_tmp
     INTEGER, INTENT(IN)                               :: i_frag
 
-    CHARACTER(len=*), PARAMETER :: routineN = 'write_embedding_potential'
+    CHARACTER(len=*), PARAMETER :: routineN = 'fat_write_embedding_potential'
 
     TYPE(qs_environment_type), POINTER                :: qs_env
     CHARACTER(len=default_string_length)              :: label
@@ -1205,7 +1205,10 @@ contains
     CALL pw_zero(work_tmp)
 
     ! Set weights (work_tmp) to the volume element of the grid
-    CALL pw_set(work_tmp, v_emb%pw_grid%dr(1) * v_emb%pw_grid%dr(2) * v_emb%pw_grid%dr(3))
+    CALL pw_set(work_tmp, &
+                v_emb%pw_grid%dr(1) * &
+                v_emb%pw_grid%dr(2) * &
+                v_emb%pw_grid%dr(3))
 
     ! Write the potential values along with their weights (work_tmp)
     CALL pw_to_simple_volumetric(work_tmp, output_unit, [1, 1, 1], v_emb)
@@ -1214,7 +1217,62 @@ contains
 
     CALL timestop(handle)
 
-  END SUBROUTINE write_embedding_potential
+  END SUBROUTINE fat_write_embedding_potential
+
+  ! **************************************************************************************************
+  !> \brief Execute external calculation script
+  !> \param label Fragment label/identifier
+  ! **************************************************************************************************
+  SUBROUTINE fat_run_external(i_frag, gradient)
+    INTEGER, INTENT(IN) :: i_frag
+    LOGICAL, OPTIONAL :: gradient
+
+    CHARACTER(len=*), PARAMETER :: routineN = 'fat_run_external'
+
+    character(default_string_length) :: label
+    CHARACTER :: cmdmsg(100)
+    INTEGER :: exitstat
+    INTEGER :: cmdstat
+    logical :: my_grad = .FALSE.
+
+    IF (is_debug) PRINT *, "DBG| ", moduleN//"::"//routineN
+
+    if (PRESENT(gradient)) my_grad = gradient
+
+    CALL integer_to_string(i_frag, label)
+    if (my_grad) then
+      CALL execute_command_line("sh extern_grad_"//TRIM(label)//".sh", .TRUE., exitstat, cmdstat, cmdmsg)
+    else
+      CALL execute_command_line("sh extern_"//TRIM(label)//".sh", .TRUE., exitstat, cmdstat, cmdmsg)
+    end if
+
+    IF (cmdstat /= 0) CPABORT("External command did not execute successfully")
+
+  END SUBROUTINE fat_run_external
+
+! **************************************************************************************************
+!> \brief Read energy from external calculation
+!> \param fat_env The freeze-and-thaw environment
+!> \param i_frag Fragment index
+! **************************************************************************************************
+  SUBROUTINE fat_read_external_energy(fat_env, i_frag)
+    TYPE(fat_env_type), POINTER :: fat_env
+    INTEGER, INTENT(IN) :: i_frag
+
+    CHARACTER(len=*), PARAMETER :: routineN = 'fat_read_external_energy'
+
+    CHARACTER(len=default_string_length) :: label
+    INTEGER :: input_unit
+
+    IF (is_debug) PRINT *, "DBG| ", moduleN//"::"//routineN
+
+    CALL integer_to_string(i_frag, label)
+    CALL open_file("extern_"//TRIM(label)//".e", file_status="OLD", &
+                  file_action="READ", unit_number=input_unit)
+    READ(input_unit, *) fat_env%e_sub(i_frag)
+    CALL close_file(unit_number=input_unit)
+
+  END SUBROUTINE fat_read_external_energy
 
 ! **************************************************************************************************
 !> \brief Calculate embedding potential for one fragment in the freeze-and-thaw environment
@@ -1264,7 +1322,7 @@ contains
 
     ! If requested, write the embedding potential to files
     IF (to_file) THEN
-       CALL write_embedding_potential(fat_env, v_emb=v_emb, &
+       CALL fat_write_embedding_potential(fat_env, v_emb=v_emb, &
                                       work_tmp=vemb_tmp, i_frag=i_frag)
     END IF
 
@@ -1600,16 +1658,12 @@ contains
 
     character(len=*), parameter :: routinen = "fat_iterate_frag"
 
-    character :: cmdmsg(100)
-    character(default_string_length) :: label
-    integer:: cmdstat, exitstat, input_unit
     type(dft_control_type), pointer :: dft_control
     type(force_env_type), pointer :: force_env_tmp
-    type(pw_type), pointer :: rho(:), v_emb, weights !, rho_tmp
+    type(pw_type), pointer :: rho(:), v_emb, weights
     type(qs_energy_type), pointer :: energy
     type(qs_environment_type), pointer :: qs_env_tmp
     integer :: handle
-!   character(len=100) :: filename
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen, " for frag:", i_frag
 
@@ -1649,18 +1703,15 @@ contains
        if (is_debug) print *, "KKK| Using extern for fragment ", i_frag
 
        call fat_pw_create_frag(fat_env, pw_r=weights, i_frag=i_frag)
-       CALL write_embedding_potential(fat_env, v_emb=v_emb, &
+       CALL fat_write_embedding_potential(fat_env, v_emb=v_emb, &
                                       work_tmp=weights, i_frag=i_frag)
        call fat_pw_release_frag(fat_env, pw_r=weights, i_frag=i_frag)
 
        ! Execute external calculation script
-       call execute_command_line("sh extern_"//trim(label)//".sh", .true., exitstat, cmdstat, cmdmsg)
-       if (cmdstat /= 0) CPABORT("External command did not execute successfully")
+       CALL fat_run_external(i_frag=i_frag)
 
        ! Get energy from external calculation
-       call open_file( &
-            "extern_"//trim(label)//".e", file_status="OLD", file_action="READ", unit_number=input_unit)
-       read (input_unit, *) fat_env%e_sub(i_frag)
+       CALL fat_read_external_energy(fat_env, i_frag)
 
        ! Get electron density from external calculation
        call fat_get_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
@@ -1821,7 +1872,7 @@ contains
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, particle_set=particles)
     allocate(forces(size(particles), 3))
-    forces = 0.0
+    forces = 0.0_dp
 
   end subroutine fat_force_create
 
