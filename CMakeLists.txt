@@ -104,21 +104,16 @@ option(CP2K_USE_FFTW3 "Use fftw3 for the calculating fast fourier transforms"
        ON)
 option(CP2K_USE_MPI "Enable MPI support" ON)
 option(CP2K_USE_ELPA "Enable elpa support" OFF)
-option(CP2K_USE_PEXSI "Enable pexsi support" OFF)
-option(CP2K_USE_SUPERLU "Enable superlu support" OFF)
 option(CP2K_USE_COSMA "COSMA is a drop in replacement of scalapack dgemm" OFF)
 option(CP2K_USE_LIBINT2 "Enable libint2 support" OFF)
 option(CP2K_USE_PLUMED "Enable plumed2 support" OFF)
 option(CP2K_USE_VORI "Enable libvori support" OFF)
-option(CP2K_USE_PEXSI "Enable pexsi support" OFF)
-option(CP2K_USE_QUIP "Enable quip support" OFF)
 option(CP2K_USE_SPGLIB "Enable spglib support" OFF)
 option(CP2K_USE_LIBXC "Enable libxc support" OFF)
 option(CP2K_USE_LIBTORCH "Enable libtorch support" OFF)
 option(CP2K_USE_STATIC_BLAS "Link against static version of BLAS/LAPACK" OFF)
 option(CP2K_USE_SPLA
        "Use SPLA offloading gemm feature to the GPU if it is beneficial. " OFF)
-option(CP2K_USE_METIS "enable metis library support" OFF)
 option(
   CP2K_USE_DLAF
   "Use DLA-Future for Cholesky decompositions and the solution of eigenvalue problems"
@@ -199,17 +194,12 @@ if(${cp2k_build_options_up} STREQUAL "FULL")
   set(CP2K_USE_ELPA ON)
   set(CP2K_USE_SPGLIB ON)
   set(CP2K_USE_LIBTORCH ON)
-  set(CP2K_USE_METIS ON)
-  set(CP2K_USE_QUIP ON)
-  set(CP2K_USE_PEXSI ON)
-  set(CP2K_USE_SUPERLU ON)
   # set(CP@K_USE_LIBGRPP ON)
 endif()
 
 if(${cp2k_build_options_up} STREQUAL "SERIAL")
   set(CP2K_USE_FFTW3 ON)
   set(CP2K_USE_MPI OFF)
-  set(CP2K_USE_SIRIUS ON)
   set(CP2K_USE_SIRIUS ON)
   set(CP2K_USE_LIBXSMM ON)
   set(CP2K_USE_VORI ON)
@@ -220,10 +210,6 @@ if(${cp2k_build_options_up} STREQUAL "SERIAL")
   set(CP2K_USE_ELPA ON)
   set(CP2K_USE_SPGLIB ON)
   set(CP2K_USE_LIBTORCH ON)
-  set(CP2K_USE_METIS ON)
-  set(CP2K_USE_QUIP ON)
-  set(CP2K_USE_PEXSI ON)
-  set(CP2K_USE_SUPERLU ON)
 endif()
 
 if(${cp2k_build_options_up} STREQUAL "DEFAULT")
@@ -451,25 +437,13 @@ else()
      OR CP2K_USE_COSMA
      OR CP2K_USE_SPLA
      OR CP2K_USE_ELPA
-     OR CP2K_USE_METIS
-     OR CP2K_USE_PLUMED
-     OR CP2K_USE_PEXSI
-     OR CP2K_USE_QUIP)
+     OR CP2K_USE_PLUMED)
     message(
       WARNING
-        "SIRIUS, COSMA, SPLA, ELPA, METIS, PLUMED, PEXSI and QUIP require MPI support.\n"
+        "SIRIUS, COSMA, SPLA, and ELPA require MPI support.\n"
         "Either set -DCP2K_USE_MPI to ON or turn the following dependencies off\n\n"
         "List of dependencies with mpi support\n")
-    foreach(
-      __libs
-      sirius
-      COSMA
-      SPLA
-      ELPA
-      METIS
-      PLUMED
-      PEXSI
-      QUIP)
+    foreach(__libs sirius COSMA SPLA ELPA PLUMED)
       if(CP2K_USE_${__libs})
         message(WARNING " - ${__libs}")
       endif()
@@ -623,6 +597,11 @@ endif()
 if(CP2K_USE_COSMA)
   find_package(cosma REQUIRED)
 
+  get_target_property(CP2K_COSMA_INCLUDE_DIRS cosma::cosma
+                      INTERFACE_INCLUDE_DIRECTORIES)
+  get_target_property(CP2K_COSMA_LINK_LIBRARIES cosma::cosma
+                      INTERFACE_LINK_LIBRARIES)
+
   # check that cosma::cosma_pxgemm and cosma::cosma_prefixed_pxgemm exist
   if(NOT TARGET cosma::cosma_pxgemm OR NOT TARGET cosma::cosma_prefixed_pxgemm)
     message(
@@ -638,6 +617,12 @@ endif()
 
 if(CP2K_USE_DLAF)
   find_package(DLAFFortran REQUIRED)
+
+  get_target_property(CP2K_DLAF_INCLUDE_DIRS DLAF::DLAF
+                      INTERFACE_INCLUDE_DIRECTORIES)
+  get_target_property(CP2K_DLAF_LINK_LIBRARIES DLAF::dlaf.prop
+                      INTERFACE_LINK_LIBRARIES)
+  message("${CP2K_DLAF_INCLUDE_DIRS} ${CP2K_DLAF_LINK_LIBRARIES}")
 endif()
 
 # FFTW3
@@ -675,13 +660,7 @@ if(CP2K_USE_FFTW3)
   endif()
 endif()
 
-# QUIP
-if(CP2K_USE_QUIP)
-  find_package(Quip REQUIRED)
-endif()
-
 # libint
-
 if(CP2K_USE_LIBINT2)
   find_package(Libint2 REQUIRED)
 endif()
@@ -715,23 +694,6 @@ endif()
 # SIRIUS
 if(CP2K_USE_SIRIUS)
   find_package(sirius REQUIRED)
-endif()
-
-if(CP2K_USE_SUPERLU)
-  find_package(SuperLU REQUIRED)
-endif()
-
-if(CP2K_USE_METIS)
-  find_package(Metis)
-endif()
-
-if(CP2K_USE_PTSCOTCH)
-  find_package(Ptscotch REQUIRED)
-endif()
-
-if(CP2K_USE_PEXSI)
-  # PEXSI 1.2 uses cmake as build system
-  find_package(PEXSI REQUIRED)
 endif()
 
 if(CP2K_USE_PLUMED)
@@ -890,37 +852,13 @@ if(CP2K_USE_DFTD4)
 endif()
 
 if(CP2K_USE_SIRIUS)
-  message(
-    " - SIRIUS :\n"
-    "   - include directories :  ${SIRIUS_INCLUDE_DIRS}\n"
-    "   - libraries           :  ${SIRIUS_LIBRARIES}\n"
-    "   - dependencies :\n"
-    "       - spla\n"
-    "       - SpFFT\n"
-    "       - SPGLIB\n"
-    "       - LibXC\n"
-    "       - fftw3\n"
-    "       - hdf5\n"
-    "       - GSL\n\n")
-
-  if(CP2K_USE_VDWXC)
-    message("     - VDWXC\n")
-  endif()
+  message(" - SIRIUS")
 endif()
 
 if(CP2K_USE_COSMA)
-  message(" - COSMA\n" "   - include directories : ${COSMA_INCLUDE_DIRS}\n"
-          "   - libraries           : ${COSMA_LIBRARIES}\n\n")
-endif()
-
-if(CP2K_USE_QUIP)
-  message(" - QUIP\n"
-          "   - include directories : ${CP2K_LIBQUIP_INCLUDE_DIRS}\n"
-          "   - libraries :           ${CP2K_LIBQUIP_LINK_LIBRARIES}\n\n")
-endif()
-
-if(CP2K_USE_PEXSI)
-  message(" - PEXSI\n\n")
+  message(" - COSMA\n"
+          "   - include directories : ${CP2K_COSMA_INCLUDE_DIRS}\n"
+          "   - libraries           : ${CP2K_COSMA_LINK_LIBRARIES}\n\n")
 endif()
 
 if(CP2K_USE_LIBINT2)
@@ -940,10 +878,10 @@ if(CP2K_USE_ELPA)
           "   - libraries           :  ${CP2K_ELPA_LINK_LIBRARIES}\n\n")
 endif()
 
-if(CP2K_USE_SUPERLU)
-  message(" - superlu\n"
-          "   - include directories : ${CP2K_SUPERLU_INCLUDE_DIRS}\n"
-          "   - libraries           : ${CP2K_SUPERLU_LINK_LIBRARIES}\n\n")
+if(CP2K_USE_DLAF)
+  message(" - DLA-Future\n"
+          "   - include directories : ${CP2K_DLAF_INCLUDE_DIRS}\n"
+          "   - libraries           :  ${CP2K_DLAF_LINK_LIBRARIES}\n\n")
 endif()
 
 message(
@@ -986,15 +924,11 @@ if(NOT CP2K_USE_ELPA)
 endif()
 
 if(NOT CP2K_USE_DLAF)
-  message("   - DLAF")
+  message("   - DLA-Future")
 endif()
 
 if(NOT CP2K_USE_PLUMED)
   message("   - PLUMED")
-endif()
-
-if(NOT CP2K_USE_QUIP)
-  message("   - QUIP")
 endif()
 
 if(NOT CP2K_USE_LIBXSMM)
@@ -1015,14 +949,6 @@ endif()
 
 if(NOT CP2K_USE_FFTW3)
   message("   - FFTW3")
-endif()
-
-if(NOT CP2K_USE_PEXSI)
-  message("   - PEXSI")
-endif()
-
-if(NOT CP2K_USE_SUPERLU)
-  message("   - SUPERLU")
 endif()
 
 if(NOT CP2K_USE_LIBTORCH)

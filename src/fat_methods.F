@@ -4,7 +4,7 @@ module fat_methods
   use cp_files, only: open_file, close_file
   use cp_log_handling, only: cp_logger_type, cp_logger_get_default_io_unit, cp_get_default_logger
   use cp_realspace_grid_cube, only: cp_pw_to_cube, cp_cube_to_pw
-  USE dbcsr_api, ONLY: dbcsr_type, dbcsr_p_type
+  USE cp_dbcsr_api, ONLY: dbcsr_type, dbcsr_p_type
   use fat_types, only: fat_env_type
   use force_env_types, only: force_env_type
   use input_section_types, only: section_vals_type, section_vals_val_get, section_vals_get_subs_vals
