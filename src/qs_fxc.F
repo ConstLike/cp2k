@@ -422,11 +422,6 @@ CONTAINS
       CALL xc_calc_3rd_deriv_analytical(gxc_rho, gxc_tau, deriv_set, rho0_set, rho1_set, pw_pool, &
                                         xc_section, spinflip=do_sf)
       
-!      DO ispin = 1, nspins
-!         CALL pw_scale(gxc_rho(ispin), 2.0_dp)
-!!         CALL pw_scale(gxc_tau(ispin),-1.0_dp)
-!      END DO
-
       CALL xc_dset_release(deriv_set)
       CALL xc_rho_set_release(rho0_set)
       CALL xc_rho_set_release(rho1_set)
