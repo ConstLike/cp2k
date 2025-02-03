@@ -1006,6 +1006,11 @@ CONTAINS
         CALL cp_fm_get_info(gs_mos(2)%mos_virt, ncol_global=nvirt)
       END IF
       nstate_max = nocc*nvirt
+      IF ((SIZE(gs_mos, 1) == 2).AND.(tddfpt_control%spinflip == no_sf_tddfpt)) THEN
+         CALL cp_fm_get_info(gs_mos(2)%mos_occ, ncol_global=nocc)
+         CALL cp_fm_get_info(gs_mos(2)%mos_virt, ncol_global=nvirt)
+         nstate_max = nocc*nvirt + nstate_max
+      END IF
       IF (nstates > nstate_max) THEN
          CPWARN("NUMBER OF EXCITED STATES COULD LEAD TO PROBLEMS!")
          CPWARN("Experimental: CHANGED NSTATES TO ITS MAXIMUM VALUE!")
