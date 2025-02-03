@@ -4,7 +4,6 @@ module fat_methods
   use cp_files, only: open_file, close_file
   use cp_log_handling, only: cp_logger_type, cp_logger_get_default_io_unit, cp_get_default_logger
   use cp_realspace_grid_cube, only: cp_pw_to_cube, cp_cube_to_pw
-  use dbcsr_api, only: dbcsr_p_type
   use fat_types, only: fat_env_type
   use force_env_types, only: force_env_type
   use input_section_types, only: section_vals_type, section_vals_val_get, section_vals_get_subs_vals
@@ -30,6 +29,27 @@ module fat_methods
   use xc, only: xc_vxc_pw_create
   use xc_rho_cflags_types, only: xc_rho_cflags_type
   use xc_derivatives, only: xc_functionals_get_needs
+  USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
+  USE qs_kind_types,                   ONLY: qs_kind_type
+  USE core_ae,                         ONLY: build_core_ae
+  USE core_ppl,                        ONLY: build_core_ppl
+  USE core_ppnl,                       ONLY: build_core_ppnl
+  USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
+  USE dbcsr_api,                       ONLY: &
+       dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_distribution_type, dbcsr_iterator_blocks_left, &
+       dbcsr_iterator_next_block, dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, &
+       dbcsr_p_type, dbcsr_set, dbcsr_type, dbcsr_type_antisymmetric
+  USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
+                                             copy_fm_to_dbcsr,&
+                                             cp_dbcsr_sm_fm_multiply,&
+                                             dbcsr_allocate_matrix_set,&
+                                             dbcsr_deallocate_matrix_set
+  USE virial_types,                    ONLY: virial_type
+  USE kpoint_types,                    ONLY: get_kpoint_info,&
+                                             kpoint_type
+  USE qs_ks_types,                     ONLY: get_ks_env,&
+                                             qs_ks_env_type,&
+                                             set_ks_env
 ! use physcon
 
 #include "./base/base_uses.f90"
@@ -697,9 +717,12 @@ contains
     call get_qs_env(qs_env, rho=rho_r)
     call qs_rho_get(rho_r, rho_ao=p_mat)
 
-    call calculate_drho_elec_dR( &
-       p_mat(1)%matrix, drho=drho_r, drho_gspace=drho_g, &
-       qs_env=qs_env, beta=i_dir, lambda=i_nuc)
+    call calculate_drho_elec_dR(matrix_p=p_mat(1)%matrix, &
+                                drho=drho_r, &
+                                drho_gspace=drho_g, &
+                                qs_env=qs_env, &
+                                beta=i_dir, &
+                                lambda=i_nuc)
 
     call timestop(handle)
 
@@ -1144,7 +1167,8 @@ contains
     call timestop(handle)
 
   end subroutine fat_vemb_n_frag
-  ! **************************************************************************************************
+
+! **************************************************************************************************
 !> \brief Write embedding potential to cube and dat files
 !> \param fat_env The freeze-and-thaw environment
 !> \param v_emb The embedding potential to write
@@ -1404,7 +1428,9 @@ contains
 
     character(len=*), parameter :: routinen = "fat_eint_ee"
 
-    type(pw_type), pointer :: v_ee, rho, rho_tmp(:)
+    type(pw_type), pointer :: rho_r
+    type(pw_type), pointer :: rho_r_tmp(:)
+    type(pw_type), pointer :: v_ee
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1412,16 +1438,18 @@ contains
     call timeset(routinen, handle)
 
     call fat_pw_create_frag(fat_env, pw_r=v_ee, i_frag=i)
+    call fat_pw_create_frag(fat_env, pw_r=rho_r, i_frag=i)
+
     call fat_v_e_frag(fat_env, v_ee, i)
 
-    call fat_pw_create_frag(fat_env, pw_r=rho, i_frag=i)
-    call fat_get_rho_frag(fat_env, rho_r=rho_tmp, i_frag=j)
+    call fat_get_rho_frag(fat_env, rho_r=rho_r_tmp, i_frag=j)
 
-    call pw_transfer(rho_tmp(1), rho)
-    e = pw_integral_ab(v_ee, rho)
+    call pw_transfer(rho_r_tmp(1), rho_r)
+
+    e = pw_integral_ab(v_ee, rho_r)
 
     call fat_pw_release_frag(fat_env, pw_r=v_ee, i_frag=i)
-    call fat_pw_release_frag(fat_env, pw_r=rho, i_frag=i)
+    call fat_pw_release_frag(fat_env, pw_r=rho_r, i_frag=i)
 
     call timestop(handle)
 
@@ -1497,7 +1525,7 @@ contains
     e = pw_integral_ab(v_nn, rhon_r)
 
     call fat_pw_release_frag(fat_env, pw_r=v_nn, i_frag=i)
-    call fat_pw_release_frag(fat_env, pw_g=rhon_r, i_frag=i)
+    call fat_pw_release_frag(fat_env, pw_r=rhon_r, i_frag=i)
 
     call timestop(handle)
 
@@ -1660,7 +1688,9 @@ contains
 
     type(dft_control_type), pointer :: dft_control
     type(force_env_type), pointer :: force_env_tmp
-    type(pw_type), pointer :: rho(:), v_emb, weights
+    type(pw_type), pointer :: rho(:)
+    type(pw_type), pointer :: v_emb
+    type(pw_type), pointer :: weights
     type(qs_energy_type), pointer :: energy
     type(qs_environment_type), pointer :: qs_env_tmp
     integer :: handle
@@ -1689,8 +1719,7 @@ contains
        ! - Non-additive Kinetic potential
        ! - Non-additive XC potential
        ! - Electrostatic potential from other fragments
-       ! (to_file = False)
-       call fat_vemb_frag(fat_env, v_emb, i_frag, .false.)
+       call fat_vemb_frag(fat_env, v_emb=v_emb, i_frag=i_frag, to_file=.false.)
     end if
 
     ! Set the embedding potential to the qs env
@@ -1708,7 +1737,7 @@ contains
        call fat_pw_release_frag(fat_env, pw_r=weights, i_frag=i_frag)
 
        ! Execute external calculation script
-       CALL fat_run_external(i_frag=i_frag)
+       CALL fat_run_external(i_frag=i_frag, gradient=.FALSE.)
 
        ! Get energy from external calculation
        CALL fat_read_external_energy(fat_env, i_frag)
@@ -1827,7 +1856,7 @@ contains
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
     diff = fat_env%e_tot - fat_env%e_old
-    is_converged = abs(diff) .le. fat_env%eps
+    is_converged = abs(diff) <= fat_env%eps
     fat_env%is_converged = is_converged
 
     if (is_debug) then
@@ -1866,13 +1895,18 @@ contains
 
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, particle_set=particles)
     allocate(forces(size(particles), 3))
     forces = 0.0_dp
+
+    call timestop(handle)
 
   end subroutine fat_force_create
 
@@ -1940,21 +1974,33 @@ contains
 
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
+
        call fat_pw_create_frag(fat_env, pw_r=v_r, i_frag=i)
-       call fat_vemb_frag(fat_env, v_r, i, .true.)
+
+       call fat_vemb_frag(fat_env, v_emb=v_r, i_frag=i, to_file=.false.)
+
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
 
        call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+
        do j = 1, size(particles)  ! atoms in the fragment
-          k = k + 1
+          k = k + 1  ! atoms in the total system
           do a = 1, 3  ! xyz
-             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
+
+             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, &
+                                    i_frag=i, i_nuc=j, i_dir=a)
+
              forces(k, a) = pw_integral_ab(v_r, drho_r)
+
+             if (is_debug) print *, "DBG| k, i_atom, i_dir ", k, j, a
           end do
+
        end do
+
        call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
        call fat_pw_release_frag(fat_env, pw_r=v_r, i_frag=i)
+
     end do
 
     call timestop(handle)
@@ -2001,11 +2047,13 @@ contains
        call get_qs_env(qs_env, particle_set=particles)
 
        call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
 
-             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
+             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, &
+                                    i_frag=i, i_nuc=j, i_dir=a)
 
              ! Total force contribution (LDA + GGA if present)
              forces(k, a) = pw_integral_ab(v_emb, drho_r)
@@ -2032,7 +2080,7 @@ contains
 
     character(len=*), parameter :: routinen = "fat_force_xcna"
 
-    integer :: a, i, j, k
+    integer :: a, i, j, k, handle
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
     type(pw_type), pointer :: v_emb
@@ -2042,6 +2090,8 @@ contains
     type(pw_type), pointer :: drho_g
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     forces = 0.0_dp
 
@@ -2061,22 +2111,27 @@ contains
        call get_qs_env(qs_env, particle_set=particles)
 
        call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
+             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, &
+                                    i_frag=i, i_nuc=j, i_dir=a)
 
              ! Total force contribution (LDA + GGA if present)
              forces(k, a) = pw_integral_ab(v_emb, drho_r)
 
           end do
        end do
+
        call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
 
        ! Release potential
        call fat_pw_release_frag(fat_env, pw_r=v_emb, i_frag=i)
 
     end do
+
+    call timestop(handle)
 
   end subroutine fat_force_xcna
 
@@ -2095,28 +2150,44 @@ contains
     type(pw_type), pointer :: v_r
     type(pw_type), pointer :: drho_r
     type(pw_type), pointer :: drho_g
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     forces = 0.0_dp
 
     k = 0
     do i = 1, fat_env%n_frag  ! fragments
+
        call fat_pw_create_frag(fat_env, pw_r=v_r, i_frag=i)
+
        call fat_vemb_e_frag(fat_env, v_r, i)
+
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
+
        call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
+
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
+
+             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, &
+                                    i_frag=i, i_nuc=j, i_dir=a)
+
              forces(k, a) = pw_integral_ab(v_r, drho_r)
+
           end do
        end do
+
        call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
        call fat_pw_release_frag(fat_env, pw_r=v_r, i_frag=i)
+
     end do
+
+    call timestop(handle)
 
   end subroutine fat_force_ee
 
@@ -2135,10 +2206,14 @@ contains
     type(pw_type), pointer :: ve_r
     type(pw_type), pointer :: vn_r
     type(pw_type), pointer :: drho_r
+    type(pw_type), pointer :: rho_r_tmp
     type(pw_type), pointer :: drho_g
     type(pw_type), pointer :: drhon_g
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     forces = 0.0_dp
 
@@ -2154,23 +2229,31 @@ contains
 
        call get_qs_env(qs_env, particle_set=particles)
        call fat_pw_create_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
-       call fat_pw_create_frag(fat_env, pw_r=drhon_g, i_frag=i)
+       call fat_pw_create_frag(fat_env, pw_r=rho_r_tmp, pw_g=drhon_g, i_frag=i)
+
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
-             forces(k, a) = pw_integral_ab(vn_r, drho_r)
 
-             call fat_get_drhon_frag(fat_env, drhon_g=drhon_g, i_frag=i, i_nuc=j, i_dir=a)
-             forces(k, a) = pw_integral_ab(ve_r, drhon_g)
+             call fat_get_drho_frag(fat_env, drho_r=drho_r, drho_g=drho_g, &
+                                    i_frag=i, i_nuc=j, i_dir=a)
+             CALL pw_transfer(drho_g, rho_r_tmp)
+             forces(k, a) = pw_integral_ab(vn_r, rho_r_tmp)
+
+             call fat_get_drhon_frag(fat_env, drhon_g=drhon_g, &
+                                     i_frag=i, i_nuc=j, i_dir=a)
+             CALL pw_transfer(drhon_g, rho_r_tmp)
+             forces(k, a) = pw_integral_ab(ve_r, rho_r_tmp)
           end do
        end do
        call fat_pw_release_frag(fat_env, pw_r=drho_r, pw_g=drho_g, i_frag=i)
-       call fat_pw_release_frag(fat_env, pw_g=drhon_g, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=rho_r_tmp, pw_g=drhon_g, i_frag=i)
 
        call fat_pw_release_frag(fat_env, pw_r=ve_r, i_frag=i)
        call fat_pw_release_frag(fat_env, pw_r=vn_r, i_frag=i)
     end do
+
+    call timestop(handle)
 
   end subroutine fat_force_ne
 
@@ -2186,9 +2269,14 @@ contains
     integer :: a, i, j, k
     type(particle_type), pointer :: particles(:)
     type(qs_environment_type), pointer :: qs_env
-    type(pw_type), pointer :: v_pot, drho
+    type(pw_type), pointer :: v_pot
+    type(pw_type), pointer :: rho_r_tmp
+    type(pw_type), pointer :: drho_g
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     forces = 0.0_dp
 
@@ -2198,17 +2286,20 @@ contains
        call fat_vemb_n_frag(fat_env, v_pot, i)
        qs_env => fat_env%force_env_sub(i)%force_env%qs_env
        call get_qs_env(qs_env, particle_set=particles)
-       call fat_pw_create_frag(fat_env, pw_r=drho, i_frag=i)
+       call fat_pw_create_frag(fat_env, pw_r=rho_r_tmp, pw_g=drho_g, i_frag=i)
        do j = 1, size(particles)  ! atoms in the fragment
           k = k + 1
           do a = 1, 3  ! xyz
-             call fat_get_drhon_frag(fat_env, drhon_g=drho, i_frag=i, i_nuc=j, i_dir=a)
-             forces(k, a) = pw_integral_ab(v_pot, drho)
+             call fat_get_drhon_frag(fat_env, drhon_g=drho_g, i_frag=i, i_nuc=j, i_dir=a)
+             call pw_transfer(drho_g, rho_r_tmp)
+             forces(k, a) = pw_integral_ab(v_pot, rho_r_tmp)
           end do
        end do
-       call fat_pw_release_frag(fat_env, pw_r=drho, i_frag=i)
+       call fat_pw_release_frag(fat_env, pw_r=rho_r_tmp, pw_g=drho_g, i_frag=i)
        call fat_pw_release_frag(fat_env, pw_r=v_pot, i_frag=i)
     end do
+
+    call timestop(handle)
 
   end subroutine fat_force_nn
 
@@ -2226,15 +2317,18 @@ contains
     type(atomic_kind_type), pointer :: atomic_kinds(:)
     type(qs_environment_type), pointer :: qs_env
     type(qs_force_type), pointer :: force(:)
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     forces = 0.0_dp
 
     qs_env => fat_env%force_env_ref%qs_env
     call get_qs_env(qs_env, atomic_kind_set=atomic_kinds, force=force)
-    call get_atomic_kind_set( &
-         atomic_kinds, atom_of_kind=atom_of_kind, kind_of=kind_of, natom=natom)
+    call get_atomic_kind_set(atomic_kinds, atom_of_kind=atom_of_kind, &
+                             kind_of=kind_of, natom=natom)
 
     do iatom = 1, natom
        ikind = kind_of(iatom)
@@ -2242,15 +2336,18 @@ contains
        forces(iatom, :) = force(ikind)%overlap(1:3, i)
     end do
 
+    call timestop(handle)
+
   end subroutine fat_force_overlap
 
 ! **************************************************************************************************
 !> \brief Print the forces for a freeze-and-thaw optimization
 ! **************************************************************************************************
-   SUBROUTINE fat_force_print(fat_env, forces, label)
+   SUBROUTINE fat_force_print(fat_env, forces, label, to_file)
       TYPE(fat_env_type), POINTER                        :: fat_env
       REAL(dp), ALLOCATABLE, INTENT(IN)                  :: forces(:, :)
       CHARACTER(len=*), INTENT(IN)                       :: label
+      LOGICAL, OPTIONAL                                  :: to_file
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_force_print'
 
@@ -2260,7 +2357,7 @@ contains
       CHARACTER(len=*), PARAMETER :: fmt_energy = &
         '(/," ENERGY| Total FORCE_EVAL ( FAT ) energy [a.u.]:",T61,F20.15)'
       CHARACTER(len=*), PARAMETER :: fmt_header = &
-        '(/," ATOMIC FORCES in [a.u.]",/,/," # Atom   Kind   Element",T30,"X",T45,"Y",T60,"Z")'
+        '(/," ATOMIC FORCES in [a.u.] (",A,") ",/,/," # Atom   Kind   Element",T30,"X",T45,"Y",T60,"Z")'
       CHARACTER(len=*), PARAMETER :: fmt_forces = &
         '(2X,I5,2X,I5,6X,A2,T23,3F15.8)'
       CHARACTER(len=*), PARAMETER :: fmt_sum = &
@@ -2270,8 +2367,12 @@ contains
       TYPE(qs_environment_type), POINTER                 :: qs_env
       REAL(KIND=dp), DIMENSION(3)                        :: grand_total
       TYPE(cp_logger_type), POINTER                      :: logger
+      LOGICAL                                            :: my_to_file
 
       IF (is_debug) PRINT *, "DBG| ", moduleN//"::"//routineN
+
+      my_to_file = .FALSE.
+      IF (PRESENT(to_file)) my_to_file = to_file
 
       qs_env => fat_env%force_env_ref%qs_env
       CALL get_qs_env(qs_env, particle_set=particles)
@@ -2282,7 +2383,7 @@ contains
 
       IF (log_unit > 0) THEN
          WRITE(log_unit, fmt_energy) fat_env%e_tot
-         WRITE(log_unit, fmt_header)
+         WRITE(log_unit, fmt_header) TRIM(label)
 
          grand_total(:) = 0.0_dp
          DO i = 1, n
@@ -2295,20 +2396,114 @@ contains
          WRITE(log_unit, fmt_sum) grand_total(:), SQRT(SUM(grand_total**2))
       END IF
 
-      ! Write forces to XYZ file
-      CALL open_file(label//".xyz", file_status="REPLACE", &
-                     file_action="WRITE", unit_number=output_unit)
-      WRITE (output_unit, '(I0)') n
-      WRITE (output_unit, *)
-      DO i = 1, n
-         kind => particles(i)%atomic_kind
-         CALL get_atomic_kind(kind, element_symbol=symbol)
-         WRITE (output_unit, '(A2,3(F17.12," "))') &
-            symbol, forces(i, 1), forces(i, 2), forces(i, 3)
-      END DO
-      CALL close_file(output_unit)
+      IF (my_to_file) THEN
+         ! Write forces to XYZ file
+         CALL open_file(label//".xyz", file_status="REPLACE", &
+                        file_action="WRITE", unit_number=output_unit)
+         WRITE (output_unit, '(I0)') n
+         WRITE (output_unit, *)
+         DO i = 1, n
+            kind => particles(i)%atomic_kind
+            CALL get_atomic_kind(kind, element_symbol=symbol)
+            WRITE (output_unit, '(A2,3(F17.12," "))') &
+               symbol, forces(i, 1), forces(i, 2), forces(i, 3)
+         END DO
+         CALL close_file(output_unit)
+      END IF
 
    END SUBROUTINE fat_force_print
+
+! **************************************************************************************************
+!> \brief Store the calculated forces into force structures for all subsystems
+!> \param fat_env The freeze-and-thaw environment
+!> \param forces The calculated forces to store
+! **************************************************************************************************
+  subroutine fat_force_store(fat_env, forces)
+     type(fat_env_type), pointer :: fat_env
+     real(dp), allocatable, intent(in) :: forces(:, :)
+
+     character(len=*), parameter :: routinen = "fat_force_store"
+
+     integer :: iatom, ikind, i, natom, i_frag, k
+     integer :: force_offset
+     integer, allocatable :: atom_of_kind(:), kind_of(:)
+     type(atomic_kind_type), dimension(:), pointer :: atomic_kind_set
+     type(particle_type), dimension(:), pointer :: particles
+     type(qs_force_type), dimension(:), pointer :: force
+     type(qs_environment_type), pointer :: qs_env
+     type(force_env_type), pointer :: force_env_sub
+     integer :: handle
+
+     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+     call timeset(routinen, handle)
+
+     ! First update reference system
+     qs_env => fat_env%force_env_ref%qs_env
+     call get_qs_env(qs_env, &
+                     atomic_kind_set=atomic_kind_set, &
+                     particle_set=particles, &
+                     force=force)
+
+     call get_atomic_kind_set(atomic_kind_set=atomic_kind_set, &
+                              atom_of_kind=atom_of_kind, &
+                              kind_of=kind_of, &
+                              natom=natom)
+
+     ! Store forces for reference system
+     do iatom = 1, natom
+
+        ikind = kind_of(iatom)
+        i = atom_of_kind(iatom)
+
+        ! Store in particle_set (negative sign because forces = -dE/dR)
+        particles(iatom)%f(:) = -forces(iatom, :)
+
+        ! Store in force structure
+        force(ikind)%total(:, i) = forces(iatom, :)
+     end do
+
+     deallocate(atom_of_kind, kind_of)
+
+     ! Now update forces for each subsystem
+     force_offset = 0
+     do i_frag = 1, fat_env%n_frag
+
+         force_env_sub => fat_env%force_env_sub(i_frag)%force_env
+         qs_env => force_env_sub%qs_env
+
+         ! Get subsystem structures
+         call get_qs_env(qs_env, &
+                         atomic_kind_set=atomic_kind_set, &
+                         particle_set=particles, &
+                         force=force)
+
+         call get_atomic_kind_set(atomic_kind_set=atomic_kind_set, &
+                                  atom_of_kind=atom_of_kind, &
+                                  kind_of=kind_of, &
+                                  natom=natom)
+
+         ! Store forces for this subsystem
+         k = force_offset
+         do iatom = 1, natom
+            k = k + 1
+            ikind = kind_of(iatom)
+            i = atom_of_kind(iatom)
+
+            ! Store in particle_set (negative sign because forces = -dE/dR)
+            particles(iatom)%f(:) = -forces(k, :)
+            ! Store in force structure
+            force(ikind)%total(:, i) = forces(k, :)
+         end do
+
+         force_offset = force_offset + natom
+         deallocate(atom_of_kind, kind_of)
+
+     end do
+
+     call timestop(handle)
+
+  end subroutine fat_force_store
 
 ! **************************************************************************************************
 !> \brief Calculate the forces for a freeze-and-thaw optimization
@@ -2318,83 +2513,57 @@ contains
 
     character(len=*), parameter :: routinen = "fat_force"
 
-    integer :: i, j
-    real(dp), allocatable :: forces(:, :)
-    real(dp), allocatable :: forces_tmp(:, :)
+    real(kind=dp), allocatable :: forces(:, :)
+    real(kind=dp), allocatable :: forces_tmp(:, :)
+    integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
 
     call fat_force_create(fat_env, forces)
     call fat_force_create(fat_env, forces_tmp)
 
     call fat_force_self(fat_env, forces_tmp)
-    call fat_force_print(fat_env, forces_tmp, "force_self")
-    do i = 1, size(forces, 1)
-       do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_tmp(i, j)
-       end do
-    end do
+    call fat_force_print(fat_env, forces=forces_tmp, label="force_self")
+    forces(:,:) = forces(:,:) + forces_tmp(:,:)
 
     call fat_force_emb(fat_env, forces_tmp)
-    call fat_force_print(fat_env, forces_tmp, "force_emb")
-    do i = 1, size(forces, 1)
-       do j = 1, 3
-          forces(i, j) = forces(i, j) - forces_tmp(i, j)
-       end do
-    end do
+    call fat_force_print(fat_env, forces=forces_tmp, label="force_emb")
+    forces(:,:) = forces(:,:) - forces_tmp(:,:)
 
     call fat_force_tsna(fat_env, forces_tmp)
-    call fat_force_print(fat_env, forces_tmp, "force_tsna")
-    do i = 1, size(forces, 1)
-       do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_tmp(i, j)
-       end do
-    end do
+    call fat_force_print(fat_env, forces=forces_tmp, label="force_tsna")
+    forces(:,:) = forces(:,:) + forces_tmp(:,:)
 
     call fat_force_xcna(fat_env, forces_tmp)
-    call fat_force_print(fat_env, forces_tmp, "force_xcna")
-    do i = 1, size(forces, 1)
-       do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_tmp(i, j)
-       end do
-    end do
+    call fat_force_print(fat_env, forces=forces_tmp, label="force_xcna")
+    forces(:,:) = forces(:,:) + forces_tmp(:,:)
 
     call fat_force_ee(fat_env, forces_tmp)
-    call fat_force_print(fat_env, forces_tmp, "force_ee")
-    do i = 1, size(forces, 1)
-       do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_tmp(i, j)
-       end do
-    end do
+    call fat_force_print(fat_env, forces=forces_tmp, label="force_ee")
+    forces(:,:) = forces(:,:) + forces_tmp(:,:)
 
     call fat_force_ne(fat_env, forces_tmp)
-    call fat_force_print(fat_env, forces_tmp, "force_ne")
-    do i = 1, size(forces, 1)
-       do j = 1, 3
-          forces(i, j) = forces(i, j) + 2*forces_tmp(i, j)
-       end do
-    end do
+    call fat_force_print(fat_env, forces=forces_tmp, label="force_ne")
+    forces(:,:) = forces(:,:) + 2.0_dp*forces_tmp(:,:)
 
     call fat_force_nn(fat_env, forces_tmp)
-    call fat_force_print(fat_env, forces_tmp, "force_nn")
-    do i = 1, size(forces, 1)
-       do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_tmp(i, j)
-       end do
-    end do
+    call fat_force_print(fat_env, forces=forces_tmp, label="force_nn")
+    forces(:,:) = forces(:,:) + forces_tmp(:,:)
 
     call fat_force_overlap(fat_env, forces_tmp)
-    call fat_force_print(fat_env, forces_tmp, "force_overlap")
-    do i = 1, size(forces, 1)
-       do j = 1, 3
-          forces(i, j) = forces(i, j) + forces_tmp(i, j)
-       end do
-    end do
+    call fat_force_print(fat_env, forces=forces_tmp, label="force_overlap")
+    forces(:,:) = forces(:,:) + forces_tmp(:,:)
+
+    call fat_force_store(fat_env, forces)
+
+    call fat_force_print(fat_env, forces=forces, label="total", to_file=.FALSE.)
+
     deallocate(forces_tmp)
-
-    call fat_force_print(fat_env, forces, "force")
-
     deallocate(forces)
+
+    call timestop(handle)
 
   end subroutine fat_force
 
@@ -2409,7 +2578,7 @@ contains
 
     logical :: my_do_forces
     integer :: i, j
-    real(dp) :: e_tmp
+    real(kind=dp) :: e_tmp
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
 
@@ -2505,7 +2674,7 @@ contains
     character(len=*), parameter :: routinen = "fat_init"
 
     integer :: handle, i, j, n_iter
-    real(dp) :: eps
+    real(kind=dp) :: eps
     type(force_env_type), pointer :: force_env_tmp
     type(pw_env_type), pointer :: pw_env_tmp
     type(qs_environment_type), pointer :: qs_env_tmp
