@@ -318,14 +318,16 @@ CONTAINS
    END SUBROUTINE calculate_rho_nlcc
 
 ! **************************************************************************************************
-!> \brief computes the local pseudopotential (without erf term) on the grid
+!> \brief computes the local pseudopotential (with/without erf term) on the grid
 !> \param vppl ...
 !> \param qs_env ...
+!> \param do_erf_term ...
 ! **************************************************************************************************
-   SUBROUTINE calculate_ppl_grid(vppl, qs_env)
+SUBROUTINE calculate_ppl_grid(vppl, qs_env, do_erf_term)
 
       TYPE(pw_type), INTENT(INOUT)                       :: vppl
       TYPE(qs_environment_type), POINTER                 :: qs_env
+      LOGICAL, OPTIONAL                                  :: do_erf_term
 
       CHARACTER(len=*), PARAMETER :: routineN = 'calculate_ppl_grid'
 
@@ -333,7 +335,7 @@ CONTAINS
                                                             j, lppl, n, natom, ni, npme, nthread, &
                                                             subpatch_pattern
       INTEGER, DIMENSION(:), POINTER                     :: atom_list, cores
-      REAL(KIND=dp)                                      :: alpha, eps_rho_rspace, radius
+      REAL(KIND=dp)                                      :: alpha, eps_rho_rspace, radius, zeff
       REAL(KIND=dp), DIMENSION(3)                        :: ra
       REAL(KIND=dp), DIMENSION(:), POINTER               :: cexp_ppl
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: pab
@@ -346,8 +348,13 @@ CONTAINS
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(realspace_grid_type), POINTER                 :: rs_rho
+      LOGICAL                                            :: my_do_erf_term
 
       CALL timeset(routineN, handle)
+
+
+      my_do_erf_term = .FALSE.
+      IF (PRESENT(do_erf_term)) my_do_erf_term = do_erf_term
 
       NULLIFY (cell, dft_control, pab, atomic_kind_set, qs_kind_set, particle_set, &
                atom_list, pw_env, rs_rho, auxbas_pw_pool, cores)
@@ -371,7 +378,11 @@ CONTAINS
          CALL get_qs_kind(qs_kind_set(ikind), gth_potential=gth_potential)
 
          IF (.NOT. ASSOCIATED(gth_potential)) CYCLE
-         CALL get_potential(potential=gth_potential, alpha_ppl=alpha, nexp_ppl=lppl, cexp_ppl=cexp_ppl)
+         CALL get_potential(potential=gth_potential, &
+                            alpha_ppl=alpha, &
+                            nexp_ppl=lppl, &
+                            cexp_ppl=cexp_ppl, &
+                            zeff=zeff)
 
          IF (lppl <= 0) CYCLE
 
@@ -452,7 +463,7 @@ CONTAINS
             END IF
          END DO
 
-         IF (npme .GT. 0) THEN
+         IF (npme > 0) THEN
             DO j = 1, npme
 
                iatom = cores(j)
@@ -461,6 +472,7 @@ CONTAINS
                subpatch_pattern = 0
                ni = 2*lppl - 2
 
+               ! Add V(ppl) contribution
                radius = exp_radius_very_extended(la_min=0, la_max=ni, &
                                                  lb_min=0, lb_max=0, &
                                                  ra=ra, rb=ra, rp=ra, &
@@ -470,6 +482,20 @@ CONTAINS
 
                CALL collocate_pgf_product(ni, alpha, 0, 0, 0.0_dp, 0, ra, &
                                           (/0.0_dp, 0.0_dp, 0.0_dp/), 1.0_dp, pab, 0, 0, rs_rho, &
+                                          radius=radius, ga_gb_function=GRID_FUNC_AB, &
+                                          use_subpatch=.TRUE., subpatch_pattern=subpatch_pattern)
+
+               IF (.NOT. my_do_erf_term) CYCLE
+               ! Add V(erf) contribution
+               radius = exp_radius_very_extended(la_min=0, la_max=0, &
+                                                 lb_min=0, lb_max=0, &
+                                                 ra=ra, rb=ra, rp=ra, &
+                                                 zetp=SQRT(2.0_dp)*alpha, eps=eps_rho_rspace, &
+                                                 pab=pab, o1=0, o2=0, &
+                                                 prefactor=-zeff, cutoff=0.0_dp)
+
+               CALL collocate_pgf_product(0, SQRT(2.0_dp)*alpha, 0, 0, 0.0_dp, 0, ra, &
+                                          (/0.0_dp, 0.0_dp, 0.0_dp/), -zeff, pab, 0, 0, rs_rho, &
                                           radius=radius, ga_gb_function=GRID_FUNC_AB, &
                                           use_subpatch=.TRUE., subpatch_pattern=subpatch_pattern)
 
