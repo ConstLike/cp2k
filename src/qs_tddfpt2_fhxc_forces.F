@@ -542,7 +542,7 @@ CONTAINS
          END IF
          ! Calculate the exchange-correlation kernel derivative contribution, notice that for open-shell
          ! rhox_r contains a factor of 2!
-         IF ((do_analytic .AND. .NOT. do_numeric).OR.do_sf) THEN
+         IF (do_analytic .AND. .NOT. do_numeric) THEN
             IF (.NOT.do_sf) THEN
                CPABORT("Analytic 3rd EXC derivatives not available")
             ELSE !TODO
@@ -552,7 +552,7 @@ CONTAINS
          ELSEIF (do_numeric) THEN
             IF (do_analytic) THEN
                CALL qs_fgxc_gdiff(ks_env, rho, rhox, xc_section, order, eps_delta, is_rks_triplets, &
-                                  fxc_rho, fxc_tau, gxc_rho, gxc_tau)
+                                  fxc_rho, fxc_tau, gxc_rho, gxc_tau, spinflip=do_sf)
             ELSE
                CALL qs_fgxc_create(ks_env, rho, rhox, xc_section, order, is_rks_triplets, &
                                    fxc_rho, fxc_tau, gxc_rho, gxc_tau)

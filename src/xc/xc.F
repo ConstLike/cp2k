@@ -1582,8 +1582,11 @@ CONTAINS
 
       nspins = SIZE(rho1_r)
       lsd = (nspins == 2)
-      IF (nspins == 1 .AND. my_do_excitations .AND. (my_lsd_singlets .OR. my_do_triplet)) THEN
+      IF (nspins == 1 .AND.my_do_excitations .AND. (my_lsd_singlets .OR. my_do_triplet)) THEN
          nspins = 2
+         lsd = .TRUE.
+      ELSE IF (my_do_sf) THEN
+         nspins = 1
          lsd = .TRUE.
       END IF
 
@@ -1622,7 +1625,7 @@ CONTAINS
          CALL xc_rho_set_update(rho1_set, rho1_r, rho1_g, tau1_r, needs, &
                                 section_get_ival(xc_section, "XC_GRID%XC_DERIV"), &
                                 section_get_ival(xc_section, "XC_GRID%XC_SMOOTH_RHO"), &
-                                pw_pool)
+                                pw_pool, spinflip=my_do_sf)
 
          fac = 0._dp
          IF (nspins == 1 .AND. my_do_excitations) THEN
@@ -3696,18 +3699,11 @@ CONTAINS
                IF (ASSOCIATED(deriv_att)) THEN
                   CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
                   CALL xc_derivative_get(deriv_att, deriv_data=e_drhoa)
-!$OMP             PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
-!$OMP             SHARED(bo,v_drhoa,dra1dra,deriv_data,gradient_cut,norm_drhoa) COLLAPSE(3)
-                  DO k = bo(1, 3), bo(2, 3)
-                     DO j = bo(1, 2), bo(2, 2)
-                        DO i = bo(1, 1), bo(2, 1)
-                           v_drhoa(1)%array(i, j, k) = v_drhoa(1)%array(i, j, k) + &
-                                       deriv_data(i, j, k)*dra1dra(i, j, k)
-!                                       deriv_data(i, j, k)*dra1dra(i, j, k)/MAX(gradient_cut, norm_drhoa (i, j, k))**2
-                        END DO
-                     END DO
-                  END DO
-!$OMP             END PARALLEL DO
+
+!$OMP             PARALLEL WORKSHARE DEFAULT(NONE) SHARED(dra1dra,gradient_cut,norm_drhoa,v_drhoa,deriv_data)
+                  v_drhoa (1)%array(:, :, :) = v_drhoa (1)%array(:, :, :) + &
+                                                    deriv_data(:, :, :)*dra1dra (:, :, :)/MAX(gradient_cut, norm_drhoa (:, :, :))**2
+!$OMP             END PARALLEL WORKSHARE
                END IF
                !   Beta contribution
                !                     d e_xc           
@@ -3717,20 +3713,13 @@ CONTAINS
                IF (ASSOCIATED(deriv_att)) THEN
                   CALL xc_derivative_get(deriv_att, deriv_data=deriv_data)
                   CALL xc_derivative_get(deriv_att, deriv_data=e_drhob)
-!$OMP             PARALLEL DO PRIVATE(k,j,i) DEFAULT(NONE)&
-!$OMP             SHARED(bo,v_drhob,drb1drb,deriv_data,gradient_cut,norm_drhob) COLLAPSE(3)
-                  DO k = bo(1, 3), bo(2, 3)
-                     DO j = bo(1, 2), bo(2, 2)
-                        DO i = bo(1, 1), bo(2, 1)
-                           v_drhob(2)%array(i, j, k) = v_drhob(2)%array(i, j, k) - &
-                                       deriv_data(i, j, k)*drb1drb(i, j, k)
-!                                       deriv_data(i, j, k)*drb1drb(i, j, k)/MAX(gradient_cut, norm_drhob (i, j, k))**2
-                        END DO
-                     END DO
-                  END DO
-!$OMP             END PARALLEL DO
+
+!$OMP             PARALLEL WORKSHARE DEFAULT(NONE) SHARED(drb1drb,gradient_cut,norm_drhob,v_drhob,deriv_data)
+                  v_drhob (2)%array(:, :, :) = v_drhob (2)%array(:, :, :) - &
+                                                    deriv_data(:, :, :)*drb1drb (:, :, :)/MAX(gradient_cut, norm_drhob (:, :, :))**2
+!$OMP             END PARALLEL WORKSHARE
                END IF
-               END IF
+               END IF ! If ALDA0
             END IF
 
          ELSE

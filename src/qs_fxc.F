@@ -43,7 +43,8 @@ MODULE qs_fxc
    USE qs_ks_types,                     ONLY: get_ks_env,&
                                               qs_ks_env_type
    USE qs_rho_methods,                  ONLY: qs_rho_copy,&
-                                              qs_rho_scale_and_add
+                                              qs_rho_scale_and_add, &
+                                              qs_rho_scale_and_add_b
    USE qs_rho_types,                    ONLY: qs_rho_create,&
                                               qs_rho_get,&
                                               qs_rho_release,&
@@ -88,7 +89,7 @@ CONTAINS
 !> \param v_xc ...
 !> \param v_xc_tau ...
 ! **************************************************************************************************
-   SUBROUTINE qs_fxc_analytic(rho0, rho1_r, tau1_r, xc_section, auxbas_pw_pool, is_triplet, v_xc, v_xc_tau)
+   SUBROUTINE qs_fxc_analytic(rho0, rho1_r, tau1_r, xc_section, auxbas_pw_pool, is_triplet, v_xc, v_xc_tau,spinflip)
 
       TYPE(qs_rho_type), POINTER                         :: rho0
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, tau1_r
@@ -96,12 +97,13 @@ CONTAINS
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       LOGICAL, INTENT(IN)                                :: is_triplet
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: v_xc, v_xc_tau
+      LOGICAL, OPTIONAL                                  :: spinflip
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'qs_fxc_analytic'
 
       INTEGER                                            :: handle, nspins
       INTEGER, DIMENSION(2, 3)                           :: bo
-      LOGICAL                                            :: lsd
+      LOGICAL                                            :: lsd, do_sf
       REAL(KIND=dp)                                      :: fac
       TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho0_g, rho1_g
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho0_r, tau0_r
@@ -114,6 +116,9 @@ CONTAINS
 
       CPASSERT(.NOT. ASSOCIATED(v_xc))
       CPASSERT(.NOT. ASSOCIATED(v_xc_tau))
+
+      do_sf = .FALSE.
+      IF (PRESENT(spinflip)) do_sf = spinflip
 
       CALL qs_rho_get(rho0, rho_r=rho0_r, rho_g=rho0_g, tau_r=tau0_r)
       nspins = SIZE(rho0_r)
@@ -130,7 +135,8 @@ CONTAINS
       CALL xc_prep_2nd_deriv(deriv_set, rho0_set, rho0_r, auxbas_pw_pool, xc_section=xc_section, tau_r=tau0_r)
       ! Folds the density rho1 with the functional
       CALL xc_calc_2nd_deriv(v_xc, v_xc_tau, deriv_set, rho0_set, rho1_r, rho1_g, tau1_r, &
-                             auxbas_pw_pool, xc_section=xc_section, gapw=.FALSE., do_triplet=is_triplet)
+                             auxbas_pw_pool, xc_section=xc_section, gapw=.FALSE., do_triplet=is_triplet, &
+                             do_sf=do_sf)
       CALL xc_dset_release(deriv_set)
       CALL xc_rho_set_release(rho0_set)
 
@@ -446,7 +452,7 @@ CONTAINS
 !> \param gxc_tau ...
 ! **************************************************************************************************
    SUBROUTINE qs_fgxc_gdiff(ks_env, rho0_struct, rho1_struct, xc_section, accuracy, epsrho, &
-                            is_triplet, fxc_rho, fxc_tau, gxc_rho, gxc_tau)
+                            is_triplet, fxc_rho, fxc_tau, gxc_rho, gxc_tau, spinflip)
 
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(qs_rho_type), POINTER                         :: rho0_struct, rho1_struct
@@ -455,6 +461,7 @@ CONTAINS
       REAL(KIND=dp), INTENT(IN)                          :: epsrho
       LOGICAL, INTENT(IN)                                :: is_triplet
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: fxc_rho, fxc_tau, gxc_rho, gxc_tau
+      LOGICAL, OPTIONAL                                  :: spinflip
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'qs_fgxc_gdiff'
 
@@ -464,8 +471,10 @@ CONTAINS
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: v_tau_rspace, vxc00
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: v_tau_rspace, vxc00,vxc00b
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, tau1_r
       TYPE(qs_rho_type), POINTER                         :: rhoin
+      LOGICAL                                            :: do_sf
 
       CALL timeset(routineN, handle)
 
@@ -475,6 +484,9 @@ CONTAINS
       CPASSERT(.NOT. ASSOCIATED(gxc_tau))
       CPASSERT(ASSOCIATED(rho0_struct))
       CPASSERT(ASSOCIATED(rho1_struct))
+
+      do_sf = .FALSE.
+      IF (PRESENT(spinflip)) do_sf = spinflip
 
       ak = 0.0_dp
       SELECT CASE (accuracy)
@@ -496,8 +508,14 @@ CONTAINS
       nspins = dft_control%nspins
       exc = 0.0_dp
 
-      CALL qs_fxc_fdiff(ks_env, rho0_struct, rho1_struct, xc_section, accuracy, is_triplet, &
-                        fxc_rho, fxc_tau)
+      IF (do_sf) THEN
+         CALL qs_rho_get(rho1_struct, rho_r=rho1_r, tau_r=tau1_r)
+         CALL qs_fxc_analytic(rho0_struct, rho1_r, tau1_r, xc_section, &
+                              auxbas_pw_pool, is_triplet, fxc_rho, fxc_tau, spinflip=do_sf)
+      ELSE
+         CALL qs_fxc_fdiff(ks_env, rho0_struct, rho1_struct, xc_section, accuracy, is_triplet, &
+                           fxc_rho, fxc_tau)
+      END IF
 
       DO istep = -nstep, nstep
 
@@ -507,12 +525,25 @@ CONTAINS
             NULLIFY (rhoin)
             ALLOCATE (rhoin)
             CALL qs_rho_create(rhoin)
-            NULLIFY (vxc00, v_tau_rspace)
+            NULLIFY (vxc00,vxc00b, v_tau_rspace)
             CALL qs_rho_copy(rho0_struct, rhoin, auxbas_pw_pool, nspins)
             CALL qs_rho_scale_and_add(rhoin, rho1_struct, alpha, beta)
-            CALL qs_fxc_fdiff(ks_env=ks_env, rho0_struct=rhoin, rho1_struct=rho1_struct, &
-                              xc_section=xc_section, accuracy=accuracy, is_triplet=is_triplet, &
-                              fxc_rho=vxc00, fxc_tau=v_tau_rspace)
+            IF (do_sf) THEN
+               ! variation in alpha density
+               CALL qs_fxc_analytic(rhoin, rho1_r, tau1_r, &
+                                    xc_section, auxbas_pw_pool, is_triplet, &
+                                    vxc00, v_tau_rspace, spinflip=do_sf)
+               ! variation in beta density
+               CALL qs_rho_copy(rho0_struct, rhoin, auxbas_pw_pool, nspins)
+               CALL qs_rho_scale_and_add_b(rhoin, rho1_struct, alpha, beta)
+               CALL qs_fxc_analytic(rhoin, rho1_r, tau1_r, &
+                                    xc_section, auxbas_pw_pool, is_triplet, &
+                                    vxc00b, v_tau_rspace, spinflip=do_sf)
+            ELSE
+               CALL qs_fxc_fdiff(ks_env=ks_env, rho0_struct=rhoin, rho1_struct=rho1_struct, &
+                                 xc_section=xc_section, accuracy=accuracy, is_triplet=is_triplet, &
+                                 fxc_rho=vxc00, fxc_tau=v_tau_rspace)
+            END IF
             CALL qs_rho_release(rhoin)
             DEALLOCATE (rhoin)
             IF (.NOT. ASSOCIATED(gxc_rho)) THEN
@@ -522,13 +553,22 @@ CONTAINS
                   CALL pw_zero(gxc_rho(ispin))
                END DO
             END IF
-            DO ispin = 1, nspins
-               CALL pw_axpy(vxc00(ispin), gxc_rho(ispin), ak(istep))
-            END DO
+            IF (do_sf) THEN
+               CALL pw_axpy(vxc00(1), gxc_rho(1), ak(istep))
+               CALL pw_axpy(vxc00b(1),gxc_rho(2), ak(istep))
+            ELSE
+               DO ispin = 1, nspins
+                  CALL pw_axpy(vxc00(ispin), gxc_rho(ispin), ak(istep))
+               END DO
+            END IF
             DO ispin = 1, SIZE(vxc00)
                CALL auxbas_pw_pool%give_back_pw(vxc00(ispin))
             END DO
             DEALLOCATE (vxc00)
+            IF (ASSOCIATED(vxc00b)) THEN
+               CALL auxbas_pw_pool%give_back_pw(vxc00b(1))
+               DEALLOCATE (vxc00b)
+            END IF
             IF (ASSOCIATED(v_tau_rspace)) THEN
                IF (.NOT. ASSOCIATED(gxc_tau)) THEN
                   ALLOCATE (gxc_tau(nspins))
