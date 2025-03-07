@@ -17,7 +17,7 @@ module fat_methods
   use pw_poisson_types, only: pw_poisson_type
   use pw_pool_types, only: pw_pool_type
   use pw_types, only: pw_type, pw_p_type, REALDATA3D, COMPLEXDATA1D, REALSPACE, RECIPROCALSPACE
-  use qs_collocate_density, only: calculate_drho_elec_dR, calculate_drho_core
+  use qs_collocate_density, only: calculate_drho_elec_dR, calculate_drho_core, calculate_ppl_grid
   use qs_energy_types, only: qs_energy_type
   use qs_environment_types, only: qs_environment_type, get_qs_env, set_qs_env
   use qs_force, only: qs_calc_energy_force
@@ -51,6 +51,16 @@ module fat_methods
                                              qs_ks_env_type,&
                                              set_ks_env
 ! use physcon
+  USE cell_types,                      ONLY: cell_type,&
+                                             pbc
+  USE message_passing,                 ONLY: mp_para_env_type
+  USE physcon,                         ONLY: bohr,&
+                                             debye,&
+                                             pascal
+  USE qs_rho0_ggrid,                   ONLY: integrate_vhg0_rspace
+  USE hartree_local_methods,           ONLY: Vh_1c_gg_integrals
+  USE hartree_local_types,             ONLY: ecoul_1center_type
+  USE qs_local_rho_types,              ONLY: local_rho_type
 
 #include "./base/base_uses.f90"
 
@@ -666,6 +676,30 @@ contains
   end subroutine fat_get_rhon_frag
 
 ! **************************************************************************************************
+!> \brief Gets the nuclear density for one fragment in the freeze-and-thaw environment
+! **************************************************************************************************
+  subroutine fat_get_ppl_frag(fat_env, v_ppl, i_frag)
+    type(fat_env_type), pointer :: fat_env
+    type(pw_type), pointer :: v_ppl
+    integer :: i_frag
+
+    character(len=*), parameter :: routinen = "fat_get_rhon_frag"
+
+    type(qs_environment_type), pointer :: qs_env
+    integer :: handle
+
+    if (is_debug) print *, "DBG| ", modulen//"::"//routinen
+
+    call timeset(routinen, handle)
+
+    qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
+    CALL calculate_ppl_grid(v_ppl, qs_env, do_erf_term=.TRUE.)
+    if (is_debug) call print_pw_statistics(v_ppl, "v_ppl", i_frag)
+
+    call timestop(handle)
+
+  end subroutine fat_get_ppl_frag
+! **************************************************************************************************
 !> \brief Gets the gradient of the nuclear density w.r.t. a nuclear position for one fragment in the
 !>        freeze-and-thaw environment
 ! **************************************************************************************************
@@ -1001,6 +1035,7 @@ contains
     type(pw_poisson_type), pointer :: poisson_env
     type(pw_env_type), pointer :: pw_env
     type(pw_type), pointer :: rhon_g
+!   type(pw_type), pointer :: v_pp
     integer :: handle
 
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen
@@ -1014,6 +1049,10 @@ contains
     call get_qs_env(qs_env, pw_env=pw_env)
     call pw_env_get(pw_env, poisson_env=poisson_env)
     call pw_poisson_solve(poisson_env, density=rhon_g, vhartree=v_nuc_pot)
+!   call fat_pw_create_frag(fat_env, pw_r=v_pp, i_frag=i_frag)
+!   call fat_get_ppl_frag(fat_env, v_ppl=v_pp, i_frag=i_frag)
+!   CALL pw_axpy(v_pp, v_nuc_pot)
+!   call fat_pw_release_frag(fat_env, pw_r=v_pp, i_frag=i_frag)
 
     call timestop(handle)
 
@@ -1695,6 +1734,10 @@ contains
     type(qs_environment_type), pointer :: qs_env_tmp
     integer :: handle
 
+
+    type(pw_type), pointer :: rho_tmp
+    character(len=50) :: filename
+
     if (is_debug) print *, "DBG| ", modulen//"::"//routinen, " for frag:", i_frag
 
     call timeset(routinen, handle)
@@ -1719,7 +1762,7 @@ contains
        ! - Non-additive Kinetic potential
        ! - Non-additive XC potential
        ! - Electrostatic potential from other fragments
-       call fat_vemb_frag(fat_env, v_emb=v_emb, i_frag=i_frag, to_file=.false.)
+       call fat_vemb_frag(fat_env, v_emb=v_emb, i_frag=i_frag, to_file=.True.)
     end if
 
     ! Set the embedding potential to the qs env
@@ -1749,16 +1792,16 @@ contains
        ! Integrate the density * embedding potential
        fat_env%e_emb(i_frag) = pw_integral_ab(v_emb, rho(1))
 
-!      if (is_debug) then
-!         ! Create temporary pw for density
-!         call fat_pw_create_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
-!         call pw_transfer(rho(1), rho_tmp)
-!         ! Write density to cube file
-!         write(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
-!         call write_pw_to_cube(fat_env, pw_r=rho_tmp, filename)
-!         ! Deallocate
-!         call fat_pw_release_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
-!      end if
+       if (is_debug) then
+          ! Create temporary pw for density
+          call fat_pw_create_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
+          call pw_transfer(rho(1), rho_tmp)
+          ! Write density to cube file
+          write(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
+          call write_pw_to_cube(fat_env, pw_r=rho_tmp, filename=filename)
+          ! Deallocate
+          call fat_pw_release_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
+       end if
 
        if(is_debug) &
          print *, "KKK| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
@@ -1784,19 +1827,19 @@ contains
        if(is_debug) &
          print *, "KKK| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
 
-!      ! Get electron density from internal calculation
-!      call fat_get_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
+       ! Get electron density from internal calculation
+       call fat_get_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
 
-!      if (is_debug) then
-!         ! Create temporary pw for density
-!         call fat_pw_create_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
-!         call pw_transfer(rho(1), rho_tmp)
-!         ! Write density to cube file
-!         write(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
-!         call write_pw_to_cube(fat_env, pw_r=rho_tmp, filename)
-!         ! Deallocate
-!         call fat_pw_release_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
-!      end if
+       if (is_debug) then
+          ! Create temporary pw for density
+          call fat_pw_create_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
+          call pw_transfer(rho(1), rho_tmp)
+          ! Write density to cube file
+          write(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
+          call write_pw_to_cube(fat_env, pw_r=rho_tmp, filename=filename)
+          ! Deallocate
+          call fat_pw_release_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
+       end if
 
     end if
 
