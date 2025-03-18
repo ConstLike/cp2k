@@ -63,14 +63,7 @@ MODULE force_env_methods
                                               opt_dmfet_pot_type,&
                                               opt_embed_pot_type
    USE external_potential_methods,      ONLY: add_external_potential
-   USE fat_methods,                     ONLY: fat_finalize,&
-                                              fat_is_done,&
-                                              fat_iterate,&
-                                              fat_results,&
-                                              fat_init
-   USE fat_types,                       ONLY: fat_env_create,&
-                                              fat_env_release,&
-                                              fat_env_type
+   USE fat_methods,                     ONLY: fat_embedding
    USE fist_environment_types,          ONLY: fist_environment_type
    USE fist_force,                      ONLY: fist_calc_energy_force
    USE force_env_types,                 ONLY: &
@@ -289,7 +282,8 @@ CONTAINS
             CALL nnp_calc_energy_force(force_env%nnp_env, &
                                        calculate_forces)
          CASE (use_embed)
-            CALL embed_energy(force_env)
+            CALL embed_energy(force_env, &
+                              calculate_forces)
          CASE default
             CPABORT("")
          END SELECT
@@ -1383,12 +1377,14 @@ CONTAINS
 !> \param force_env ...
 !> \author Vladimir Rybkin
 ! **************************************************************************************************
-   SUBROUTINE embed_energy(force_env)
+   SUBROUTINE embed_energy(force_env, calculate_forces)
 
       TYPE(force_env_type), POINTER                      :: force_env
+      LOGICAL, OPTIONAL                                  :: calculate_forces
 
       INTEGER                                            :: iforce_eval, iparticle, jparticle, &
                                                             my_group, natom, nforce_eval
+      INTEGER                                            :: embed_method
       INTEGER, DIMENSION(:), POINTER                     :: glob_natoms, map_index
       LOGICAL                                            :: converged_embed
       REAL(KIND=dp)                                      :: energy
@@ -1416,144 +1412,164 @@ CONTAINS
                          force_env_section=force_env_section, &
                          root_section=root_section, &
                          cell=cell_embed)
-      CALL cp_subsys_get(subsys=subsys_embed, &
-                         particles=particles_embed, &
-                         results=results_embed)
-      NULLIFY (map_index, glob_natoms)
 
-      nforce_eval = SIZE(force_env%sub_force_env)
       embed_section => section_vals_get_subs_vals(force_env_section, "EMBED")
-      mapping_section => section_vals_get_subs_vals(embed_section, "MAPPING")
-      ! Global Info
-      ALLOCATE (subsystems(nforce_eval))
-      ALLOCATE (particles(nforce_eval))
-      ! Local Info to sync
-      ALLOCATE (energies(nforce_eval))
-      ALLOCATE (glob_natoms(nforce_eval))
-      ALLOCATE (results(nforce_eval))
-      energies = 0.0_dp
-      glob_natoms = 0
 
-      DO iforce_eval = 1, nforce_eval
-         NULLIFY (subsystems(iforce_eval)%subsys, particles(iforce_eval)%list)
-         NULLIFY (results(iforce_eval)%results)
-         CALL cp_result_create(results(iforce_eval)%results)
-         IF (.NOT. ASSOCIATED(force_env%sub_force_env(iforce_eval)%force_env)) CYCLE
-         ! From this point on the error is the sub_error
-         my_group = force_env%embed_env%group_distribution(force_env%para_env%mepos)
-         my_logger => force_env%embed_env%sub_logger(my_group + 1)%p
-         ! Copy iterations info (they are updated only in the main embed_env)
-         CALL cp_iteration_info_copy_iter(logger%iter_info, my_logger%iter_info)
-         CALL cp_add_default_logger(my_logger)
+      CALL section_vals_val_get(embed_section, "EMBED_METHOD", i_val=embed_method)
 
-         ! Get all available subsys
-         CALL force_env_get(force_env=force_env%sub_force_env(iforce_eval)%force_env, &
-                            subsys=subsystems(iforce_eval)%subsys)
+      IF (embed_method == fat) THEN
 
-         ! Check if we import density from previous force calculations
-         ! Only for QUICKSTEP
-         IF (ASSOCIATED(force_env%sub_force_env(iforce_eval)%force_env%qs_env)) THEN
-            NULLIFY (dft_control)
-            CALL get_qs_env(force_env%sub_force_env(iforce_eval)%force_env%qs_env, dft_control=dft_control)
-            IF (dft_control%qs_control%ref_embed_subsys) THEN
-               IF (iforce_eval .EQ. 2) CPABORT("Density importing force_eval can't be the first.")
+         CALL fat_embedding(force_env, &
+                            converged=converged_embed, &
+                            do_forces=calculate_forces)
+         IF (.NOT. converged_embed) CPABORT("FAT Embedding potential optimization not converged.")
+
+      ELSE
+
+         CALL cp_subsys_get(subsys=subsys_embed, &
+                            particles=particles_embed, &
+                            results=results_embed)
+
+         mapping_section => section_vals_get_subs_vals(embed_section, "MAPPING")
+
+         nforce_eval = SIZE(force_env%sub_force_env)
+         ! Global Info
+         ALLOCATE (subsystems(nforce_eval))
+         ALLOCATE (particles(nforce_eval))
+         ! Local Info to sync
+         NULLIFY (map_index, glob_natoms)
+         ALLOCATE (energies(nforce_eval))
+         ALLOCATE (glob_natoms(nforce_eval))
+         ALLOCATE (results(nforce_eval))
+         energies = 0.0_dp
+         glob_natoms = 0
+
+         DO iforce_eval = 1, nforce_eval
+            NULLIFY (subsystems(iforce_eval)%subsys, particles(iforce_eval)%list)
+            NULLIFY (results(iforce_eval)%results)
+            CALL cp_result_create(results(iforce_eval)%results)
+            IF (.NOT. ASSOCIATED(force_env%sub_force_env(iforce_eval)%force_env)) CYCLE
+            ! From this point on the error is the sub_error
+            my_group = force_env%embed_env%group_distribution(force_env%para_env%mepos)
+            my_logger => force_env%embed_env%sub_logger(my_group + 1)%p
+            ! Copy iterations info (they are updated only in the main embed_env)
+            CALL cp_iteration_info_copy_iter(logger%iter_info, my_logger%iter_info)
+            CALL cp_add_default_logger(my_logger)
+
+            ! Get all available subsys
+            CALL force_env_get(force_env=force_env%sub_force_env(iforce_eval)%force_env, &
+                               subsys=subsystems(iforce_eval)%subsys)
+
+            ! Check if we import density from previous force calculations
+            ! Only for QUICKSTEP
+            IF (ASSOCIATED(force_env%sub_force_env(iforce_eval)%force_env%qs_env)) THEN
+               NULLIFY (dft_control)
+               CALL get_qs_env(force_env%sub_force_env(iforce_eval)%force_env%qs_env, dft_control=dft_control)
+               IF (dft_control%qs_control%ref_embed_subsys) THEN
+                  IF (iforce_eval .EQ. 2) CPABORT("Density importing force_eval can't be the first.")
+               END IF
             END IF
-         END IF
 
-         ! all force_env share the same cell
-         CALL cp_subsys_set(subsystems(iforce_eval)%subsys, cell=cell_embed)
+            ! all force_env share the same cell
+            CALL cp_subsys_set(subsystems(iforce_eval)%subsys, cell=cell_embed)
 
-         ! Get available particles
-         CALL cp_subsys_get(subsys=subsystems(iforce_eval)%subsys, &
-                            particles=particles(iforce_eval)%list)
+            ! Get available particles
+            CALL cp_subsys_get(subsys=subsystems(iforce_eval)%subsys, &
+                               particles=particles(iforce_eval)%list)
 
-         ! Get Mapping index array
-         natom = SIZE(particles(iforce_eval)%list%els)
+            ! Get Mapping index array
+            natom = SIZE(particles(iforce_eval)%list%els)
 
-         CALL get_subsys_map_index(mapping_section, natom, iforce_eval, nforce_eval, &
-                                   map_index, .TRUE.)
+            CALL get_subsys_map_index(mapping_section, natom, iforce_eval, nforce_eval, &
+                                      map_index, .TRUE.)
 
-         ! Mapping particles from iforce_eval environment to the embed env
-         DO iparticle = 1, natom
-            jparticle = map_index(iparticle)
-            particles(iforce_eval)%list%els(iparticle)%r = particles_embed%els(jparticle)%r
+            ! Mapping particles from iforce_eval environment to the embed env
+            DO iparticle = 1, natom
+               jparticle = map_index(iparticle)
+               particles(iforce_eval)%list%els(iparticle)%r = particles_embed%els(jparticle)%r
+            END DO
+
+            ! Calculate energy and forces for each sub_force_env
+            CALL force_env_calc_energy_force(force_env%sub_force_env(iforce_eval)%force_env, &
+                                             calc_force=.TRUE., &
+                                             skip_external_control=.TRUE.)
+
+            ! Call DFT embedding
+            IF (ASSOCIATED(force_env%sub_force_env(iforce_eval)%force_env%qs_env)) THEN
+               NULLIFY (dft_control)
+               CALL get_qs_env(force_env%sub_force_env(iforce_eval)%force_env%qs_env, &
+                               dft_control=dft_control)
+               IF (dft_control%qs_control%ref_embed_subsys) THEN
+                  ! Now we can optimize the embedding potential
+                  CALL dft_embedding(force_env, iforce_eval, energies, converged_embed)
+                  IF (.NOT. converged_embed) &
+                     CPABORT("Embedding potential optimization not converged.")
+               END IF
+               ! Deallocate embedding potential on the high-level subsystem
+               IF (dft_control%qs_control%high_level_embed_subsys) THEN
+                  CALL get_qs_env(qs_env=force_env%sub_force_env(iforce_eval)%force_env%qs_env, &
+                                  embed_pot=embed_pot, spin_embed_pot=spin_embed_pot, pw_env=pw_env)
+                  CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
+                  CALL auxbas_pw_pool%give_back_pw(embed_pot)
+                  IF (ASSOCIATED(embed_pot)) THEN
+                     CALL embed_pot%release()
+                     DEALLOCATE (embed_pot)
+                  END IF
+                  IF (ASSOCIATED(spin_embed_pot)) THEN
+                     CALL auxbas_pw_pool%give_back_pw(spin_embed_pot)
+                     CALL spin_embed_pot%release()
+                     DEALLOCATE (spin_embed_pot)
+                  END IF
+               END IF
+            END IF
+
+            ! Only the rank 0 process collect info for each computation
+            IF (force_env%sub_force_env(iforce_eval)%force_env%para_env%is_source()) THEN
+               CALL force_env_get(force_env%sub_force_env(iforce_eval)%force_env, &
+                                  potential_energy=energy)
+               CALL cp_subsys_get(subsystems(iforce_eval)%subsys, &
+                                  results=loc_results)
+               energies(iforce_eval) = energy
+               glob_natoms(iforce_eval) = natom
+               CALL cp_result_copy(loc_results, results(iforce_eval)%results)
+            END IF
+            ! Deallocate map_index array
+            IF (ASSOCIATED(map_index)) THEN
+               DEALLOCATE (map_index)
+            END IF
+            CALL cp_rm_default_logger()
          END DO
 
-         ! Calculate energy and forces for each sub_force_env
-         CALL force_env_calc_energy_force(force_env%sub_force_env(iforce_eval)%force_env, &
-                                          calc_force=.TRUE., &
-                                          skip_external_control=.TRUE.)
+         ! Handling Parallel execution
+         CALL force_env%para_env%sync()
+         ! Let's transfer energy, natom
+         CALL force_env%para_env%sum(energies)
+         CALL force_env%para_env%sum(glob_natoms)
 
-         ! Call DFT embedding
-         IF (ASSOCIATED(force_env%sub_force_env(iforce_eval)%force_env%qs_env)) THEN
-            NULLIFY (dft_control)
-            CALL get_qs_env(force_env%sub_force_env(iforce_eval)%force_env%qs_env, dft_control=dft_control)
-            IF (dft_control%qs_control%ref_embed_subsys) THEN
-               ! Now we can optimize the embedding potential
-               CALL dft_embedding(force_env, iforce_eval, energies, converged_embed)
-               IF (.NOT. converged_embed) CPABORT("Embedding potential optimization not converged.")
-            END IF
-            ! Deallocate embedding potential on the high-level subsystem
-            IF (dft_control%qs_control%high_level_embed_subsys) THEN
-               CALL get_qs_env(qs_env=force_env%sub_force_env(iforce_eval)%force_env%qs_env, &
-                               embed_pot=embed_pot, spin_embed_pot=spin_embed_pot, pw_env=pw_env)
-               CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
-               CALL auxbas_pw_pool%give_back_pw(embed_pot)
-               IF (ASSOCIATED(embed_pot)) THEN
-                  CALL embed_pot%release()
-                  DEALLOCATE (embed_pot)
-               END IF
-               IF (ASSOCIATED(spin_embed_pot)) THEN
-                  CALL auxbas_pw_pool%give_back_pw(spin_embed_pot)
-                  CALL spin_embed_pot%release()
-                  DEALLOCATE (spin_embed_pot)
-               END IF
-            END IF
-         END IF
+         force_env%embed_env%energies = energies
 
-         ! Only the rank 0 process collect info for each computation
-         IF (force_env%sub_force_env(iforce_eval)%force_env%para_env%is_source()) THEN
-            CALL force_env_get(force_env%sub_force_env(iforce_eval)%force_env, &
-                               potential_energy=energy)
-            CALL cp_subsys_get(subsystems(iforce_eval)%subsys, &
-                               results=loc_results)
-            energies(iforce_eval) = energy
-            glob_natoms(iforce_eval) = natom
-            CALL cp_result_copy(loc_results, results(iforce_eval)%results)
-         END IF
-         ! Deallocate map_index array
-         IF (ASSOCIATED(map_index)) THEN
-            DEALLOCATE (map_index)
-         END IF
-         CALL cp_rm_default_logger()
-      END DO
+         ! ONIOM type of mixing in embedding: E = E_total + E_cluster_high - E_cluster
+         ! force_env%embed_env%pot_energy = energies(3) + energies(4) - energies(2)
+         force_env%embed_env%pot_energy = sum(energies(2:nforce_eval))
 
-      ! Handling Parallel execution
-      CALL force_env%para_env%sync()
-      ! Let's transfer energy, natom
-      CALL force_env%para_env%sum(energies)
-      CALL force_env%para_env%sum(glob_natoms)
+         !NB if the first system has fewer atoms than the second)
+         DO iparticle = 1, SIZE(particles_embed%els)
+            particles_embed%els(iparticle)%f(:) = 0.0_dp
+         END DO
 
-      force_env%embed_env%energies = energies
 
-      !NB if the first system has fewer atoms than the second)
-      DO iparticle = 1, SIZE(particles_embed%els)
-         particles_embed%els(iparticle)%f(:) = 0.0_dp
-      END DO
+         !Simply deallocate and loose the pointer references..
+         DO iforce_eval = 1, nforce_eval
+            CALL cp_result_release(results(iforce_eval)%results)
+         END DO
+         DEALLOCATE (subsystems)
+         DEALLOCATE (particles)
+         DEALLOCATE (energies)
+         DEALLOCATE (glob_natoms)
+         DEALLOCATE (results)
 
-      ! ONIOM type of mixing in embedding: E = E_total + E_cluster_high - E_cluster
-      ! force_env%embed_env%pot_energy = energies(3) + energies(4) - energies(2)
-      force_env%embed_env%pot_energy = sum(energies(2:nforce_eval))
+      END IF
 
-      !Simply deallocate and loose the pointer references..
-      DO iforce_eval = 1, nforce_eval
-         CALL cp_result_release(results(iforce_eval)%results)
-      END DO
-      DEALLOCATE (subsystems)
-      DEALLOCATE (particles)
-      DEALLOCATE (energies)
-      DEALLOCATE (glob_natoms)
-      DEALLOCATE (results)
 
    END SUBROUTINE embed_energy
 
@@ -1586,9 +1602,6 @@ CONTAINS
       CASE (dmfet)
          ! Density matrix embedding theory
          CALL dmfet_embedding(force_env, ref_subsys_number, energies, converged_embed)
-      CASE (fat)
-         ! Density matrix embedding theory
-         CALL fat_embedding(force_env, ref_subsys_number, converged_embed)
       END SELECT
 
    END SUBROUTINE dft_embedding
@@ -2134,46 +2147,5 @@ CONTAINS
       converged_embed = .FALSE.
 
    END SUBROUTINE dmfet_embedding
-
-! **************************************************************************************************
-!> \brief Main driver for Freeze-and-thaw frozen density embedding
-!> \param force_env the force environment.
-!> \param ref_subsys_number the index of the reference calculation
-!> \param energies fragment energies
-!> \param converged_embed true if the optimization has converged
-!> \author Lukas Schreder
-! **************************************************************************************************
-   subroutine fat_embedding(force_env, ref_subsys_number, converged)
-      type(force_env_type), pointer                      :: force_env
-      integer                                            :: ref_subsys_number
-      logical                                            :: converged
-
-      character(len=*), parameter                        :: routinen = 'fat_embedding'
-
-      integer :: handle
-      type(fat_env_type), pointer :: fat_env
-
-      call timeset(routinen, handle)
-
-      call fat_env_create(fat_env)
-      call fat_init(fat_env, force_env, ref_subsys_number)
-
-      converged = .false.
-      do while (.not. fat_is_done(fat_env))
-         call fat_iterate(fat_env)
-      end do
-      converged = fat_env%is_converged
-
-      if (.not. converged) then
-         CPWARN("FAT not converged")
-      end if
-
-      call fat_results(fat_env, do_forces=.true.)
-      call fat_finalize(fat_env)
-      call fat_env_release(fat_env)
-
-      call timestop(handle)
-
-    end subroutine fat_embedding
 
 END MODULE force_env_methods
