@@ -37,6 +37,7 @@ MODULE fat_types
       REAL(dp), ALLOCATABLE           :: e_sub(:)
       REAL(dp), ALLOCATABLE           :: ekin_sub(:)
       REAL(dp), ALLOCATABLE           :: exc_sub(:)
+      REAL(dp), ALLOCATABLE           :: forces(:,:)
       REAL(dp)                        :: eps
       REAL(dp)                        :: e_old
       REAL(dp)                        :: ekin_ref
