@@ -322,8 +322,7 @@ CONTAINS
                                           rho_ia_struct=work_matrices%rho_aux_fit_struct_sub, &
                                           is_rks_triplets=is_rks_triplets, pw_env=sub_env%pw_env, &
                                           work_v_xc=work_matrices%wpw_rspace_sub, &
-                                          work_v_xc_tau=work_matrices%wpw_tau_rspace_sub, &
-                                          spinflip=spinflip)
+                                          work_v_xc_tau=work_matrices%wpw_tau_rspace_sub)
                      DO ispin = 1, nspins
                         CALL pw_scale(V_rspace_sub(ispin), V_rspace_sub(ispin)%pw_grid%dvol)
                         CALL integrate_v_rspace(v_rspace=V_rspace_sub(ispin), &
