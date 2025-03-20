@@ -1344,8 +1344,8 @@ CONTAINS
                               spherical_estimate = MAX(spherical_estimate, ABS(primitive_forces(i)))
                            END DO
 
+                           spherical_estimate_virial = 0.0_dp
                            IF (use_virial) THEN
-                              spherical_estimate_virial = 0.0_dp
                               DO i = 1, 3*nints
                                  spherical_estimate_virial = MAX(spherical_estimate_virial, ABS(primitive_forces_virial(i)))
                               END DO
