@@ -26,8 +26,9 @@ MODULE fat_types
    LOGICAL, PRIVATE, PARAMETER :: is_debug = .TRUE.
 
    TYPE fat_env_type
-      TYPE(force_env_type), POINTER   :: force_env_ref
-      TYPE(force_env_p_type), POINTER :: force_env_sub(:)
+      TYPE(force_env_type), POINTER   :: force_env => NULL()
+      TYPE(force_env_type), POINTER   :: force_env_ref => NULL()
+      TYPE(force_env_p_type), POINTER :: force_env_sub(:) => NULL()
       TYPE(pw_pool_p_type), POINTER   :: pw_pool_sub(:) => NULL()
       TYPE(pw_pool_type), POINTER     :: pw_pool_ref => NULL()
       INTEGER                         :: i_iter, n_iter, n_frag

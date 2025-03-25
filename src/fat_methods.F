@@ -45,6 +45,7 @@ MODULE fat_methods
                                               REALSPACE,&
                                               RECIPROCALSPACE,&
                                               pw_type
+   USE scf_control_types,               ONLY: scf_control_type
    USE qs_collocate_density,            ONLY: calculate_drho_core,&
                                               calculate_drho_elec_dR,&
                                               calculate_ppl_grid
@@ -56,8 +57,11 @@ MODULE fat_methods
    USE qs_force_types,                  ONLY: qs_force_type,&
                                               allocate_qs_force,&
                                               zero_qs_force
+   USE qs_ks_types,                     ONLY: qs_ks_env_type,&
+                                              set_ks_env
    USE qs_local_rho_types,              ONLY: local_rho_type
    USE qs_rho_types,                    ONLY: qs_rho_get,&
+                                              qs_rho_set,&
                                               qs_rho_type
    USE qs_subsys_types,                 ONLY: qs_subsys_get,&
                                               qs_subsys_set,&
@@ -98,11 +102,10 @@ CONTAINS
 
       INTEGER                                            :: handle
 
-      IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
-         PRINT *, "DBG| ", modulen//"::"//routinen
-      END IF
-
       CALL timeset(routinen, handle)
+
+      IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) &
+         PRINT *, "DBG| ", modulen//"::"//routinen
 
       CPASSERT(PRESENT(pw_r) .OR. PRESENT(pw_g))
       CPASSERT(ASSOCIATED(fat_env%pw_pool_sub))
@@ -432,11 +435,11 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_get_rho_frag'
 
-      CHARACTER(len=default_string_length)               :: label
       INTEGER                                            :: handle
-      TYPE(pw_type), POINTER                             :: rho_r_tmp
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_rho_type), POINTER                         :: qs_rho
+!     CHARACTER(len=default_string_length)               :: label
+!     TYPE(pw_type), POINTER                             :: rho_r_tmp
 
       CALL timeset(routinen, handle)
 
@@ -452,41 +455,24 @@ CONTAINS
       IF (PRESENT(rho_r)) THEN
          NULLIFY (rho_r)
          CALL qs_rho_get(qs_rho, rho_r=rho_r)
+!        IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) &
+!           call print_pw_statistics(rho_r(1), "get_rho_r", i_frag)
       END IF
 
       IF (PRESENT(rho_g)) THEN
          NULLIFY (rho_g)
          CALL qs_rho_get(qs_rho, rho_g=rho_g)
-      END IF
-
-      IF (fat_env%extern(i_frag)) THEN
-
-         CALL integer_to_string(i_frag, label)
-
-         IF (PRESENT(rho_r)) THEN
-            CALL cp_cube_to_pw(rho_r(1), "extern_"//TRIM(label)//".cube", 1.0_dp, .FALSE.)
-         END IF
-
-         IF (PRESENT(rho_g)) THEN
-            CALL fat_pw_create_frag(fat_env, pw_r=rho_r_tmp, i_frag=i_frag)
-            CALL cp_cube_to_pw(rho_r_tmp, "extern_"//TRIM(label)//".cube", 1.0_dp, .FALSE.)
-            CALL pw_transfer(rho_r_tmp, rho_g(1))
-            CALL fat_pw_release_frag(fat_env, pw_r=rho_r_tmp, i_frag=i_frag)
-         END IF
-
+!        IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) &
+!           call print_pw_statistics(rho_g(1), "get_rho_g", i_frag)
       END IF
 
       IF (PRESENT(rho0_s_r) .AND. fat_env%use_gapw) THEN
-         qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
          CALL get_qs_env(qs_env, rho0_s_rs=rho0_s_r)
       END IF
 
       IF (PRESENT(rho0_s_g) .AND. fat_env%use_gapw) THEN
-         qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
          CALL get_qs_env(qs_env, rho0_s_gs=rho0_s_g)
       END IF
-
-!     if (is_debug) call print_pw_statistics(rho(1), "rho", i_frag)
 
       CALL timestop(handle)
 
@@ -1407,7 +1393,7 @@ CONTAINS
       INTEGER                                            :: cmdstat, exitstat, handle
       LOGICAL                                            :: my_grad = .FALSE.
 
-      CALL timestop(handle)
+      CALL timeset(routineN, handle)
 
       ! Proceed if it is the source node
       IF (fat_env%force_env_ref%para_env%is_source()) THEN
@@ -1418,7 +1404,7 @@ CONTAINS
 
          CALL integer_to_string(i_frag, label)
          IF (my_grad) THEN
-            CALL execute_command_line("sh extern_grad_"//TRIM(label)//".sh", .TRUE., exitstat, cmdstat, cmdmsg)
+            CALL execute_command_line("sh extern-grad_"//TRIM(label)//".sh", .TRUE., exitstat, cmdstat, cmdmsg)
          ELSE
             CALL execute_command_line("sh extern_"//TRIM(label)//".sh", .TRUE., exitstat, cmdstat, cmdmsg)
          END IF
@@ -1446,7 +1432,7 @@ CONTAINS
       CHARACTER(len=default_string_length)               :: label
       INTEGER                                            :: input_unit, handle
 
-      CALL timestop(handle)
+      CALL timeset(routineN, handle)
 
       IF (fat_env%force_env_ref%para_env%is_source()) THEN
          IF (is_debug) PRINT *, "DBG| ", modulen//"::"//routinen
@@ -1458,11 +1444,51 @@ CONTAINS
          CALL close_file(unit_number=input_unit)
       END IF
 
+      CALL fat_env%force_env_ref%para_env%bcast(fat_env%e_sub(i_frag), &
+                                                fat_env%force_env_ref%para_env%source)
+
       CALL timestop(handle)
 
-      CALL fat_env%force_env_ref%para_env%sync()
-
    END SUBROUTINE fat_read_external_energy
+
+! **************************************************************************************************
+!> \brief Read density from external calculation
+!> \param fat_env The freeze-and-thaw environment
+!> \param i_frag Fragment index
+! **************************************************************************************************
+   SUBROUTINE fat_get_external_density(fat_env, i_frag)
+      TYPE(fat_env_type), POINTER                        :: fat_env
+      INTEGER                                            :: i_frag
+
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_get_external_density'
+
+      INTEGER                                            :: handle
+      CHARACTER(len=default_string_length)               :: label
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(qs_rho_type), POINTER                         :: qs_rho
+      TYPE(pw_type), DIMENSION(:), POINTER               :: rho_r, rho_g
+
+      CALL timeset(routinen, handle)
+
+      IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
+         PRINT *, "DBG| ", modulen//"::"//routinen
+      END IF
+
+      CPASSERT(fat_env%extern(i_frag))
+
+      qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
+      CALL get_qs_env(qs_env=qs_env, rho=qs_rho)
+      CALL qs_rho_get(qs_rho, rho_r=rho_r, rho_g=rho_g)
+
+      CALL integer_to_string(i_frag, label)
+      CALL cp_cube_to_pw(rho_r(1), "extern_"//TRIM(label)//".cube", 1.0_dp, .FALSE.)
+      CALL pw_transfer(rho_r(1), rho_g(1))
+
+      CALL qs_rho_set(qs_rho, rho_r=rho_r, rho_g=rho_g)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE fat_get_external_density
 
 ! **************************************************************************************************
 !> \brief Calculate embedding potential for one fragment in the freeze-and-thaw environment
@@ -1482,7 +1508,7 @@ CONTAINS
       INTEGER                                            :: handle
       TYPE(pw_type), POINTER                             :: rho_g(:), rho_r(:), vemb_tmp
 
-      CALL timeset(routinen, handle)
+      CALL timeset(routineN, handle)
 
       IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
          PRINT *, "DBG| ", modulen//"::"//routinen
@@ -1767,9 +1793,8 @@ CONTAINS
       TYPE(pw_type), POINTER                             :: rho(:), v_emb, weights
       TYPE(qs_energy_type), POINTER                      :: energy
       TYPE(qs_environment_type), POINTER                 :: qs_env_tmp
-
-!   type(pw_type), pointer :: rho_tmp
-!   character(len=50) :: filename
+!     TYPE(pw_type), POINTER                             :: rho_tmp
+!     CHARACTER(len=50)                                  :: filename
 
       CALL timeset(routinen, handle)
 
@@ -1778,8 +1803,8 @@ CONTAINS
          PRINT *, "KKK| ", modulen//"::"//routinen, " fat_env%i_iter:", fat_env%i_iter
       END IF
 
-      ! MPI
-      CALL fat_env%force_env_ref%para_env%sync()
+!     ! MPI
+!     CALL fat_env%force_env_ref%para_env%sync()
 
       ! Get the force environment and system environment for current fragment
       force_env_tmp => fat_env%force_env_sub(i_frag)%force_env
@@ -1822,7 +1847,10 @@ CONTAINS
          ! Get energy from external calculation
          CALL fat_read_external_energy(fat_env, i_frag)
 
+         ! Get (read and set) density from external calculation
+         CALL fat_get_external_density(fat_env, i_frag)
          ! Get electron density from external calculation
+         ! We read the density once after the external calculation
          CALL fat_get_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
 
          ! Calculate embedding energy for current fragment:
@@ -1997,6 +2025,79 @@ CONTAINS
    END SUBROUTINE fat_force_create
 
 ! **************************************************************************************************
+!> \brief Reads external gradients from a file and stores them in the qs_force structure
+!> \param fat_env The FAT environment containing fragment and parallel information
+!> \param i_frag Index of the fragment for which gradients are read
+!> \param qs_force Array of force structures to store the gradients as forces
+!> \par History
+!>      Created [Your Name] (03.2025)
+!> \author Your Name
+! **************************************************************************************************
+   SUBROUTINE fat_get_gradients(fat_env, i_frag, qs_force)
+
+      TYPE(fat_env_type), POINTER                        :: fat_env
+      INTEGER, INTENT(IN)                                :: i_frag
+      TYPE(qs_force_type), DIMENSION(:), POINTER         :: qs_force
+
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_get_gradients'
+
+      INTEGER                                            :: handle, i_atom, i_kind, j, n, unit_nr, ios
+      INTEGER, ALLOCATABLE                               :: atom_of_kind(:), kind_of(:)
+      TYPE(atomic_kind_type), POINTER                    :: kinds(:)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      REAL(dp)                                           :: fx, fy, fz
+      CHARACTER(len=default_string_length)               :: filename
+
+      CALL timeset(routineN, handle)
+
+      ! Perform file reading only on the master process
+      IF (fat_env%force_env_ref%para_env%is_source()) THEN
+         ! Construct the filename, e.g., "extern_1.gradients"
+         WRITE(filename, '(A,I0,A)') "extern_", i_frag, ".gradients"
+         IF (is_debug) PRINT *, "KKK| Reading gradients from ", TRIM(filename), " for fragment ", i_frag
+
+         ! Open the external gradients file
+         CALL open_file(file_name=TRIM(filename), &
+                        file_status="OLD", &
+                        file_action="READ", &
+                        unit_number=unit_nr)
+
+         ! Retrieve fragment information from qs_env
+         qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
+         CALL get_qs_env(qs_env, atomic_kind_set=kinds, force=qs_force)
+         CALL get_atomic_kind_set(kinds, natom=n, kind_of=kind_of, atom_of_kind=atom_of_kind)
+
+         ! Read gradients and store them as forces in qs_force
+         DO j = 1, n
+            READ(unit_nr, *, iostat=ios) fx, fy, fz
+            IF (ios /= 0) THEN
+               IF (is_debug) PRINT *, "ERROR| Failed to read gradients from ", TRIM(filename), " at line ", j
+               CALL cp_abort(__LOCATION__, "Failed to read external gradients")
+            END IF
+            i_kind = kind_of(j)
+            i_atom = atom_of_kind(j)
+            ! Gradients from file are -dE/dR, qs_force%total stores forces (-gradients), so invert sign
+            qs_force(i_kind)%total(1:3, i_atom) = [-fx, -fy, -fz]
+         END DO
+
+         ! Close the gradients file
+         CALL close_file(unit_number=unit_nr)
+
+         ! Clean up temporary arrays
+         DEALLOCATE (atom_of_kind, kind_of)
+      END IF
+
+      ! Synchronize across all MPI processes to ensure consistent qs_force data
+      DO i_kind = 1, SIZE(qs_force)
+         CALL fat_env%force_env_ref%para_env%bcast(qs_force(i_kind)%total, &
+                                               fat_env%force_env_ref%para_env%source)
+      END DO
+
+      CALL timestop(handle)
+
+   END SUBROUTINE fat_get_gradients
+
+! **************************************************************************************************
 !> \brief Calculate the fragments total force for a freeze-and-thaw optimization
 ! **************************************************************************************************
    SUBROUTINE fat_force_frag(fat_env, forces)
@@ -2021,23 +2122,21 @@ CONTAINS
 
       k = 0
       DO i_frag = 1, fat_env%n_frag
+         qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
+         CALL get_qs_env(qs_env, atomic_kind_set=kinds, force=qs_force)
+
          IF (fat_env%extern(i_frag)) THEN
-            IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
-               PRINT *, "KKK| NOT IMPLEMENTED READING FORCES FROM EXTERNAL CALC"
-            END IF
-            CYCLE
-         ELSE
-            qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
-            CALL get_qs_env(qs_env, atomic_kind_set=kinds, force=qs_force)
-            CALL get_atomic_kind_set(kinds, natom=n, kind_of=kind_of, atom_of_kind=atom_of_kind)
-            DO j = 1, n
-               k = k + 1
-               i_kind = kind_of(j)
-               i_atom = atom_of_kind(j)
-               forces(k, :) = qs_force(i_kind)%total(1:3, i_atom)
-            END DO
-            DEALLOCATE (atom_of_kind, kind_of)
+            CALL fat_get_gradients(fat_env, i_frag, qs_force)
          END IF
+
+         CALL get_atomic_kind_set(kinds, natom=n, kind_of=kind_of, atom_of_kind=atom_of_kind)
+         DO j = 1, n
+            k = k + 1
+            i_kind = kind_of(j)
+            i_atom = atom_of_kind(j)
+            forces(k, :) = qs_force(i_kind)%total(1:3, i_atom)
+         END DO
+         DEALLOCATE (atom_of_kind, kind_of)
       END DO
 
       CALL timestop(handle)
@@ -2477,7 +2576,7 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_force'
 
-      INTEGER                                            :: handle
+      INTEGER                                            :: handle, i_frag
       REAL(kind=dp), ALLOCATABLE                         :: forces_tmp(:, :)
 
       IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
@@ -2489,37 +2588,33 @@ CONTAINS
       fat_env%forces = 0.0_dp
       CALL fat_force_create(fat_env, forces_tmp)
 
+      DO i_frag = 1, fat_env%n_frag
+         IF (fat_env%extern(i_frag)) THEN
+            CALL fat_run_external(fat_env, i_frag, gradient=.TRUE.)
+         END IF
+      END DO
+
       CALL fat_force_frag(fat_env, forces_tmp)
-      IF (fat_env%force_env_ref%para_env%is_source()) THEN
-         CALL fat_force_print(fat_env, forces=-forces_tmp, label="force_frag")
-         fat_env%forces(:,:) = fat_env%forces(:,:) + forces_tmp(:,:)
-      END IF
+      CALL fat_force_print(fat_env, forces=-forces_tmp, label="force_frag")
+      fat_env%forces(:,:) = fat_env%forces(:,:) + forces_tmp(:,:)
 
       CALL fat_force_emb(fat_env, forces_tmp)
-      IF (fat_env%force_env_ref%para_env%is_source()) THEN
-         CALL fat_force_print(fat_env, forces=+forces_tmp, label="force_emb")
-         fat_env%forces(:, :) = fat_env%forces(:, :) - forces_tmp(:, :)
-      END IF
+      CALL fat_force_print(fat_env, forces=+forces_tmp, label="force_emb")
+      fat_env%forces(:, :) = fat_env%forces(:, :) - forces_tmp(:, :)
 
       CALL fat_force_tsna(fat_env, forces_tmp)
-      IF (fat_env%force_env_ref%para_env%is_source()) THEN
-         CALL fat_force_print(fat_env, forces=-forces_tmp, label="force_tsna")
-         fat_env%forces(:, :) = fat_env%forces(:, :) + forces_tmp(:, :)
-      END IF
+      CALL fat_force_print(fat_env, forces=-forces_tmp, label="force_tsna")
+      fat_env%forces(:, :) = fat_env%forces(:, :) + forces_tmp(:, :)
 
       CALL fat_force_xcna(fat_env, forces_tmp)
-      IF (fat_env%force_env_ref%para_env%is_source()) THEN
-         CALL fat_force_print(fat_env, forces=-forces_tmp, label="force_xcna")
-         fat_env%forces(:, :) = fat_env%forces(:, :) + forces_tmp(:, :)
-      END IF
+      CALL fat_force_print(fat_env, forces=-forces_tmp, label="force_xcna")
+      fat_env%forces(:, :) = fat_env%forces(:, :) + forces_tmp(:, :)
 
       CALL fat_force_hartree(fat_env, forces_tmp)
-      IF (fat_env%force_env_ref%para_env%is_source()) THEN
-         CALL fat_force_print(fat_env, forces=-forces_tmp, label="force_hartree")
-         fat_env%forces(:, :) = fat_env%forces(:, :) + forces_tmp(:, :)
+      CALL fat_force_print(fat_env, forces=-forces_tmp, label="force_hartree")
+      fat_env%forces(:, :) = fat_env%forces(:, :) + forces_tmp(:, :)
 
-         CALL fat_force_print(fat_env, forces=-fat_env%forces, label="total", to_file=.FALSE.)
-      END IF
+      CALL fat_force_print(fat_env, forces=-fat_env%forces, label="total", to_file=.FALSE.)
 
       DEALLOCATE (forces_tmp)
 
@@ -2640,6 +2735,7 @@ CONTAINS
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(force_env_type), POINTER                      :: force_env_tmp
       TYPE(pw_env_type), POINTER                         :: pw_env_tmp
+      TYPE(scf_control_type), POINTER                    :: scf_control_tmp
       TYPE(qs_environment_type), POINTER                 :: qs_env_tmp
       TYPE(section_vals_type), POINTER                   :: input
 
@@ -2655,6 +2751,7 @@ CONTAINS
       ! This is a limitation of the EMBED method
       CPASSERT(ref_subsys_number == 1)
 
+      fat_env%force_env => force_env
       fat_env%force_env_ref => force_env%sub_force_env(ref_subsys_number)%force_env
 
       ! Count fragments
@@ -2697,7 +2794,7 @@ CONTAINS
       END DO
 
       ! Setup flags for external fragments, if specified
-      ALLOCATE (fat_env%extern(fat_env%n_frag))
+      ALLOCATE (fat_env%extern(fat_env%n_frag), source=.FAlSE.)
       DO i = 1, fat_env%n_frag
          force_env_tmp => fat_env%force_env_sub(i)%force_env
          qs_env_tmp => force_env_tmp%qs_env
@@ -2705,9 +2802,8 @@ CONTAINS
          ! Check if this fragment uses external calculation
          CALL section_vals_val_get(input, "DFT%QS%FAT_EXTERN", l_val=fat_env%extern(i))
 
-         IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
-            PRINT *, "DBG| fat_env%extern(i)", i, fat_env%extern(i)
-         END IF
+         IF (is_debug .AND. ionode) &
+            PRINT *, "DBG| fat_env%extern(", i, ") = ", fat_env%extern(i)
       END DO
 
       ! Setup the same MPI Group for all
@@ -2718,6 +2814,20 @@ CONTAINS
          ! Retain the reference to increase counter
          CALL force_env_tmp%para_env%retain()
       END DO
+
+      ! Initial DFT calculations for external fragments (without embedding potential)
+      do i = 1, fat_env%n_frag
+         IF (.NOT. fat_env%extern(i)) cycle
+         force_env_tmp => fat_env%force_env_sub(i)%force_env
+         qs_env_tmp => force_env_tmp%qs_env
+         CALL get_qs_env(qs_env_tmp, scf_control=scf_control_tmp)
+         scf_control_tmp%max_scf = 1
+         scf_control_tmp%ignore_convergence_failure = .TRUE.
+         CALL qs_calc_energy_force(qs_env=qs_env_tmp, &
+                                   calc_force=.TRUE., &
+                                   consistent_energies=.FALSE., &
+                                   linres=.FALSE.)
+      end do
 
       ! Allocate arrays for storing various energy components
       ALLOCATE (fat_env%e_sub(fat_env%n_frag)) ! Subsystem energies
@@ -2743,6 +2853,10 @@ CONTAINS
       ! Initialize iteration counter
       fat_env%i_iter = 0
       ! Calculate initial energies for each fragment
+!     do i = 1, fat_env%n_frag
+!        call fat_iterate_frag(fat_env, i)
+!     end do
+!     if (is_debug) print *, "KKK| After initial calculations for all fragments i_iter", i, fat_env%i_iter
 
       ! Get convergence parameters from input
       CALL get_qs_env(fat_env%force_env_ref%qs_env, input=input)
@@ -2814,9 +2928,10 @@ subroutine fat_embedding(force_env, converged, do_forces)
                       "FAT embedding did not converge within the maximum number of iterations.")
       END IF
 
+      CALL fat_env%force_env_ref%para_env%sync()
+
       CALL fat_results(fat_env)
 
-      CALL fat_env%force_env_ref%para_env%sync()
 
       ! FAT total energy - fragments total energy = embedding energy
       force_env%embed_env%pot_energy = fat_env%e_tot - sum(fat_env%e_sub)
