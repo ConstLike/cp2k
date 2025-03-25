@@ -26,7 +26,8 @@ MODULE input_cp2k_embed
                                               section_create,&
                                               section_release,&
                                               section_type
-   USE input_val_types,                 ONLY: integer_t
+   USE input_val_types,                 ONLY: integer_t,&
+                                              lchar_t
    USE string_utilities,                ONLY: s2a
 #include "./base/base_uses.f90"
 
@@ -187,6 +188,7 @@ CONTAINS
       TYPE(section_type), POINTER                        :: section
 
       TYPE(section_type), POINTER                        :: print_key
+      TYPE(keyword_type), POINTER                        :: keyword
 
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="print", &
@@ -194,11 +196,35 @@ CONTAINS
                           n_keywords=0, n_subsections=1, repeats=.FALSE.)
 
       NULLIFY (print_key)
-
       CALL cp_print_key_section_create(print_key, __LOCATION__, "PROGRAM_RUN_INFO", &
                                        description="Controls the printing of information during the evaluation of "// &
                                        "the embedding environment. ", &
                                        print_level=low_print_level, add_last=add_last_numeric, filename="__STD_OUT__")
+      CALL section_add_subsection(section, print_key)
+      CALL section_release(print_key)
+
+      NULLIFY (print_key)
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "WRITE_EMBED_POTENTIAL", &
+                                       description="Controls the printing of the embedding potential to a file in "// &
+                                       "simple volumetric format (X Y Z value).", &
+                                       print_level=low_print_level, filename="vemb")
+
+      NULLIFY (keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="FILE_NAME", &
+                          description="Base name for the embedding potential output file. "// &
+                          "The final filename will include fragment suffixes (e.g., <FILENAME>-fragX.dat).", &
+                          usage="FILE_NAME vemb", default_lc_val="vemb", &
+                          n_var=1, type_of_var=lchar_t, repeats=.FALSE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+
+      NULLIFY (keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="STRIDE", &
+                          description="Stride (step size) for sampling the grid points in the X, Y, Z directions.", &
+                          usage="STRIDE 1 1 1", n_var=-1, default_i_vals=(/1, 1, 1/), type_of_var=integer_t)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
