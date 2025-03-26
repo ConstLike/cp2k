@@ -1367,6 +1367,8 @@ CONTAINS
          CALL close_file(unit_number=output_unit)
       END IF
 
+      DEALLOCATE(stride)
+
       ! Synchronize all processes
       CALL fat_env%force_env_ref%para_env%sync()
 
