@@ -61,7 +61,8 @@ CONTAINS
       INTEGER, PARAMETER                                 :: entry_len = 13, num_entries_line = 6
 
       INTEGER :: checksum, dest, handle, i, I1, I2, I3, iat, ip, L1, L2, L3, msglen, my_rank, &
-         my_stride(3), np, num_linebreak, num_pe, rank(2), size_of_z, source, tag, U1, U2, U3
+         my_stride(3), np, num_linebreak, num_pe, rank(2), size_of_z, source, tag, U1, U2, U3, &
+         total_spaces, remaining, full_lines
       LOGICAL                                            :: be_silent, my_zero_tails, parallel_write
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: buf
       TYPE(mp_comm_type)                                 :: gid
@@ -213,7 +214,14 @@ CONTAINS
          num_linebreak = size_of_z/num_entries_line
          IF (MODULO(size_of_z, num_entries_line) /= 0) &
             num_linebreak = num_linebreak + 1
-         msglen = (size_of_z*entry_len + num_linebreak)*mpi_character_size
+         full_lines = size_of_z / num_entries_line
+         remaining = MODULO(size_of_z, num_entries_line)
+         IF (remaining == 0) THEN
+            total_spaces = full_lines * (num_entries_line - 1)
+         ELSE
+            total_spaces = full_lines * (num_entries_line - 1) + (remaining - 1)
+         END IF
+         msglen = (size_of_z*entry_len + total_spaces + num_linebreak)*mpi_character_size
          CALL mp_unit%set_handle(unit_nr)
          CALL pw_to_cube_parallel(pw, mp_unit, title, particles_r, particles_z, my_stride, my_zero_tails, msglen)
       END IF
@@ -247,7 +255,8 @@ CONTAINS
 
       INTEGER                                            :: extunit, handle, i, j, k, msglen, &
                                                             my_rank, nat, ndum, num_linebreak, &
-                                                            num_pe, output_unit, size_of_z, tag
+                                                            num_pe, output_unit, size_of_z, tag, &
+                                                            total_spaces, remaining, full_lines
       INTEGER, DIMENSION(3)                              :: lbounds, lbounds_local, npoints, &
                                                             npoints_local, ubounds, ubounds_local
       LOGICAL                                            :: be_silent
@@ -347,7 +356,14 @@ CONTAINS
          num_linebreak = size_of_z/num_entries_line
          IF (MODULO(size_of_z, num_entries_line) /= 0) &
             num_linebreak = num_linebreak + 1
-         msglen = (size_of_z*entry_len + num_linebreak)*mpi_character_size
+         full_lines = size_of_z / num_entries_line
+         remaining = MODULO(size_of_z, num_entries_line)
+         IF (remaining == 0) THEN
+            total_spaces = full_lines * (num_entries_line - 1)
+         ELSE
+            total_spaces = full_lines * (num_entries_line - 1) + (remaining - 1)
+         END IF
+         msglen = (size_of_z*entry_len + total_spaces + num_linebreak)*mpi_character_size
          CALL cube_to_pw_parallel(grid, filename, scaling, msglen, silent=silent)
       END IF
 
