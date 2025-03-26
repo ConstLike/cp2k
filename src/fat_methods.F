@@ -8,8 +8,13 @@ MODULE fat_methods
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_get_default_io_unit,&
                                               cp_logger_type
+   USE cp_output_handling,              ONLY: cp_p_file,&
+                                              cp_print_key_finished_output,&
+                                              cp_print_key_should_output,&
+                                              cp_print_key_unit_nr
    USE cp_realspace_grid_cube,          ONLY: cp_cube_to_pw,&
-                                              cp_pw_to_cube
+                                              cp_pw_to_cube,&
+                                              cp_pw_to_simple_volumetric
    USE cp_subsys_types,                 ONLY: cp_subsys_type,&
                                               cp_subsys_get
    USE dbcsr_api,                       ONLY: dbcsr_p_type
@@ -1322,43 +1327,26 @@ CONTAINS
       CHARACTER(len=default_string_length)               :: label
       INTEGER                                            :: handle, output_unit
       INTEGER, POINTER                                   :: stride(:)
-      TYPE(particle_list_type), POINTER                  :: particle_list
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(qs_subsys_type), POINTER                      :: subsys
+      TYPE(cp_logger_type), POINTER                      :: logger
 
       CALL timeset(routineN, handle)
 
-      ! Proceed if it is the source node
-      IF (.NOT. fat_env%force_env_ref%para_env%is_source()) THEN
-         CALL timestop(handle)
-         RETURN
+      IF (is_debug .and. fat_env%force_env_ref%para_env%is_source()) THEN
+         PRINT *, "DBG| ", moduleN//"::"//routineN
       END IF
 
-      IF (is_debug) PRINT *, "DBG| ", moduleN//"::"//routineN
+      logger => cp_get_default_logger()
+      output_unit = -1
 
-      ! Convert fragment index to string for file naming
-      CALL integer_to_string(i_frag, label)
-
-      ! Write embedding potential to cube file
-      CALL open_file( &
-         "vemb_"//TRIM(label)//".cube", file_status="REPLACE", &
-         file_action="WRITE", unit_number=output_unit)
-
-      qs_env => fat_env%force_env_ref%qs_env
-      CALL get_qs_env(qs_env, subsys=subsys)
-      CALL qs_subsys_get(subsys, particles=particle_list)
-
-      ALLOCATE (stride(3))
-      stride = [1, 1, 1]
-      CALL cp_pw_to_cube(v_emb, output_unit, "vemb_"//TRIM(label), &
-                         particle_list, stride=stride)
-      DEALLOCATE (stride)
-      CALL close_file(unit_number=output_unit)
-
-      ! Write embedding potential to dat file (simple volumetric format)
-      CALL open_file( &
-         "vemb_"//TRIM(label)//".dat", file_status="REPLACE", &
-         file_action="WRITE", unit_number=output_unit)
+      ALLOCATE (stride(3), source=1)
+      ! Open file only on the master process
+      IF (fat_env%force_env_ref%para_env%is_source()) THEN
+         CALL integer_to_string(i_frag, label)
+         CALL open_file(file_name="vemb_"//TRIM(label)//".dat", &
+                        file_status="REPLACE", &
+                        file_action="WRITE", &
+                        unit_number=output_unit)
+      END IF
 
       CALL pw_zero(work_tmp)
 
@@ -1368,10 +1356,19 @@ CONTAINS
                   v_emb%pw_grid%dr(2)* &
                   v_emb%pw_grid%dr(3))
 
-      ! Write the potential values along with their weights (work_tmp)
-      CALL pw_to_simple_volumetric(work_tmp, output_unit, [1, 1, 1], v_emb)
+      ! Use v_emb as the primary grid, no need for weights in the file
+      CALL cp_pw_to_simple_volumetric(pw=work_tmp, &
+                                      unit_nr=output_unit, &
+                                      stride=stride, &
+                                      pw2=v_emb)
 
-      CALL close_file(unit_number=output_unit)
+      ! Close file on master process
+      IF (fat_env%force_env_ref%para_env%is_source()) THEN
+         CALL close_file(unit_number=output_unit)
+      END IF
+
+      ! Synchronize all processes
+      CALL fat_env%force_env_ref%para_env%sync()
 
       CALL timestop(handle)
 
@@ -1391,10 +1388,11 @@ CONTAINS
       CHARACTER                                          :: cmdmsg(100)
       CHARACTER(default_string_length)                   :: label
       INTEGER                                            :: cmdstat, exitstat, handle
-      LOGICAL                                            :: my_grad = .FALSE.
+      LOGICAL                                            :: my_grad, file_exists
 
       CALL timeset(routineN, handle)
 
+      my_grad = .FALSE.
       ! Proceed if it is the source node
       IF (fat_env%force_env_ref%para_env%is_source()) THEN
 
@@ -1404,17 +1402,27 @@ CONTAINS
 
          CALL integer_to_string(i_frag, label)
          IF (my_grad) THEN
+            INQUIRE(FILE="extern-grad_"//TRIM(label)//".sh", EXIST=file_exists)
+            IF (.NOT. file_exists) THEN
+               PRINT *, "ERROR| File extern-grad_"//TRIM(label)//".sh not found for fragment ", i_frag
+               CALL cp_abort(__LOCATION__, "External gradient script file missing")
+            END IF
             CALL execute_command_line("sh extern-grad_"//TRIM(label)//".sh", .TRUE., exitstat, cmdstat, cmdmsg)
          ELSE
+            INQUIRE(FILE="extern_"//TRIM(label)//".sh", EXIST=file_exists)
+            IF (.NOT. file_exists) THEN
+               PRINT *, "ERROR| File extern_"//TRIM(label)//".sh not found for fragment ", i_frag
+               CALL cp_abort(__LOCATION__, "External script file missing")
+            END IF
             CALL execute_command_line("sh extern_"//TRIM(label)//".sh", .TRUE., exitstat, cmdstat, cmdmsg)
          END IF
 
          IF (cmdstat /= 0) CPABORT("External command did not execute successfully")
       END IF
 
-      CALL timestop(handle)
-
       CALL fat_env%force_env_ref%para_env%sync()
+
+      CALL timestop(handle)
 
    END SUBROUTINE fat_run_external
 
@@ -1431,15 +1439,26 @@ CONTAINS
 
       CHARACTER(len=default_string_length)               :: label
       INTEGER                                            :: input_unit, handle
+      LOGICAL                                            :: file_exists
 
       CALL timeset(routineN, handle)
 
       IF (fat_env%force_env_ref%para_env%is_source()) THEN
+
          IF (is_debug) PRINT *, "DBG| ", modulen//"::"//routinen
 
          CALL integer_to_string(i_frag, label)
-         CALL open_file("extern_"//TRIM(label)//".e", file_status="OLD", &
-                        file_action="READ", unit_number=input_unit)
+
+         INQUIRE(FILE="extern_"//TRIM(label)//".e", EXIST=file_exists)
+         IF (.NOT. file_exists) THEN
+            PRINT *, "ERROR| File extern_"//TRIM(label)//".e not found for fragment ", i_frag
+            CALL cp_abort(__LOCATION__, "External energy file missing")
+         END IF
+
+         CALL open_file("extern_"//TRIM(label)//".e", &
+                        file_status="OLD", &
+                        file_action="READ", &
+                        unit_number=input_unit)
          READ (input_unit, *) fat_env%e_sub(i_frag)
          CALL close_file(unit_number=input_unit)
       END IF
@@ -1467,6 +1486,7 @@ CONTAINS
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_rho_type), POINTER                         :: qs_rho
       TYPE(pw_type), DIMENSION(:), POINTER               :: rho_r, rho_g
+      LOGICAL                                            :: file_exists
 
       CALL timeset(routinen, handle)
 
@@ -1481,7 +1501,15 @@ CONTAINS
       CALL qs_rho_get(qs_rho, rho_r=rho_r, rho_g=rho_g)
 
       CALL integer_to_string(i_frag, label)
-      CALL cp_cube_to_pw(rho_r(1), "extern_"//TRIM(label)//".cube", 1.0_dp, .FALSE.)
+      IF (fat_env%force_env_ref%para_env%is_source()) THEN
+         INQUIRE(FILE="extern_"//TRIM(label)//".cube", EXIST=file_exists)
+         IF (.NOT. file_exists) THEN
+            PRINT *, "ERROR| File extern_"//TRIM(label)//".cube not found for fragment ", i_frag
+            CALL cp_abort(__LOCATION__, "External density file missing")
+         END IF
+      END IF
+      CALL cp_cube_to_pw(rho_r(1), "extern_"//TRIM(label)//".cube", 1.0_dp)
+
       CALL pw_transfer(rho_r(1), rho_g(1))
 
       CALL qs_rho_set(qs_rho, rho_r=rho_r, rho_g=rho_g)
@@ -2029,9 +2057,6 @@ CONTAINS
 !> \param fat_env The FAT environment containing fragment and parallel information
 !> \param i_frag Index of the fragment for which gradients are read
 !> \param qs_force Array of force structures to store the gradients as forces
-!> \par History
-!>      Created [Your Name] (03.2025)
-!> \author Your Name
 ! **************************************************************************************************
    SUBROUTINE fat_get_gradients(fat_env, i_frag, qs_force)
 
@@ -2041,47 +2066,53 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_get_gradients'
 
-      INTEGER                                            :: handle, i_atom, i_kind, j, n, unit_nr, ios
+      INTEGER                                            :: handle, i, i_atom, i_kind, input_unit, ios, n_atom 
       INTEGER, ALLOCATABLE                               :: atom_of_kind(:), kind_of(:)
       TYPE(atomic_kind_type), POINTER                    :: kinds(:)
       TYPE(qs_environment_type), POINTER                 :: qs_env
+      CHARACTER(len=default_string_length)               :: label
       REAL(dp)                                           :: fx, fy, fz
-      CHARACTER(len=default_string_length)               :: filename
+      LOGICAL                                            :: file_exists
 
       CALL timeset(routineN, handle)
 
       ! Perform file reading only on the master process
       IF (fat_env%force_env_ref%para_env%is_source()) THEN
-         ! Construct the filename, e.g., "extern_1.gradients"
-         WRITE(filename, '(A,I0,A)') "extern_", i_frag, ".gradients"
-         IF (is_debug) PRINT *, "KKK| Reading gradients from ", TRIM(filename), " for fragment ", i_frag
 
-         ! Open the external gradients file
-         CALL open_file(file_name=TRIM(filename), &
-                        file_status="OLD", &
-                        file_action="READ", &
-                        unit_number=unit_nr)
+         CALL integer_to_string(i_frag, label)
+
+         INQUIRE(FILE="extern_"//TRIM(label)//".gradients", EXIST=file_exists)
+         IF (.NOT. file_exists) THEN
+            PRINT *, "ERROR| File extern_"//TRIM(label)//".gradients not found for fragment ", i_frag
+            CALL cp_abort(__LOCATION__, "External gradients file missing")
+         END IF
 
          ! Retrieve fragment information from qs_env
          qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
          CALL get_qs_env(qs_env, atomic_kind_set=kinds, force=qs_force)
-         CALL get_atomic_kind_set(kinds, natom=n, kind_of=kind_of, atom_of_kind=atom_of_kind)
+         CALL get_atomic_kind_set(kinds, natom=n_atom, kind_of=kind_of, atom_of_kind=atom_of_kind)
+
+         ! Open the external gradients file
+         CALL open_file(file_name="extern_"//TRIM(label)//".gradients", &
+                        file_status="OLD", &
+                        file_action="READ", &
+                        unit_number=input_unit)
 
          ! Read gradients and store them as forces in qs_force
-         DO j = 1, n
-            READ(unit_nr, *, iostat=ios) fx, fy, fz
+         DO i = 1, n_atom
+            READ(input_unit, *, iostat=ios) fx, fy, fz
             IF (ios /= 0) THEN
-               IF (is_debug) PRINT *, "ERROR| Failed to read gradients from ", TRIM(filename), " at line ", j
+               IF (is_debug) PRINT *, "ERROR| Failed to read gradients from extern_",TRIM(label),".gradients at line ", i
                CALL cp_abort(__LOCATION__, "Failed to read external gradients")
             END IF
-            i_kind = kind_of(j)
-            i_atom = atom_of_kind(j)
-            ! Gradients from file are -dE/dR, qs_force%total stores forces (-gradients), so invert sign
+            i_kind = kind_of(i)
+            i_atom = atom_of_kind(i)
+            ! Gradients from file are -dE/dR, qs_force%total stores forces (-gradients)
             qs_force(i_kind)%total(1:3, i_atom) = [-fx, -fy, -fz]
          END DO
 
          ! Close the gradients file
-         CALL close_file(unit_number=unit_nr)
+         CALL close_file(unit_number=input_unit)
 
          ! Clean up temporary arrays
          DEALLOCATE (atom_of_kind, kind_of)
@@ -2126,7 +2157,7 @@ CONTAINS
          CALL get_qs_env(qs_env, atomic_kind_set=kinds, force=qs_force)
 
          IF (fat_env%extern(i_frag)) THEN
-            CALL fat_get_gradients(fat_env, i_frag, qs_force)
+            CALL fat_get_gradients(fat_env, i_frag=i_frag, qs_force=qs_force)
          END IF
 
          CALL get_atomic_kind_set(kinds, natom=n, kind_of=kind_of, atom_of_kind=atom_of_kind)
