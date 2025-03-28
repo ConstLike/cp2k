@@ -1722,6 +1722,9 @@ CONTAINS
       DO i = 1, fat_env%n_frag
          e_emb_total = e_emb_total + fat_env%e_emb(i)
          IF (is_dbg) PRINT *, "KKK| Embedding energy (", i, "):", fat_env%e_emb(i)
+         IF (i > 1 .and. is_dbg) PRINT *, &
+            "KKK| Embedding energy diff (", i-1, "-", i, "):", &
+            fat_env%e_emb(i) - fat_env%e_emb(i-1)
       END DO
       e = e - e_emb_total
       IF (is_dbg) PRINT *, "KKK| Total Embedding energy:", e_emb_total
@@ -2109,8 +2112,8 @@ CONTAINS
             END IF
             i_kind = kind_of(i)
             i_atom = atom_of_kind(i)
-            ! Gradients from file are -dE/dR, qs_force%total stores forces (-gradients)
-            qs_force(i_kind)%total(1:3, i_atom) = [-fx, -fy, -fz]
+            ! Gradients from file are dE/dR, qs_force%total stores forces (+gradients)
+            qs_force(i_kind)%total(1:3, i_atom) = [+fx, +fy, +fz]
          END DO
 
          ! Close the gradients file
