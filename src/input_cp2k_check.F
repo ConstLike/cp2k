@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -122,15 +122,6 @@ CONTAINS
          section1 => section_vals_get_subs_vals(section, "XAS_TDP%KERNEL")
          section2 => section_vals_get_subs_vals(section, "XAS_TDP%KERNEL%XC_FUNCTIONAL")
          CALL xc_functionals_expand(section2, section1)
-         section1 => section_vals_get_subs_vals(section, "TDDFPT%XC")
-         section2 => section_vals_get_subs_vals(section, "TDDFPT%XC%XC_FUNCTIONAL")
-         CALL section_vals_get(section2, explicit=explicit)
-         IF (explicit) THEN
-            CALL xc_functionals_expand(section2, section1)
-         ELSE
-            section2 => section_vals_get_subs_vals(section, "XC%XC_FUNCTIONAL")
-            CALL section_vals_set_subs_vals(section, "TDDFPT%XC%XC_FUNCTIONAL", section2)
-         END IF
       END DO
 
       CALL timestop(handle)

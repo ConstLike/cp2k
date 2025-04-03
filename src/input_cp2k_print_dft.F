@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -24,7 +24,7 @@ MODULE input_cp2k_print_dft
       Lippert1999, Lu2004, Merlot2014, Perdew1981, Repasky2002, Rocha2006, Schenter2008, Schiffmann2015, &
       Shigeta2001, Stewart1982, Stewart1989, Stewart2007, Thiel1992, VanVoorhis2015, &
       VandeVondele2003, VandeVondele2005a, VandeVondele2005b, VandeVondele2006, Weber2008, &
-      Yin2017
+      Yin2017, Pracht2019, Caldeweyher2019, Caldeweyher2020
    USE cp_output_handling, ONLY: add_last_numeric, &
                                  cp_print_key_section_create, &
                                  debug_print_level, &
@@ -617,6 +617,23 @@ CONTAINS
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 
+      CALL section_create(subsection, __LOCATION__, name="TREXIO", &
+                          description="Write a TREXIO file to disk.", &
+                          n_keywords=1, n_subsections=0, repeats=.FALSE.)
+      CALL keyword_create(keyword, __LOCATION__, name="FILENAME", &
+                          description="Body of Filename for the trexio file.", &
+                          usage="FILENAME {name}", default_c_val="TREXIO", &
+                          type_of_var=char_t)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+      CALL keyword_create(keyword, __LOCATION__, name="CARTESIAN", &
+                          description="Store the MOs in the Cartesian basis instead of the default spherical basis.", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
       CALL section_create(subsection, __LOCATION__, name="GAPW", &
                           description="Controls the printing of some gapw related information (debug).", &
                           n_keywords=0, n_subsections=1, repeats=.FALSE.)
@@ -1038,7 +1055,7 @@ CONTAINS
                           name="VEL_REPRS", &
                           description="Calculate expectation values of the el. multipole moments in their velocity "// &
                           "representation during RTP. Implemented up to el. quadrupole moment.", &
-                          usage="VEL_REPS yes", &
+                          usage="VEL_REPRS yes", &
                           repeats=.FALSE., &
                           n_var=1, &
                           default_l_val=.FALSE., &
@@ -1204,6 +1221,15 @@ CONTAINS
       CALL section_add_subsection(section, print_key)
       CALL section_release(print_key)
 
+      ! Print EEQ Charges
+      CALL cp_print_key_section_create(print_key, __LOCATION__, "EEQ_CHARGES", &
+                                       description="Controls the printing of the EEQ charges", &
+                                       print_level=debug_print_level, filename="__STD_OUT__", &
+                                       common_iter_levels=1, &
+                                       citations=(/Pracht2019, Caldeweyher2019, Caldeweyher2020/))
+      CALL section_add_subsection(section, print_key)
+      CALL section_release(print_key)
+
       ! MAO (modified atomic orbital) analysis
       CALL cp_print_key_section_create(print_key, __LOCATION__, "MAO_ANALYSIS", &
                                        description="Controls the printing of the MAO (modified atomic orbital) analysis", &
@@ -1317,7 +1343,7 @@ CONTAINS
                           description="Indexes of the atoms minimal basis to be printed as cube files "// &
                           "This keyword can be repeated several times "// &
                           "(useful if you have to specify many indexes).", &
-                          usage="CUBES_LIST 1 2", &
+                          usage="ATOM_LIST 1 2", &
                           n_var=-1, type_of_var=integer_t, repeats=.TRUE.)
       CALL section_add_keyword(sub_print_key, keyword)
       CALL keyword_release(keyword)
@@ -1629,7 +1655,7 @@ CONTAINS
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="PRINT_CUBES", &
                           description="Print the energy windows to cube files", &
-                          usage="DENSITY_PROPAGATION .TRUE.", &
+                          usage="PRINT_CUBES .TRUE.", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
@@ -2187,16 +2213,16 @@ CONTAINS
       NULLIFY (keyword)
 
       CALL cp_print_key_section_create(print_key, __LOCATION__, "PDOS", &
-                                       description="Print out the DOS projected per kind and per angular momentum  ", &
+                                       description="Print out the DOS projected per kind and angular momentum  ", &
                                        print_level=debug_print_level, common_iter_levels=1, filename="")
       CALL keyword_create(keyword, __LOCATION__, name="COMPONENTS", &
-                          description="Print out pdos distinguishing all angular momentum components.", &
+                          description="Print out PDOS distinguishing all angular momentum components.", &
                           usage="COMPONENTS", default_l_val=.FALSE., &
                           lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
       CALL keyword_create(keyword, __LOCATION__, name="APPEND", &
-                          description="Append the pdos obtained at different iterations to the pdos  output file. "// &
+                          description="Append the PDOS obtained at different iterations to the PDOS output file. "// &
                           "By default the file is overwritten", &
                           usage="APPEND", default_l_val=.FALSE., &
                           lone_keyword_l_val=.TRUE.)
@@ -2205,13 +2231,16 @@ CONTAINS
       CALL keyword_create( &
          keyword, __LOCATION__, name="NLUMO", &
          description="Number of virtual orbitals to be added to the MO set (-1=all)."//newline// &
-         "CAUTION: Setting this value to be higher than the number of states present may cause a Cholesky error.", &
+         "CAUTION: Setting this value to be higher than the "// &
+         "number of states present may cause a Cholesky error."//newline// &
+         "This keyword only applies to MO sets, not to XAS_TDP states.", &
          usage="NLUMO integer", default_i_val=0)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
-      CALL keyword_create(keyword, __LOCATION__, name="OUT_EACH_MO", &
+      CALL keyword_create(keyword, __LOCATION__, name="OUT_EACH_STATE", &
+                          variants=(/"OUT_EACH_MO"/), &
                           description="Output on the status of the calculation every OUT_EACH_MO states. If -1 no output", &
-                          usage="OUT_EACH_MO integer", default_i_val=-1)
+                          usage="OUT_EACH_STATE integer", default_i_val=-1)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 
@@ -2220,7 +2249,7 @@ CONTAINS
                           " of atoms given through lists", &
                           n_keywords=4, n_subsections=0, repeats=.TRUE.)
       CALL keyword_create(keyword, __LOCATION__, name="COMPONENTS", &
-                          description="Print out pdos distinguishing all angular momentum components.", &
+                          description="Print out PDOS distinguishing all angular momentum components.", &
                           usage="COMPONENTS", default_l_val=.FALSE., &
                           lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(subsection, keyword)
@@ -2268,7 +2297,7 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="ERANGE", &
-                          description="only project states with the eigenvalues in the given interval. "// &
+                          description="Only project states with the energy values in the given interval. "// &
                           "Default is all states.", &
                           usage="ERANGE -1.0 1.0", unit_str="hartree", n_var=2, type_of_var=real_t)
       CALL section_add_keyword(subsection, keyword)
@@ -2454,7 +2483,7 @@ CONTAINS
                           description="Specifies the MO according to "// &
                           "the marks set in MOLECULAR_STATES. The value corresponds to the repetition "// &
                           "of MARK_STATES in MOLECULAR_STATES", &
-                          usage="ORIG_MARKED_STATE 1", type_of_var=integer_t, default_i_val=0)
+                          usage="RESULT_MARKED_STATE 1", type_of_var=integer_t, default_i_val=0)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
 
@@ -2673,7 +2702,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="aint_precond", &
                           description="the approximate inverse to use to get the starting point"// &
                           " for the linear solver of the spline3 methods", &
-                          usage="kind spline3", &
+                          usage="aint_precond copy", &
                           default_i_val=precond_spl3_aint, &
                           enum_c_vals=s2a("copy", "spl3_nopbc_aint1", "spl3_nopbc_precond1", &
                                           "spl3_nopbc_aint2", "spl3_nopbc_precond2", "spl3_nopbc_precond3"), &
@@ -2685,7 +2714,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="precond", &
                           description="The preconditioner used"// &
                           " for the linear solver of the spline3 methods", &
-                          usage="kind spline3", &
+                          usage="precond copy", &
                           default_i_val=precond_spl3_3, &
                           enum_c_vals=s2a("copy", "spl3_nopbc_aint1", "spl3_nopbc_precond1", &
                                           "spl3_nopbc_aint2", "spl3_nopbc_precond2", "spl3_nopbc_precond3"), &

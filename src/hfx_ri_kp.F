@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -31,13 +31,14 @@ MODULE hfx_ri_kp
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_api,                    ONLY: &
         dbcsr_add, dbcsr_clear, dbcsr_copy, dbcsr_create, dbcsr_distribution_get, &
-        dbcsr_distribution_new, dbcsr_distribution_release, dbcsr_distribution_type, dbcsr_dot, &
-        dbcsr_filter, dbcsr_finalize, dbcsr_get_block_p, dbcsr_get_info, &
-        dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, dbcsr_iterator_start, &
-        dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_p_type, dbcsr_put_block, dbcsr_release, &
-        dbcsr_type, dbcsr_type_no_symmetry, dbcsr_type_symmetric
+        dbcsr_distribution_new, dbcsr_distribution_release, dbcsr_distribution_type, dbcsr_filter, &
+        dbcsr_finalize, dbcsr_get_block_p, dbcsr_get_info, dbcsr_iterator_blocks_left, &
+        dbcsr_iterator_next_block, dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, &
+        dbcsr_p_type, dbcsr_put_block, dbcsr_release, dbcsr_type, dbcsr_type_no_symmetry, &
+        dbcsr_type_symmetric
    USE cp_dbcsr_cholesky,               ONLY: cp_dbcsr_cholesky_decompose,&
                                               cp_dbcsr_cholesky_invert
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_dot
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_diag,                   ONLY: cp_dbcsr_power
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_dist2d_to_dist
@@ -533,8 +534,9 @@ CONTAINS
          CALL section_vals_val_set(hfx_section, "KP_NGROUPS", i_val=ngroups)
       END IF
       IF ((MOD(ngroups, natom) .NE. 0) .AND. (MOD(natom, ngroups) .NE. 0) .AND. geometry_did_change) THEN
-         IF (ngroups > 1) &
+         IF (ngroups > 1) THEN
             CPWARN("Better load balancing is reached if NGROUPS is a multiple/divisor of the number of atoms")
+         END IF
       END IF
       group_size = para_env%num_pe/ngroups
       igroup = para_env%mepos/group_size
@@ -2003,8 +2005,8 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'get_ext_2c_int'
 
-      INTEGER :: blk, group, handle, handle2, i_img, i_RI, iatom, iblk, ikind, img_tot, j_img, &
-         j_RI, jatom, jblk, jkind, n_dependent, natom, nblks_RI, nimg, nkind
+      INTEGER :: group, handle, handle2, i_img, i_RI, iatom, iblk, ikind, img_tot, j_img, j_RI, &
+         jatom, jblk, jkind, n_dependent, natom, nblks_RI, nimg, nkind
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: dist1, dist2
       INTEGER, ALLOCATABLE, DIMENSION(:, :)              :: present_atoms_i, present_atoms_j
       INTEGER, DIMENSION(3)                              :: cell_b, cell_i, cell_j, cell_tot
@@ -2157,7 +2159,7 @@ CONTAINS
 
             CALL dbcsr_iterator_start(dbcsr_iter, mat_orig(img_tot))
             DO WHILE (dbcsr_iterator_blocks_left(dbcsr_iter))
-               CALL dbcsr_iterator_next_block(dbcsr_iter, row=iatom, column=jatom, blk=blk)
+               CALL dbcsr_iterator_next_block(dbcsr_iter, row=iatom, column=jatom)
                IF (present_atoms_i(iatom, i_img) == 0) CYCLE
                IF (present_atoms_j(jatom, j_img) == 0) CYCLE
                IF (my_offd .AND. (i_RI - 1)*natom + iatom == (j_RI - 1)*natom + jatom) CYCLE
@@ -2252,7 +2254,7 @@ CONTAINS
                CALL dbcsr_copy(work_tight_inv, work_tight)
                CALL cp_dbcsr_cholesky_decompose(work_tight_inv, para_env=para_env, blacs_env=blacs_env)
                CALL cp_dbcsr_cholesky_invert(work_tight_inv, para_env=para_env, blacs_env=blacs_env, &
-                                             upper_to_full=.TRUE.)
+                                             uplo_to_full=.TRUE.)
             CASE (hfx_ri_do_2c_diag)
                CALL dbcsr_copy(work_tight_inv, work_tight)
                CALL cp_dbcsr_power(work_tight_inv, -1.0_dp, ri_data%eps_eigval, n_dependent, &

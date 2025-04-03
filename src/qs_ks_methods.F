@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -55,7 +55,8 @@ MODULE qs_ks_methods
                                               hfx_ks_matrix_kp
    USE input_constants,                 ONLY: do_ppl_grid,&
                                               outer_scf_becke_constraint,&
-                                              outer_scf_hirshfeld_constraint
+                                              outer_scf_hirshfeld_constraint,&
+                                              smeagol_runtype_emtransport
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type,&
@@ -129,9 +130,10 @@ MODULE qs_ks_methods
    USE rtp_admm_methods,                ONLY: rtp_admm_calc_rho_aux,&
                                               rtp_admm_merge_ks_matrix
    USE se_fock_matrix,                  ONLY: build_se_fock_matrix
+   USE smeagol_interface,               ONLY: smeagol_shift_v_hartree
    USE surface_dipole,                  ONLY: calc_dipsurf_potential
    USE virial_types,                    ONLY: virial_type
-   USE xtb_matrices,                    ONLY: build_xtb_ks_matrix
+   USE xtb_ks_matrix,                   ONLY: build_xtb_ks_matrix
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -487,6 +489,21 @@ CONTAINS
          END IF
       END IF
       CALL auxbas_pw_pool%give_back_pw(rho_tot_gspace)
+
+      ! SMEAGOL interface
+      IF (dft_control%smeagol_control%smeagol_enabled .AND. &
+          dft_control%smeagol_control%run_type == smeagol_runtype_emtransport) THEN
+         CPASSERT(ASSOCIATED(dft_control%smeagol_control%aux))
+         CALL smeagol_shift_v_hartree(v_hartree_rspace, cell, &
+                                      dft_control%smeagol_control%aux%HartreeLeadsLeft, &
+                                      dft_control%smeagol_control%aux%HartreeLeadsRight, &
+                                      dft_control%smeagol_control%aux%HartreeLeadsBottom, &
+                                      dft_control%smeagol_control%aux%VBias, &
+                                      dft_control%smeagol_control%aux%minL, &
+                                      dft_control%smeagol_control%aux%maxR, &
+                                      dft_control%smeagol_control%aux%isexplicit_maxR, &
+                                      dft_control%smeagol_control%aux%isexplicit_HartreeLeadsBottom)
+      END IF
 
       ! calculate the density matrix for the fitted mo_coeffs
       IF (dft_control%do_admm) THEN
@@ -1281,7 +1298,7 @@ CONTAINS
                END IF
                ALLOCATE (matrixkp_ks(ispin, ic)%matrix)
                CALL dbcsr_create(matrix=matrixkp_ks(ispin, ic)%matrix, template=refmatrix, &
-                                 name=TRIM(headline), matrix_type=dbcsr_type_symmetric, nze=0)
+                                 name=TRIM(headline), matrix_type=dbcsr_type_symmetric)
                CALL cp_dbcsr_alloc_block_from_nbl(matrixkp_ks(ispin, ic)%matrix, sab_orb)
                CALL dbcsr_set(matrixkp_ks(ispin, ic)%matrix, 0.0_dp)
             END DO
@@ -1308,7 +1325,7 @@ CONTAINS
                   ALLOCATE (matrixkp_im_ks(ispin, ic)%matrix)
                   refmatrix => matrixkp_ks(ispin, ic)%matrix  ! base on real part, but anti-symmetric
                   CALL dbcsr_create(matrix=matrixkp_im_ks(ispin, ic)%matrix, template=refmatrix, &
-                                    name=TRIM(headline), matrix_type=dbcsr_type_antisymmetric, nze=0)
+                                    name=TRIM(headline), matrix_type=dbcsr_type_antisymmetric)
                   CALL cp_dbcsr_alloc_block_from_nbl(matrixkp_im_ks(ispin, ic)%matrix, sab_orb)
                   CALL dbcsr_set(matrixkp_im_ks(ispin, ic)%matrix, 0.0_dp)
                END DO

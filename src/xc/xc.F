@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -1521,30 +1521,28 @@ CONTAINS
 !> \param xc_section XC section to calculate the derivatives from
 !> \param gapw whether to carry out GAPW (not possible with numerical derivatives)
 !> \param vxg GAPW potential
-!> \param lsd_singlets ...
 !> \param do_excitations ...
 !> \param do_triplet ...
-!> \param do_tddft ...
 !> \param compute_virial ...
 !> \param virial_xc virial terms will be collected here
 ! **************************************************************************************************
    SUBROUTINE xc_calc_2nd_deriv(v_xc, v_xc_tau, deriv_set, rho_set, rho1_r, rho1_g, tau1_r, &
                                 pw_pool, xc_section, gapw, vxg, &
-                                lsd_singlets, do_excitations, do_sf, do_triplet, do_tddft, &
+                                do_excitations, do_sf, do_triplet, &
                                 compute_virial, virial_xc)
 
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER             :: v_xc, v_xc_tau
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: v_xc, v_xc_tau
       TYPE(xc_derivative_set_type)                       :: deriv_set
       TYPE(xc_rho_set_type)                              :: rho_set
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER               :: rho1_r, tau1_r
-      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER :: rho1_g
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, tau1_r
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho1_g
       TYPE(pw_pool_type), INTENT(IN), POINTER            :: pw_pool
       TYPE(section_vals_type), INTENT(IN), POINTER       :: xc_section
       LOGICAL, INTENT(IN)                                :: gapw
       REAL(KIND=dp), DIMENSION(:, :, :, :), OPTIONAL, &
          POINTER                                         :: vxg
-      LOGICAL, INTENT(IN), OPTIONAL                      :: lsd_singlets, do_excitations, do_sf, &
-                                                            do_triplet, do_tddft, compute_virial
+      LOGICAL, INTENT(IN), OPTIONAL                      :: do_excitations, do_sf, &
+                                                            do_triplet, compute_virial
       REAL(KIND=dp), DIMENSION(3, 3), INTENT(INOUT), &
          OPTIONAL                                        :: virial_xc
 
@@ -1553,8 +1551,8 @@ CONTAINS
       INTEGER                                            :: handle, ispin, nspins
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: lsd, my_compute_virial, &
-                                                            my_do_excitations, my_do_tddft, my_do_sf, &
-                                                            my_do_triplet, my_lsd_singlets
+                                                            my_do_excitations, my_do_sf, &
+                                                            my_do_triplet
       REAL(KIND=dp)                                      :: fac
       TYPE(section_vals_type), POINTER                   :: xc_fun_section
       TYPE(xc_rho_cflags_type)                           :: needs
@@ -1565,24 +1563,18 @@ CONTAINS
       my_compute_virial = .FALSE.
       IF (PRESENT(compute_virial)) my_compute_virial = compute_virial
 
-      my_do_tddft = .FALSE.
-      IF (PRESENT(do_tddft)) my_do_tddft = do_tddft
-
       my_do_sf = .FALSE.
       IF (PRESENT(do_sf)) my_do_sf = do_sf
 
       my_do_excitations = .FALSE.
       IF (PRESENT(do_excitations)) my_do_excitations = do_excitations
 
-      my_lsd_singlets = .FALSE.
-      IF (PRESENT(lsd_singlets)) my_lsd_singlets = lsd_singlets
-
       my_do_triplet = .FALSE.
       IF (PRESENT(do_triplet)) my_do_triplet = do_triplet
 
       nspins = SIZE(rho1_r)
       lsd = (nspins == 2)
-      IF (nspins == 1 .AND.my_do_excitations .AND. (my_lsd_singlets .OR. my_do_triplet)) THEN
+      IF (nspins == 1 .AND. my_do_excitations .AND. my_do_triplet) THEN
          nspins = 2
          lsd = .TRUE.
       ELSE IF (my_do_sf) THEN
@@ -1610,7 +1602,7 @@ CONTAINS
          END DO
       END IF
 
-      IF (section_get_lval(xc_section, "2ND_DERIV_ANALYTICAL") .AND. .NOT. my_do_tddft) THEN
+      IF (section_get_lval(xc_section, "2ND_DERIV_ANALYTICAL")) THEN
          !------!
          ! rho1 !
          !------!
@@ -1629,7 +1621,6 @@ CONTAINS
 
          fac = 0._dp
          IF (nspins == 1 .AND. my_do_excitations) THEN
-            IF (my_lsd_singlets) fac = 1.0_dp
             IF (my_do_triplet) fac = -1.0_dp
          END IF
 
@@ -2679,7 +2670,7 @@ CONTAINS
       INTEGER, DIMENSION(2, 3)                           :: bo
       LOGICAL                                            :: gradient_f, lsd, my_compute_virial, alda0, &
                                                             my_gapw, tau_f, laplace_f, rho_f, do_spinflip
-      REAL(KIND=dp)                                      :: fac, gradient_cut, tmp, factor2, s, S_THRESH, pi
+      REAL(KIND=dp)                                      :: fac, gradient_cut, tmp, factor2, s, S_THRESH
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: dr1dr, dra1dra, drb1drb
       REAL(kind=dp), DIMENSION(:, :, :), POINTER         :: deriv_data, deriv_data2, deriv_data3, &
                                                             e_drhoa, e_drhob, e_drho, norm_drho, norm_drhoa, &
@@ -2697,8 +2688,6 @@ CONTAINS
 
       NULLIFY (e_drhoa, e_drhob, e_drho)
 
-      pi = 4.0_dp*DATAN(1.0_dp)
-
       my_gapw = .FALSE.
       IF (PRESENT(gapw)) my_gapw = gapw
 
@@ -2713,8 +2702,6 @@ CONTAINS
       IF (my_compute_virial) THEN
          CPASSERT(PRESENT(virial_xc))
       END IF
-      alda0 = .false.
-      S_THRESH = 1.0E-04
 
       CALL section_vals_val_get(xc_section, "XC_GRID%XC_DERIV", &
                                 i_val=xc_deriv_method_id)
@@ -2725,15 +2712,19 @@ CONTAINS
       factor2 = 1.0_dp
       IF (PRESENT(tddfpt_fac)) fac = tddfpt_fac
       IF (PRESENT(tddfpt_fac)) factor2 = tddfpt_fac
-      IF (PRESENT(spinflip)) THEN
-         do_spinflip = spinflip
-      ELSE
-         do_spinflip = .FALSE.
-      END IF
+      do_spinflip = .FALSE.
+      IF (PRESENT(spinflip)) do_spinflip = spinflip
 
       bo = rho_set%local_bounds
 
       CALL check_for_derivatives(deriv_set, lsd, rho_f, gradient_f, tau_f, laplace_f)
+
+      alda0 = .false.
+      IF (gradient_f) THEN
+         S_THRESH = 1.0E-04
+      ELSE
+         S_THRESH = 1.0E-10
+      END IF
 
       IF (tau_f) THEN
          CPASSERT(ASSOCIATED(v_xc_tau))
@@ -2877,7 +2868,7 @@ CONTAINS
                   deriv_att => xc_dset_get_derivative(deriv_set, [deriv_rhoa,deriv_rhob])
                   CALL xc_derivative_get(deriv_att, deriv_data = deriv_data3)
 !$OMP             PARALLEL DO PRIVATE(k,j,i,s) DEFAULT(NONE)&
-!$OMP             SHARED(bo,v_xc,deriv_data,deriv_data2,deriv_data3,rho1a,rhoa,rhob,S_THRESH,pi) COLLAPSE(3)
+!$OMP             SHARED(bo,v_xc,deriv_data,deriv_data2,deriv_data3,rho1a,rhoa,rhob,S_THRESH) COLLAPSE(3)
                   DO k = bo(1, 3), bo(2, 3)
                      DO j = bo(1, 2), bo(2, 2)
                         DO i = bo(1, 1), bo(2, 1)

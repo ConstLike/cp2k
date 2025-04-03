@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -133,7 +133,8 @@ CONTAINS
       !
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_p_env_type)                                :: p_env
-      TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: c0, Av
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(IN)         :: c0
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(INOUT)      :: Av
 
       INTEGER                                            :: ispin, ncol
       TYPE(dft_control_type), POINTER                    :: dft_control
@@ -318,7 +319,7 @@ CONTAINS
             CALL get_qs_env(qs_env, rho_atom_set=rho_atom_set)
             rho1_atom_set => p_env%local_rho_set%rho_atom_set
             CALL calculate_xc_2nd_deriv_atom(rho_atom_set, rho1_atom_set, qs_env, xc_section, para_env, &
-                                             do_tddft=.FALSE., do_triplet=lr_triplet)
+                                             do_triplet=lr_triplet)
          END IF
       ELSE
          CALL qs_fxc_fdiff(ks_env, rho0, rho1a, xc_section, 6, lr_triplet, v_xc, v_xc_tau)

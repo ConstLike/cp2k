@@ -33,13 +33,10 @@ export OMP_STACKSIZE=64m
 # Improve code coverage on COSMA.
 export COSMA_DIM_THRESHOLD=0
 
-# Bind pika threads to first two cores. This is a hack. Do not use for production!
-export PIKA_PROCESS_MASK="0x3"
-
 # Load Spack or Toolchain environment.
-if [[ "${PROFILE}" == "spack" ]]; then
+if [[ "${PROFILE}" =~ ^spack ]]; then
   eval "$(spack env activate myenv --sh)"
-elif [[ "${PROFILE}" == "toolchain" ]]; then
+elif [[ "${PROFILE}" =~ ^toolchain ]]; then
   # shellcheck disable=SC1091
   source /opt/cp2k-toolchain/install/setup
 fi

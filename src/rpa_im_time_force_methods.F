@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -28,14 +28,16 @@ MODULE rpa_im_time_force_methods
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_api,                    ONLY: &
-        dbcsr_add, dbcsr_add_on_diag, dbcsr_clear, dbcsr_complete_redistribute, dbcsr_copy, &
-        dbcsr_create, dbcsr_distribution_new, dbcsr_distribution_release, dbcsr_distribution_type, &
-        dbcsr_frobenius_norm, dbcsr_get_block_p, dbcsr_iterator_blocks_left, &
-        dbcsr_iterator_next_block, dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, &
-        dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, &
-        dbcsr_type_antisymmetric, dbcsr_type_no_symmetry, dbcsr_type_symmetric
+        dbcsr_add, dbcsr_clear, dbcsr_complete_redistribute, dbcsr_copy, dbcsr_create, &
+        dbcsr_distribution_new, dbcsr_distribution_release, dbcsr_distribution_type, &
+        dbcsr_get_block_p, dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, &
+        dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_multiply, &
+        dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_type, dbcsr_type_antisymmetric, &
+        dbcsr_type_no_symmetry, dbcsr_type_symmetric
    USE cp_dbcsr_cholesky,               ONLY: cp_dbcsr_cholesky_decompose,&
                                               cp_dbcsr_cholesky_invert
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_add_on_diag,&
+                                              dbcsr_frobenius_norm
    USE cp_dbcsr_diag,                   ONLY: cp_dbcsr_power
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
@@ -117,7 +119,6 @@ MODULE rpa_im_time_force_methods
    USE qs_collocate_density,            ONLY: calculate_rho_elec,&
                                               collocate_function
    USE qs_density_matrices,             ONLY: calculate_whz_matrix
-   USE qs_energy_matrix_w,              ONLY: qs_energies_compute_w
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type,&
                                               set_qs_env
@@ -133,6 +134,7 @@ MODULE rpa_im_time_force_methods
    USE qs_ks_reference,                 ONLY: ks_ref_potential
    USE qs_ks_types,                     ONLY: set_ks_env
    USE qs_linres_types,                 ONLY: linres_control_type
+   USE qs_matrix_w,                     ONLY: compute_matrix_w
    USE qs_mo_types,                     ONLY: get_mo_set,&
                                               mo_set_type
    USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type,&
@@ -491,7 +493,7 @@ CONTAINS
 
       CALL dbcsr_copy(dbcsr_work, t_2c_int_tmp(1))
       CALL cp_dbcsr_cholesky_decompose(dbcsr_work, para_env=para_env, blacs_env=blacs_env)
-      CALL cp_dbcsr_cholesky_invert(dbcsr_work, para_env=para_env, blacs_env=blacs_env, upper_to_full=.TRUE.)
+      CALL cp_dbcsr_cholesky_invert(dbcsr_work, para_env=para_env, blacs_env=blacs_env, uplo_to_full=.TRUE.)
 
       CALL dbt_create(dbcsr_work, t_2c_tmp)
       CALL dbt_copy_matrix_to_tensor(dbcsr_work, t_2c_tmp)
@@ -558,7 +560,7 @@ CONTAINS
       CALL dbcsr_create(force_data%inv_ovlp, template=matrix_s(1)%matrix)
       CALL dbcsr_copy(force_data%inv_ovlp, matrix_s(1)%matrix)
       CALL cp_dbcsr_cholesky_decompose(force_data%inv_ovlp, para_env=para_env, blacs_env=blacs_env)
-      CALL cp_dbcsr_cholesky_invert(force_data%inv_ovlp, para_env=para_env, blacs_env=blacs_env, upper_to_full=.TRUE.)
+      CALL cp_dbcsr_cholesky_invert(force_data%inv_ovlp, para_env=para_env, blacs_env=blacs_env, uplo_to_full=.TRUE.)
 
       DO i_xyz = 1, 3
          CALL dbt_create(t_2c_der_tmp(1, i_xyz), t_2c_tmp)
@@ -680,7 +682,7 @@ CONTAINS
                                                             ends_array_mc_block
       INTEGER, INTENT(IN)                                :: num_integ_points, nmo
       REAL(KIND=dp), DIMENSION(:, :), INTENT(IN)         :: Eigenval
-      REAL(KIND=dp), DIMENSION(0:num_integ_points), &
+      REAL(KIND=dp), DIMENSION(num_integ_points), &
          INTENT(IN)                                      :: tau_tj
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:), &
          INTENT(IN)                                      :: tau_wj
@@ -1237,7 +1239,7 @@ CONTAINS
                                                             weights_cos_tf_w_to_t
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:), &
          INTENT(IN)                                      :: tj, wj
-      REAL(KIND=dp), DIMENSION(0:num_integ_points), &
+      REAL(KIND=dp), DIMENSION(num_integ_points), &
          INTENT(IN)                                      :: tau_tj
       INTEGER, INTENT(IN)                                :: cut_memory, ispin
       LOGICAL, INTENT(IN)                                :: open_shell
@@ -1423,7 +1425,7 @@ CONTAINS
          CALL dbcsr_add_on_diag(dbcsr_work_symm, 1.0_dp)
 
          CALL cp_dbcsr_cholesky_decompose(dbcsr_work_symm, para_env=para_env, blacs_env=blacs_env)
-         CALL cp_dbcsr_cholesky_invert(dbcsr_work_symm, para_env=para_env, blacs_env=blacs_env, upper_to_full=.TRUE.)
+         CALL cp_dbcsr_cholesky_invert(dbcsr_work_symm, para_env=para_env, blacs_env=blacs_env, uplo_to_full=.TRUE.)
 
          CALL dbcsr_add_on_diag(dbcsr_work_symm, -1.0_dp)
 
@@ -2994,8 +2996,8 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'get_2c_mme_forces'
 
-      INTEGER :: atom_a, atom_b, blk, G_count, handle, i_xyz, iatom, ikind, iset, jatom, jkind, &
-         jset, natom, nkind, nseta, nsetb, offset_hab_a, offset_hab_b, R_count, sgfa, sgfb
+      INTEGER :: atom_a, atom_b, G_count, handle, i_xyz, iatom, ikind, iset, jatom, jkind, jset, &
+         natom, nkind, nseta, nsetb, offset_hab_a, offset_hab_b, R_count, sgfa, sgfb
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind, kind_of
       INTEGER, DIMENSION(:), POINTER                     :: la_max, la_min, lb_max, lb_min, npgfa, &
                                                             npgfb, nsgfa, nsgfb
@@ -3037,7 +3039,7 @@ CONTAINS
       CALL dbcsr_iterator_start(iter, G_PQ)
       DO WHILE (dbcsr_iterator_blocks_left(iter))
 
-         CALL dbcsr_iterator_next_block(iter, row=iatom, column=jatom, blk=blk)
+         CALL dbcsr_iterator_next_block(iter, row=iatom, column=jatom)
          CALL dbcsr_get_block_p(G_PQ, iatom, jatom, pblock, found)
          IF (.NOT. found) CYCLE
          IF (iatom > jatom) CYCLE
@@ -3775,7 +3777,7 @@ CONTAINS
 
       !Add to it the SCF W matrix, except if EXX (because taken care of by HF response)
       IF (.NOT. do_exx) THEN
-         CALL qs_energies_compute_w(qs_env, calc_forces=.TRUE.)
+         CALL compute_matrix_w(qs_env, calc_forces=.TRUE.)
          CALL get_qs_env(qs_env, matrix_w=matrix_w)
          CALL dbcsr_add(p_env%w1(1)%matrix, matrix_w(1)%matrix, 1.0_dp, 1.0_dp)
          IF (nspins == 2) CALL dbcsr_add(p_env%w1(1)%matrix, matrix_w(2)%matrix, 1.0_dp, 1.0_dp)
@@ -3939,7 +3941,7 @@ CONTAINS
 
       IF (do_laplace .OR. do_im_time) THEN
          IF (.NOT. ASSOCIATED(qs_env%mp2_env%ri_rpa_im_time%tau_tj)) THEN
-            ALLOCATE (qs_env%mp2_env%ri_rpa_im_time%tau_tj(0:num_integ_points))
+            ALLOCATE (qs_env%mp2_env%ri_rpa_im_time%tau_tj(num_integ_points))
             ALLOCATE (qs_env%mp2_env%ri_rpa_im_time%tau_wj(num_integ_points))
             qs_env%mp2_env%ri_rpa_im_time%tau_tj(:) = tau_tj(:)
             qs_env%mp2_env%ri_rpa_im_time%tau_wj(:) = tau_wj(:)

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -29,6 +29,8 @@ MODULE input_cp2k_global
    USE cp_fm_elpa,                      ONLY: elpa_kernel_descriptions,&
                                               elpa_kernel_ids,&
                                               elpa_kernel_names
+   USE cp_fm_struct,                    ONLY: cp_fm_struct_get_ncol_block,&
+                                              cp_fm_struct_get_nrow_block
    USE cp_output_handling,              ONLY: add_last_numeric,&
                                               cp_print_key_section_create,&
                                               debug_print_level,&
@@ -46,10 +48,10 @@ MODULE input_cp2k_global
         bsse_run, callgraph_all, callgraph_master, callgraph_none, cell_opt_run, debug_run, &
         do_atom, do_band, do_cosma, do_cp2k, do_dgemm_blas, do_dgemm_spla, do_farming, &
         do_fft_fftw3, do_fft_sg, do_opt_basis, do_optimize_input, do_scalapack, do_swarm, do_tamc, &
-        do_test, do_tree_mc, do_tree_mc_ana, driver_run, ehrenfest, electronic_spectra_run, &
-        energy_force_run, energy_run, fftw_plan_estimate, fftw_plan_exhaustive, fftw_plan_measure, &
-        fftw_plan_patient, gaussian, geo_opt_run, linear_response_run, mol_dyn_run, mon_car_run, &
-        negf_run, none_run, pint_run, real_time_propagation, tree_mc_run, vib_anal
+        do_test, do_tree_mc, do_tree_mc_ana, driver_run, ehrenfest, energy_force_run, energy_run, &
+        fftw_plan_estimate, fftw_plan_exhaustive, fftw_plan_measure, fftw_plan_patient, gaussian, &
+        geo_opt_run, linear_response_run, mol_dyn_run, mon_car_run, negf_run, none_run, pint_run, &
+        real_time_propagation, tree_mc_run, vib_anal
    USE input_keyword_types,             ONLY: keyword_create,&
                                               keyword_release,&
                                               keyword_type
@@ -197,7 +199,7 @@ CONTAINS
                           "when the number of MPI processes is varied. If the print key PRINT_ELPA is "// &
                           "active the validity of the eigenvalues is checked against values calculated without "// &
                           "ELPA QR.", &
-                          usage="ELPA_QR", &
+                          usage="ELPA_QR_UNSAFE", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -283,7 +285,7 @@ CONTAINS
                           "larger allowed grids, or grids that more precisely match a given cutoff. "// &
                           "IMPORTANT NOTE: in this case, the actual grids used in CP2K depends on the FFT library. "// &
                           "A change of FFT library must therefore be considered equivalent to a change of basis, "// &
-                          "which implies a change of total energy. ", &
+                          "which implies a change of total energy.", &
                           usage="EXTENDED_FFT_LENGTHS", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
@@ -363,24 +365,24 @@ CONTAINS
          default_i_val=energy_force_run, &
          citations=(/Ceriotti2014, Schonherr2014/), &
          enum_c_vals=s2a("NONE", "ENERGY", "ENERGY_FORCE", "MD", "GEO_OPT", &
-                         "MC", "SPECTRA", "DEBUG", "BSSE", "LR", "PINT", "VIBRATIONAL_ANALYSIS", &
+                         "MC", "DEBUG", "BSSE", "LR", "PINT", "VIBRATIONAL_ANALYSIS", &
                          "BAND", "CELL_OPT", "WFN_OPT", "WAVEFUNCTION_OPTIMIZATION", &
                          "MOLECULAR_DYNAMICS", "GEOMETRY_OPTIMIZATION", "MONTECARLO", &
-                         "ELECTRONIC_SPECTRA", "LINEAR_RESPONSE", "NORMAL_MODES", "RT_PROPAGATION", &
+                         "LINEAR_RESPONSE", "NORMAL_MODES", "RT_PROPAGATION", &
                          "EHRENFEST_DYN", "TAMC", "TMC", "DRIVER", "NEGF"), &
          enum_i_vals=(/none_run, energy_run, energy_force_run, mol_dyn_run, &
-                       geo_opt_run, mon_car_run, electronic_spectra_run, debug_run, &
+                       geo_opt_run, mon_car_run, debug_run, &
                        bsse_run, linear_response_run, pint_run, vib_anal, do_band, &
                        cell_opt_run, energy_run, energy_run, mol_dyn_run, geo_opt_run, &
-                       mon_car_run, electronic_spectra_run, linear_response_run, &
+                       mon_car_run, linear_response_run, &
                        vib_anal, real_time_propagation, ehrenfest, do_tamc, tree_mc_run, driver_run, negf_run/), &
          enum_desc=s2a("Perform no tasks", "Computes energy", "Computes energy and forces", &
-                       "Molecular Dynamics", "Geometry Optimization", "Monte Carlo", "Computes absorption Spectra", &
+                       "Molecular Dynamics", "Geometry Optimization", "Monte Carlo", &
                        "Performs a Debug analysis", "Basis set superposition error", "Linear Response", &
                        "Path integral", "Vibrational analysis", "Band methods", &
                        "Cell optimization. Both cell vectors and atomic positions are optimised.", &
                        "Alias for ENERGY", "Alias for ENERGY", "Alias for MD", "Alias for GEO_OPT", &
-                       "Alias for MC", "Alias for SPECTRA", "Alias for LR", "Alias for VIBRATIONAL_ANALYSIS", &
+                       "Alias for MC", "Alias for LR", "Alias for VIBRATIONAL_ANALYSIS", &
                        "Real Time propagation run (fixed ionic positions)", &
                        "Ehrenfest dynamics (using real time propagation of the wavefunction)", &
                        "Temperature Accelerated Monte Carlo (TAMC)", &
@@ -419,7 +421,7 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="TRACE", &
-                          description="If a debug trace of the execution of the program should be written ", &
+                          description="If a debug trace of the execution of the program should be written", &
                           usage="TRACE", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
@@ -490,7 +492,7 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="SAVE_MEM", &
                           description="Some sections of the input structure are deallocated when not needed,"// &
-                          " and reallocated only when used. This reduces the required maximum memory  ", &
+                          " and reallocated only when used. This reduces the required maximum memory.", &
                           usage="SAVE_MEM", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
@@ -639,21 +641,23 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="NROW_BLOCKS", &
                           description="Defines the number of rows per scalapack block in "// &
-                          "the creation of block cyclic dense matrices ", &
-                          default_i_val=64)
+                          "the creation of block cyclic dense matrices. "// &
+                          "Use an internal default if zero or negative.", &
+                          default_i_val=cp_fm_struct_get_nrow_block())
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="NCOL_BLOCKS", &
                           description="Defines the number of columns per scalapack block in "// &
-                          "the creation of vlock cyclic dense matrices ", &
-                          default_i_val=64)
+                          "the creation of vlock cyclic dense matrices. "// &
+                          "Use an internal default if zero or negative.", &
+                          default_i_val=cp_fm_struct_get_ncol_block())
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="FORCE_BLOCK_SIZE", &
                           description="Ensure for small matrices that the layout is compatible "// &
-                          "with bigger ones, i.e. no subdivision is performed (can break LAPACK!!!).", &
+                          "with bigger ones, i.e. no subdivision is performed (can break LAPACK).", &
                           usage="FORCE_BLOCK_SIZE", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
@@ -737,7 +741,7 @@ CONTAINS
                           description="Controls how to perform redistribution when ELPA is used for diagonalization. "// &
                           "By default, redistribution is always performed using the defined rules. "// &
                           "By turning off this keyword, matrices are redistributed only to prevent crashes in the ELPA "// &
-                          "library which happens when the original matrix is distributed over too many processors. ", &
+                          "library which happens when the original matrix is distributed over too many processors.", &
                           usage="ELPA_FORCE_REDISTRIBUTE", type_of_var=logical_t, &
                           default_l_val=.TRUE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(section, keyword)
