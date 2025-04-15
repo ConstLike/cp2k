@@ -39,7 +39,8 @@ MODULE qs_tddfpt2_utils
                                               cp_logger_type
    USE input_constants,                 ONLY: &
         cholesky_dbcsr, cholesky_inverse, cholesky_off, cholesky_restore, oe_gllb, oe_lb, oe_none, &
-        oe_saop, oe_shift, no_sf_tddfpt,tddfpt_sf_col,tddfpt_sf_noncol
+        oe_saop, oe_shift, no_sf_tddfpt, tddfpt_sf_col, tddfpt_sf_noncol, &
+        no_sf_tddft, tddft_sf_col, tddft_sf_noncol
    USE input_section_types,             ONLY: section_vals_create,&
                                               section_vals_get,&
                                               section_vals_get_subs_vals,&
@@ -105,13 +106,14 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddfpt_init_mos'
 
       INTEGER                                            :: handle, ispin, nmo_avail, nmo_occ, &
-                                                            nmo_virt, nspins
-      INTEGER, DIMENSION(2, 2)                           :: moc, mvt
+                                                            nmo_virt, nspins, nmo, nao
+      INTEGER, DIMENSION(2, 2)                           :: moc, mvt, mfc
       LOGICAL                                            :: print_virtuals_newtonx
       REAL(kind=dp), DIMENSION(:), POINTER               :: evals_virt_spin
       TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_1d_r_p_type), DIMENSION(:), POINTER        :: evals_virt
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:), &
          TARGET                                          :: mos_virt
       TYPE(cp_fm_type), POINTER                          :: mos_virt_spin
@@ -181,6 +183,28 @@ CONTAINS
                                            matrix_ks=matrix_ks(ispin)%matrix, matrix_s=matrix_s(1)%matrix, &
                                            mos_virt=mos_virt_spin, evals_virt=evals_virt_spin, &
                                            qs_env=qs_env)
+
+         ! Get information about the MO set
+         CALL get_mo_set(mos(ispin), nmo=nmo, homo=nmo_occ, nao=nao)
+         NULLIFY(fm_struct)
+         CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nmo, context=blacs_env)
+         ALLOCATE(gs_mos(ispin)%mos_full)
+         CALL cp_fm_create(gs_mos(ispin)%mos_full, fm_struct)
+         CALL cp_fm_struct_release(fm_struct)
+
+         ! Copy MO coefficients from mo_set
+         CALL cp_fm_to_fm(mos(ispin)%mo_coeff, gs_mos(ispin)%mos_full)
+
+         ! Store the full set of eigenvalues
+         ALLOCATE(gs_mos(ispin)%evals_full(nmo))
+         gs_mos(ispin)%evals_full(1:nmo) = mos(ispin)%eigenvalues(1:nmo)
+
+         ! Store the full set of occupation numbers
+         ALLOCATE(gs_mos(ispin)%occ_full(nmo))
+         gs_mos(ispin)%occ_full(1:nmo) = mos(ispin)%occupation_numbers(1:nmo)
+
+         ! Set the HOMO index
+         gs_mos(ispin)%homo = nmo_occ
       END DO
 
       moc = 0
@@ -188,6 +212,7 @@ CONTAINS
       DO ispin = 1, nspins
          CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, nrow_global=moc(1, ispin), ncol_global=moc(2, ispin))
          CALL cp_fm_get_info(gs_mos(ispin)%mos_virt, nrow_global=mvt(1, ispin), ncol_global=mvt(2, ispin))
+         CALL cp_fm_get_info(gs_mos(ispin)%mos_full, nrow_global=mfc(1, ispin), ncol_global=mfc(2, ispin))
       END DO
       IF (iounit > 0) THEN
          WRITE (iounit, "(T2,A,T36,A)") "TDDFPT| Molecular Orbitals:", &
@@ -195,6 +220,12 @@ CONTAINS
          DO ispin = 1, nspins
             WRITE (iounit, "(T2,A,T37,I4,4I10)") "TDDFPT| ", ispin, moc(1, ispin), moc(2, ispin), &
                mvt(2, ispin), moc(2, ispin) + mvt(2, ispin)
+         END DO
+         WRITE(iounit, "(T2,A,T36,A)") "TDDFPT| Full Orbital Set:", &
+            " Spin       AOs      Total     HOMO"
+         DO ispin = 1, nspins
+            WRITE(iounit, "(T2,A,T37,I4,3I10)") "TDDFPT| ", ispin, mfc(1, ispin), mfc(2, ispin), &
+               gs_mos(ispin)%homo
          END DO
       END IF
 
@@ -564,6 +595,12 @@ CONTAINS
       IF (ALLOCATED(gs_mos%phases_virt)) &
          DEALLOCATE (gs_mos%phases_virt)
 
+      IF (ALLOCATED(gs_mos%evals_full)) &
+         DEALLOCATE(gs_mos%evals_full)
+
+      IF (ALLOCATED(gs_mos%occ_full)) &
+         DEALLOCATE(gs_mos%occ_full)
+
       IF (ASSOCIATED(gs_mos%evals_occ_matrix)) THEN
          CALL cp_fm_release(gs_mos%evals_occ_matrix)
          DEALLOCATE (gs_mos%evals_occ_matrix)
@@ -577,6 +614,11 @@ CONTAINS
       IF (ASSOCIATED(gs_mos%mos_occ)) THEN
          CALL cp_fm_release(gs_mos%mos_occ)
          DEALLOCATE (gs_mos%mos_occ)
+      END IF
+
+      IF (ASSOCIATED(gs_mos%mos_full)) THEN
+         CALL cp_fm_release(gs_mos%mos_full)
+         DEALLOCATE(gs_mos%mos_full)
       END IF
 
       CALL timestop(handle)
@@ -743,7 +785,7 @@ CONTAINS
       nspins = SIZE(gs_mos)
 
       ! Total number of possible excitations for spin-conserving TDDFT
-      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN 
+      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
          DO ispin = 1, nspins
             nstates_total = nstates_total + &
                             SIZE(gs_mos(ispin)%evals_occ, kind=int_8)* &
@@ -980,7 +1022,8 @@ CONTAINS
 
       ! TO DO: the variable 'nstates_selected' should probably be declared as INTEGER(kind=int_8),
       !        however we need a special version of the subroutine sort() in order to do so
-      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+      IF ((tddfpt_control%spinflip == no_sf_tddfpt) .or. &
+          (tddfpt_control%sf_tddft == no_sf_tddft)) THEN
          nstates_selected = DOT_PRODUCT(nmo_occ_selected(1:nspins), nmo_virt_selected(1:nspins))
       ELSE
          nstates_selected = nmo_occ_selected(1)*nmo_virt_selected(2)
@@ -1080,7 +1123,7 @@ CONTAINS
                END IF
             END IF
 
-            ! Recover index of occupied MO (imo_occ) and unoccupied MO (imo_virt) 
+            ! Recover index of occupied MO (imo_occ) and unoccupied MO (imo_virt)
             ! associated to the excited state index (ind+1)
             imo_occ = nmo_occ_avail(spin1) - ind/nmo_virt_selected(spin2)
             imo_virt = MOD(ind, nmo_virt_selected(spin2)) + 1

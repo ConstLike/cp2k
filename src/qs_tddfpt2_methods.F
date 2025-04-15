@@ -163,7 +163,7 @@ CONTAINS
       TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       TYPE(cp_fm_struct_type), POINTER                   :: matrix_struct
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: my_mos
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: my_mos, my_all_mos
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :)     :: dipole_op_mos_occ, evects, S_evects
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_ks_oep, matrix_s, &
@@ -275,7 +275,7 @@ CONTAINS
 
       nspins = SIZE(gs_mos)
       ! multiplicity of molecular system
-      IF (nspins > 1) THEN
+      IF (nspins > 1 .and. .not. do_sf) THEN
          mult = ABS(SIZE(gs_mos(1)%evals_occ) - SIZE(gs_mos(2)%evals_occ)) + 1
          IF (mult > 2) &
             CALL cp_warn(__LOCATION__, "There is a convergence issue for multiplicity >= 3")
@@ -289,12 +289,15 @@ CONTAINS
 
       ! split mpi communicator
       ALLOCATE (my_mos(nspins))
+      ALLOCATE (my_all_mos(nspins))
       DO ispin = 1, nspins
          my_mos(ispin) = gs_mos(ispin)%mos_occ
+         my_all_mos(ispin) = gs_mos(ispin)%mos_full
       END DO
       CALL tddfpt_sub_env_init(sub_env, qs_env, mos_occ=my_mos(:), &
-                               kernel=tddfpt_control%kernel)
+                               mos=my_all_mos(:), kernel=tddfpt_control%kernel)
       DEALLOCATE (my_mos)
+      DEALLOCATE (my_all_mos)
 
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
          ! create environment for Full Kernel
@@ -418,11 +421,11 @@ CONTAINS
       IF (.NOT. do_soc) THEN
          ! compute tddfpt excitation energies of multiplicity mult
          IF (do_sf) THEN
-         CALL tddft_energies(qs_env, nstates, nspins, work_matrices, &
-                             tddfpt_control, logger, tddfpt_print_section, evects, evals, &
-                             gs_mos, tddfpt_section, S_evects, matrix_s, kernel_env, matrix_ks, &
-                             sub_env, ostrength, dipole_op_mos_occ, mult, xc_section, full_kernel_env, &
-                             kernel_env_admm_aux)
+            CALL tddft_energies(qs_env, nstates, nspins, work_matrices, &
+                                tddfpt_control, logger, tddfpt_print_section, evects, evals, &
+                                gs_mos, tddfpt_section, S_evects, matrix_s, kernel_env, matrix_ks, &
+                                sub_env, ostrength, dipole_op_mos_occ, mult, xc_section, full_kernel_env, &
+                                kernel_env_admm_aux)
          ELSE
             CALL tddfpt_energies(qs_env, nstates, nspins, work_matrices, &
                                  tddfpt_control, logger, tddfpt_print_section, evects, evals, &
