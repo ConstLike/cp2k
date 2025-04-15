@@ -38,7 +38,8 @@ MODULE input_cp2k_properties_dft
       ot_precond_s_inverse, scan_x, scan_xy, scan_xyz, scan_xz, scan_y, scan_yz, scan_z, &
       tddfpt_dipole_berry, tddfpt_dipole_length, tddfpt_dipole_velocity, tddfpt_kernel_full, &
       tddfpt_kernel_none, tddfpt_kernel_stda, no_sf_tddfpt, tddfpt_sf_col, tddfpt_sf_noncol, &
-      use_mom_ref_coac, use_mom_ref_com, use_mom_ref_user, use_mom_ref_zero
+      use_mom_ref_coac, use_mom_ref_com, use_mom_ref_user, use_mom_ref_zero, &
+      no_sf_tddft, tddft_sf_col, tddft_sf_noncol
    USE input_cp2k_atprop, ONLY: create_atprop_section
    USE input_cp2k_dft, ONLY: create_interp_section, &
                              create_mgrid_section
@@ -1426,7 +1427,7 @@ CONTAINS
                           "Density Functional Perturbation Theory. "// &
                           "Current implementation works for hybrid functionals. "// &
                           "Can be used with Gaussian and Plane Waves (GPW) method only.", &
-                          n_keywords=14, n_subsections=4, repeats=.FALSE., &
+                          n_keywords=16, n_subsections=4, repeats=.FALSE., &
                           citations=(/Iannuzzi2005/))
 
       NULLIFY (keyword, print_key, subsection)
@@ -1495,6 +1496,15 @@ CONTAINS
                           enum_c_vals=s2a("NONE", "COLLINEAR", "NONCOLLINEAR"), &
                           enum_i_vals=(/no_sf_tddfpt, tddfpt_sf_col, tddfpt_sf_noncol/), &
                           default_i_val=no_sf_tddfpt)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="SF_TDDFT", &
+                          description="Selects the type of spin-flip TDDFT kernel", &
+                          usage="SF_TDDFT COLLINEAR", &
+                          enum_c_vals=s2a("NONE", "COLLINEAR", "NONCOLLINEAR"), &
+                          enum_i_vals=(/no_sf_tddft, tddft_sf_col, tddft_sf_noncol/), &
+                          default_i_val=no_sf_tddft)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

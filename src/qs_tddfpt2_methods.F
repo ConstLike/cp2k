@@ -111,6 +111,7 @@ MODULE qs_tddfpt2_methods
                                               tddfpt_init_mos,&
                                               tddfpt_oecorr,&
                                               tddfpt_release_ground_state_mos
+   USE qs_tddft_methods,                ONLY: tddft_energies
    USE string_utilities,                ONLY: integer_to_string
    USE xc_write_output,                 ONLY: xc_write
 #include "./base/base_uses.f90"
@@ -220,6 +221,7 @@ CONTAINS
       tddfpt_control%hfxsr_re_int = .TRUE.
       tddfpt_control%do_hfxlr = do_hfxlr
       tddfpt_control%do_exck = do_exck
+      tddfpt_control%spinflip = tddfpt_control%sf_tddft
       do_sf = tddfpt_control%spinflip /= no_sf_tddfpt
       IF (tddfpt_control%do_hfxlr) THEN
          kernel_section => section_vals_get_subs_vals(tddfpt_section, "XC%HFX_KERNEL%HFXLR")
@@ -415,11 +417,19 @@ CONTAINS
 
       IF (.NOT. do_soc) THEN
          ! compute tddfpt excitation energies of multiplicity mult
-         CALL tddfpt_energies(qs_env, nstates, nspins, work_matrices, &
-                              tddfpt_control, logger, tddfpt_print_section, evects, evals, &
-                              gs_mos, tddfpt_section, S_evects, matrix_s, kernel_env, matrix_ks, &
-                              sub_env, ostrength, dipole_op_mos_occ, mult, xc_section, full_kernel_env, &
-                              kernel_env_admm_aux)
+         IF (do_sf) THEN
+         CALL tddft_energies(qs_env, nstates, nspins, work_matrices, &
+                             tddfpt_control, logger, tddfpt_print_section, evects, evals, &
+                             gs_mos, tddfpt_section, S_evects, matrix_s, kernel_env, matrix_ks, &
+                             sub_env, ostrength, dipole_op_mos_occ, mult, xc_section, full_kernel_env, &
+                             kernel_env_admm_aux)
+         ELSE
+            CALL tddfpt_energies(qs_env, nstates, nspins, work_matrices, &
+                                 tddfpt_control, logger, tddfpt_print_section, evects, evals, &
+                                 gs_mos, tddfpt_section, S_evects, matrix_s, kernel_env, matrix_ks, &
+                                 sub_env, ostrength, dipole_op_mos_occ, mult, xc_section, full_kernel_env, &
+                                 kernel_env_admm_aux)
+         END IF
       ELSE
          CALL tddfpt_soc_energies(qs_env, nstates, work_matrices, &
                                   tddfpt_control, logger, tddfpt_print_section, &
