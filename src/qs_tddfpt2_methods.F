@@ -111,7 +111,7 @@ MODULE qs_tddfpt2_methods
                                               tddfpt_init_mos,&
                                               tddfpt_oecorr,&
                                               tddfpt_release_ground_state_mos
-   USE qs_tddft_methods,                ONLY: tddft_energies
+   USE qs_tddft_methods,                ONLY: tddft_info_type
    USE string_utilities,                ONLY: integer_to_string
    USE xc_write_output,                 ONLY: xc_write
 #include "./base/base_uses.f90"
@@ -188,6 +188,7 @@ CONTAINS
          POINTER                                         :: gs_mos
       TYPE(tddfpt_subgroup_env_type)                     :: sub_env
       TYPE(tddfpt_work_matrices)                         :: work_matrices
+      TYPE(tddft_info_type)                              :: tddft
 
       CALL timeset(routineN, handle)
 
@@ -298,6 +299,52 @@ CONTAINS
                                mos=my_all_mos(:), kernel=tddfpt_control%kernel)
       DEALLOCATE (my_mos)
       DEALLOCATE (my_all_mos)
+
+      IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
+         CALL tddft%init(qs_env, gs_mos, sub_env)
+
+         CALL tddft%setup(qs_env, gs_mos, logger, xc_section, &
+            tddfpt_print_section, tddfpt_control, kernel_env, full_kernel_env, sub_env)
+
+         CALL tddft%run(qs_env, tddfpt_control, logger, tddfpt_print_section, &
+            gs_mos, kernel_env, matrix_ks, sub_env)
+ 
+!        ! *** print summary information ***
+!        log_unit = cp_logger_get_default_io_unit(logger)
+
+!        ALLOCATE (ostrength(nstates))
+!        ostrength = 0.0_dp
+!        CALL tddfpt_print_summary(log_unit, &
+!                                  evects, &
+!                                  evals, &
+!                                  ostrength, &
+!                                  mult, &
+!                                  dipole_op_mos_occ, &
+!                                  tddfpt_control%dipole_form)
+!        CALL tddfpt_print_excitation_analysis( &
+!           log_unit, &
+!           evects, &
+!           evals, &
+!           gs_mos, &
+!           matrix_s(1)%matrix, &
+!           tddfpt_control%spinflip, &
+!           min_amplitude=tddfpt_control%min_excitation_amplitude)
+!        CALL tddfpt_print_nto_analysis(qs_env, &
+!                                       evects, evals, &
+!                                       ostrength, &
+!                                       gs_mos, &
+!                                       matrix_s(1)%matrix, &
+!                                       tddfpt_print_section)
+!        IF (tddfpt_control%do_exciton_descriptors) THEN
+!           CALL tddfpt_print_exciton_descriptors( &
+!              log_unit, &
+!              evects, &
+!              gs_mos, &
+!              matrix_s(1)%matrix, &
+!              tddfpt_control%do_directional_exciton_descriptors, &
+!              qs_env)
+!        END IF
+      END IF
 
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
          ! create environment for Full Kernel
@@ -420,19 +467,11 @@ CONTAINS
 
       IF (.NOT. do_soc) THEN
          ! compute tddfpt excitation energies of multiplicity mult
-         IF (do_sf) THEN
-            CALL tddft_energies(qs_env, nstates, nspins, work_matrices, &
-                                tddfpt_control, logger, tddfpt_print_section, evects, evals, &
-                                gs_mos, tddfpt_section, S_evects, matrix_s, kernel_env, matrix_ks, &
-                                sub_env, ostrength, dipole_op_mos_occ, mult, xc_section, full_kernel_env, &
-                                kernel_env_admm_aux)
-         ELSE
-            CALL tddfpt_energies(qs_env, nstates, nspins, work_matrices, &
-                                 tddfpt_control, logger, tddfpt_print_section, evects, evals, &
-                                 gs_mos, tddfpt_section, S_evects, matrix_s, kernel_env, matrix_ks, &
-                                 sub_env, ostrength, dipole_op_mos_occ, mult, xc_section, full_kernel_env, &
-                                 kernel_env_admm_aux)
-         END IF
+         CALL tddfpt_energies(qs_env, nstates, nspins, work_matrices, &
+                              tddfpt_control, logger, tddfpt_print_section, evects, evals, &
+                              gs_mos, tddfpt_section, S_evects, matrix_s, kernel_env, matrix_ks, &
+                              sub_env, ostrength, dipole_op_mos_occ, mult, xc_section, full_kernel_env, &
+                              kernel_env_admm_aux)
       ELSE
          CALL tddfpt_soc_energies(qs_env, nstates, work_matrices, &
                                   tddfpt_control, logger, tddfpt_print_section, &
@@ -534,7 +573,9 @@ CONTAINS
 
       DEALLOCATE (evals, ostrength)
 
+
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
+         CALL tddft%clean()
          IF (do_admm) CALL release_kernel_env(kernel_env%admm_kernel)
          IF (tddfpt_control%do_lrigpw) THEN
             CALL lri_env_release(kernel_env%full_kernel%lri_env)
