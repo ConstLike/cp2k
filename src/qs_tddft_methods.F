@@ -6,8 +6,10 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddft_methods
+   USE cp_fm_basic_linalg,              ONLY: cp_fm_scale_and_add
    USE hfx_admm_utils,                  ONLY: tddft_hfx_matrix
    USE cp_dbcsr_operations,             ONLY: copy_fm_to_dbcsr,&
+                                              copy_dbcsr_to_fm,&
                                               cp_dbcsr_plus_fm_fm_t,&
                                               cp_dbcsr_sm_fm_multiply,&
                                               dbcsr_allocate_matrix_set,&
@@ -190,11 +192,10 @@ MODULE qs_tddft_methods
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: work_ao_ao_sym
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: work_ao_ao_asym
 
-      TYPE(cp_fm_type), POINTER                          :: work_ao_vir
-      TYPE(cp_fm_type), POINTER                          :: work_noc_ao
+      TYPE(cp_fm_type), POINTER                          :: work_ao_vir => NULL()
+      TYPE(cp_fm_type), POINTER                          :: work_noc_ao => NULL()
 
       TYPE(cp_fm_type), POINTER                          :: hmat_ao_ao => NULL()
-
 
       TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:)      :: work_rho_ao_ao_symm
       TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:)      :: work_rho_ao_ao_asymm
@@ -414,6 +415,8 @@ CONTAINS
                                context=sub_env%blacs_env)
       ALLOCATE (this%gs_rho_orb_ao_fm)
       CALL cp_fm_create(this%gs_rho_orb_ao_fm, fm_struct)
+      ALLOCATE (this%hmat_ao_ao)
+      CALL cp_fm_create(this%hmat_ao_ao, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
 
       CALL cp_fm_struct_create(fm_struct, &
@@ -646,6 +649,10 @@ CONTAINS
          CALL cp_fm_release(this%gs_rho_orb_ao_fm)
          DEALLOCATE(this%gs_rho_orb_ao_fm)
       END IF
+      IF (ASSOCIATED(this%hmat_ao_ao)) THEN
+         CALL cp_fm_release(this%hmat_ao_ao)
+         DEALLOCATE(this%hmat_ao_ao)
+      END IF
 
       IF (ASSOCIATED(this%gs_rho_xc_struct)) THEN
          CALL qs_rho_release(this%gs_rho_xc_struct)
@@ -730,7 +737,7 @@ CONTAINS
       CHARACTER(len=20)                                  :: nstates_str
       INTEGER                                            :: handle, log_unit, &
          energy_unit, iter, niters, nv, iend, ist, iv, ivec, max_krylov_vects, &
-         mxvec
+         mxvec, nvirtb
       REAL(KIND=DP)                                      :: conv
       TYPE(davidson_info_type)                           :: davidson
 
@@ -768,7 +775,8 @@ CONTAINS
 
          CALL cp_add_iter_level(logger%iter_info, "TDDFT_SCF")
 
-         mxvec = gs_mos(1)%homo * (SIZE(gs_mos(2)%evals_full) - gs_mos(2)%homo)
+         nvirtb = SIZE(gs_mos(2)%evals_full) - gs_mos(2)%homo
+         mxvec = gs_mos(1)%homo * nvirtb
          max_krylov_vects = MIN(MAX(tddfpt_control%nkvs, this%nstates), INT(mxvec))
 
          CALL davidson%init(evects=this%evects_mo, &
@@ -830,6 +838,31 @@ CONTAINS
 
             CALL tddft_hfx_matrix(this%work_hmat_symm, this%work_rho_ao_ao_symm, qs_env)
             CALL tddft_hfx_matrix(this%work_hmat_asymm, this%work_rho_ao_ao_asymm, qs_env)
+
+            DO ivec = ist, iend
+               iv = ivec-ist+1
+
+               CALL copy_dbcsr_to_fm(this%work_hmat_symm(iv)%matrix, this%work_ao_ao_sym(1))
+               CALL copy_dbcsr_to_fm(this%work_hmat_asymm(iv)%matrix, this%work_ao_ao_asym(1))
+
+               CALL cp_fm_set_all(this%hmat_ao_ao, 0.0_dp)
+               CALL cp_fm_scale_and_add( &
+                              alpha=1.0_dp, matrix_a=this%work_ao_ao_sym(1), &
+                              beta=0.0_dp, matrix_b=this%hmat_ao_ao)
+               CALL cp_fm_scale_and_add( &
+                              alpha=1.0_dp, matrix_a=this%work_ao_ao_asym(1), &
+                              beta=1.0_dp, matrix_b=this%hmat_ao_ao)
+
+               CALL parallel_gemm('T', 'N', this%nocca, this%nbf, this%nbf, &
+                                  1.0_dp, gs_mos(1)%mos_occ, &
+                                          this%hmat_ao_ao, &
+                                  0.0_dp, this%work_noc_ao)
+
+               CALL parallel_gemm('N', 'N', this%nocca, nvirtb, this%nbf, &
+                                  1.0_dp, this%work_noc_ao, &
+                                          gs_mos(2)%mos_virt, &
+                                  0.0_dp, davidson%Aop_krylov(1, ivec))
+            END DO
 
 !           DO ivec = ist, iend
 !             iv = ivec-ist+1
