@@ -303,7 +303,7 @@ CONTAINS
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
          CALL tddft%init(qs_env, gs_mos, sub_env)
 
-         CALL tddft%setup(qs_env, gs_mos, logger, xc_section, &
+         CALL tddft%setup(qs_env, gs_mos, matrix_ks, logger, xc_section, &
             tddfpt_print_section, tddfpt_control, kernel_env, full_kernel_env, sub_env)
 
          CALL tddft%run(qs_env, tddfpt_control, logger, tddfpt_print_section, &
