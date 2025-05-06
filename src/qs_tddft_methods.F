@@ -6,6 +6,8 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddft_methods
+   USE machine,                         ONLY: m_flush,&
+                                              m_walltime
    USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type,&
                                               release_neighbor_list_sets
    USE cp_fm_diag,                      ONLY: choose_eigv_solver
@@ -108,7 +110,6 @@ MODULE qs_tddft_methods
    USE lri_environment_methods,         ONLY: lri_print_stat
    USE lri_environment_types,           ONLY: lri_density_release,&
                                               lri_env_release
-   USE machine,                         ONLY: m_flush
    USE message_passing,                 ONLY: mp_para_env_type
    USE min_basis_set,                   ONLY: create_minbas_set
    USE particle_types,                  ONLY: particle_type
@@ -218,8 +219,9 @@ MODULE qs_tddft_methods
 
 
       ! POOL AO [nbf, nbf]
-      TYPE(cp_fm_pool_p_type), POINTER                   :: fm_pool_ao => NULL()
+      TYPE(cp_fm_pool_p_type), POINTER, DIMENSION(:)     :: fm_pool_ao => NULL()
       ! Work
+      TYPE(cp_fm_type), POINTER, DIMENSION(:)            :: work_ao_ao => NULL()
       TYPE(cp_fm_type), POINTER                          :: hmat_ao_ao => NULL()
       TYPE(cp_fm_type), POINTER                          :: work1_ao_ao => NULL()
       TYPE(cp_fm_type), POINTER                          :: work2_ao_ao => NULL()
@@ -434,38 +436,47 @@ CONTAINS
       END DO
 
       !---------- AO POOL [nbf, nbf] : fm_pool_ao
-      ALLOCATE (this%fm_pool_ao)
-      NULLIFY (this%fm_pool_ao%pool)
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=this%nbf, &
-                               ncol_global=this%nbf, &
-                               context=sub_env%blacs_env)
-      CALL fm_pool_create(this%fm_pool_ao%pool, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
+      ALLOCATE (this%fm_pool_ao(this%nSpins))
+      DO ispin = 1, this%nSpins
+         NULLIFY (this%fm_pool_ao(ispin)%pool)
+
+         CALL cp_fm_struct_create(fm_struct, &
+                                  nrow_global=this%nbf, &
+                                  ncol_global=this%nbf, &
+                                  context=sub_env%blacs_env)
+         CALL fm_pool_create(this%fm_pool_ao(ispin)%pool, fm_struct)
+         CALL cp_fm_struct_release(fm_struct)
+      END DO
       !---------- END AO POOL [nbf, nbf]
 
       ! AO POOL: Fock (nSpins)[nbf, nbf]
       ALLOCATE (this%fock(this%nSpins))
       DO ispin = 1, this%nSpins
-         CALL fm_pool_create_fm(this%fm_pool_ao%pool, &
+         CALL fm_pool_create_fm(this%fm_pool_ao(ispin)%pool, &
                                 this%fock(ispin))
       END DO
       ! AO POOL: evects_ao_ao (nspin)
       ALLOCATE (this%evects_ao_ao(1))
       DO ispin = 1, 1
-         CALL fm_pool_create_fm(this%fm_pool_ao%pool, &
+         CALL fm_pool_create_fm(this%fm_pool_ao(ispin)%pool, &
                                 this%evects_ao_ao(ispin))
+      END DO
+      ! AO POOL: Fock (nSpins)[nbf, nbf]
+      ALLOCATE (this%work_ao_ao(this%nSpins))
+      DO ispin = 1, this%nSpins
+         CALL fm_pool_create_fm(this%fm_pool_ao(ispin)%pool, &
+                                this%work_ao_ao(ispin))
       END DO
 
       ! AO POOL: Work
       ALLOCATE(this%work1_ao_ao)
-      CALL fm_pool_create_fm(this%fm_pool_ao%pool, this%work1_ao_ao)
+      CALL fm_pool_create_fm(this%fm_pool_ao(1)%pool, this%work1_ao_ao)
       ALLOCATE(this%work2_ao_ao)
-      CALL fm_pool_create_fm(this%fm_pool_ao%pool, this%work2_ao_ao)
+      CALL fm_pool_create_fm(this%fm_pool_ao(1)%pool, this%work2_ao_ao)
       ALLOCATE (this%hmat_ao_ao)
-      CALL fm_pool_create_fm(this%fm_pool_ao%pool, this%hmat_ao_ao)
+      CALL fm_pool_create_fm(this%fm_pool_ao(1)%pool, this%hmat_ao_ao)
       ALLOCATE (this%gs_rho_orb_ao_fm)
-      CALL fm_pool_create_fm(this%fm_pool_ao%pool, this%gs_rho_orb_ao_fm)
+      CALL fm_pool_create_fm(this%fm_pool_ao(1)%pool, this%gs_rho_orb_ao_fm)
 
 
       !--------------------
@@ -572,6 +583,7 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_setup_data'
 
       INTEGER                                            :: handle, log_unit, ispin
+      INTEGER                                            :: nrow, ncol
       LOGICAL                                            :: do_exck
 
       CALL timeset(routineN, handle)
@@ -605,17 +617,29 @@ CONTAINS
 !     END IF
 !
       ! Transfom matrix_ks from AO to MO basis
+      print *,  "nbf = ", this%nbf
+      print *,  "nmo (alpha) = ", this%nocca + this%nvira
+      print *,  "nmo (beta) = ", this%noccb + this%nvirb
+      DO ispin = 1, this%nSpins
+         CALL cp_fm_get_info(gs_mos(ispin)%mos_full, nrow_global=nrow, ncol_global=ncol)
+         print *,  "gs_mos(ispin)%mos_full: ", nrow, ncol
+         CALL cp_fm_get_info(this%fock(ispin), nrow_global=nrow, ncol_global=ncol)
+         print *,  "this%fock(ispin): ", nrow, ncol
+         CALL cp_fm_get_info(this%work_ao_ao(ispin), nrow_global=nrow, ncol_global=ncol)
+         print *,  "this%work_ao_ao: ", nrow, ncol
+      END DO
+
       DO ispin = 1, this%nSpins
          CALL copy_dbcsr_to_fm(matrix_ks(ispin)%matrix, this%fock(ispin))
-         ! work1_ao_ao = gs_mos(1)%mos_full^T * this%fock
+         ! work_ao_ao = gs_mos(1)%mos_full^T * this%fock
          CALL parallel_gemm('T', 'N', this%nbf, this%nbf, this%nbf, &
                             1.0_dp, gs_mos(ispin)%mos_full, &
                                     this%fock(ispin), &
-                            0.0_dp, this%work1_ao_ao)
+                            0.0_dp, this%work_ao_ao(ispin))
 
-         ! this%fock = work1_ao_ao * gs_mos(2)%mos_full
+         ! this%fock = work_ao_ao * gs_mos(2)%mos_full
          CALL parallel_gemm('N', 'N', this%nbf, this%nbf, this%nbf, &
-                            1.0_dp, this%work1_ao_ao, &
+                            1.0_dp, this%work_ao_ao(ispin), &
                                     gs_mos(ispin)%mos_full, &
                             0.0_dp, this%fock(ispin))
       END DO
@@ -707,7 +731,7 @@ CONTAINS
       !--------------------
       IF (ALLOCATED(this%fock)) THEN
          DO ispin = 1, SIZE(this%fock, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
+            CALL fm_pool_give_back_fm(this%fm_pool_ao(ispin)%pool, &
                                       this%fock(ispin))
          END DO
          DEALLOCATE(this%fock)
@@ -774,7 +798,9 @@ CONTAINS
       END IF
 
       IF (ASSOCIATED(this%fm_pool_ao)) THEN
-         CALL fm_pool_release(this%fm_pool_ao%pool)
+         DO ispin = SIZE(this%fm_pool_ao),1,-1
+            CALL fm_pool_release(this%fm_pool_ao(ispin)%pool)
+         END DO
          DEALLOCATE(this%fm_pool_ao)
       END IF
 
@@ -876,6 +902,7 @@ CONTAINS
       INTEGER                                            :: handle, log_unit, &
          energy_unit, iter, niters, iend, ist, ivec, max_krylov_vects, &
          mxvec, i, a, ij, ierr, j, k, iv, ms
+      REAL(kind=dp)                                      :: t1, t2
       REAL(KIND=DP)                                      :: conv, val, sig, scal, val2, max_error
       LOGICAL                                            :: is_converged
 
@@ -883,6 +910,8 @@ CONTAINS
 
       matrix_ks = matrix_ks
       kernel_env = kernel_env
+
+      t1 = m_walltime()
 
       niters = tddfpt_control%niters
       IF (niters > 0) THEN
@@ -1040,7 +1069,7 @@ CONTAINS
                ! Print
                CALL print_mat_ao_ao(this%sigma_vecs(ivec), "sigma_vecs", logger, ivec)
 
-               IF (.TRUE.) THEN
+               IF (.FALSE.) THEN
                   ! Add ROHF corrections using Fock matrix contributions
                   ! Sigma = X*F_b - F_a*X
                   ! C[nocca,nvirb] = -1.0*A[nocca,nocca]*B[nocca,nvirb]+0.0*C[nocca,nvirb]
@@ -1235,6 +1264,12 @@ CONTAINS
             END IF
 
             max_error = maxval(this%residual_norms)
+            t2 = m_walltime()
+            IF (log_unit > 0) THEN
+               WRITE (log_unit, '(T7,I8,T24,F7.1,T40,ES11.4,T66)') iter, t2 - t1, max_error
+               CALL m_flush(log_unit)
+            END IF
+            t1 = t2
 
             is_converged = .FALSE.
             is_converged = max_error<=1.e-6_dp

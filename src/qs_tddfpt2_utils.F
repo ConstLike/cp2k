@@ -106,14 +106,13 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddfpt_init_mos'
 
       INTEGER                                            :: handle, ispin, nmo_avail, nmo_occ, &
-                                                            nmo_virt, nspins, nmo, nao
+                                                            nmo_virt, nspins
       INTEGER, DIMENSION(2, 2)                           :: moc, mvt, mfc
       LOGICAL                                            :: print_virtuals_newtonx
       REAL(kind=dp), DIMENSION(:), POINTER               :: evals_virt_spin
       TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_1d_r_p_type), DIMENSION(:), POINTER        :: evals_virt
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
-      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:), &
          TARGET                                          :: mos_virt
       TYPE(cp_fm_type), POINTER                          :: mos_virt_spin
@@ -183,32 +182,15 @@ CONTAINS
                                            matrix_ks=matrix_ks(ispin)%matrix, matrix_s=matrix_s(1)%matrix, &
                                            mos_virt=mos_virt_spin, evals_virt=evals_virt_spin, &
                                            qs_env=qs_env)
-
          ! Get information about the MO set
-         CALL get_mo_set(mos(ispin), nmo=nmo, homo=nmo_occ, nao=nao)
-         NULLIFY(fm_struct)
-         CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nmo, context=blacs_env)
-         ALLOCATE(gs_mos(ispin)%mos_full)
-         CALL cp_fm_create(gs_mos(ispin)%mos_full, fm_struct)
-         CALL cp_fm_struct_release(fm_struct)
-
-         ! Copy MO coefficients from mo_set
-         CALL cp_fm_to_fm(mos(ispin)%mo_coeff, gs_mos(ispin)%mos_full)
-
-         ! Store the full set of eigenvalues
-         ALLOCATE(gs_mos(ispin)%evals_full(nmo))
-         gs_mos(ispin)%evals_full(1:nmo) = mos(ispin)%eigenvalues(1:nmo)
-
-         ! Store the full set of occupation numbers
-         ALLOCATE(gs_mos(ispin)%occ_full(nmo))
-         gs_mos(ispin)%occ_full(1:nmo) = mos(ispin)%occupation_numbers(1:nmo)
-
+         CALL get_mo_set(mos(ispin), homo=nmo_occ)
          ! Set the HOMO index
          gs_mos(ispin)%homo = nmo_occ
       END DO
 
       moc = 0
       mvt = 0
+      mfc = 0
       DO ispin = 1, nspins
          CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, nrow_global=moc(1, ispin), ncol_global=moc(2, ispin))
          CALL cp_fm_get_info(gs_mos(ispin)%mos_virt, nrow_global=mvt(1, ispin), ncol_global=mvt(2, ispin))
@@ -224,8 +206,7 @@ CONTAINS
          WRITE(iounit, "(T2,A,T36,A)") "TDDFPT| Full Orbital Set:", &
             " Spin       AOs      Total     HOMO"
          DO ispin = 1, nspins
-            WRITE(iounit, "(T2,A,T37,I4,3I10)") "TDDFPT| ", ispin, mfc(1, ispin), mfc(2, ispin), &
-               gs_mos(ispin)%homo
+            WRITE(iounit, "(T2,A,T37,I4,3I10)") "TDDFPT| ", ispin, mfc(1, ispin), mfc(2, ispin), gs_mos(ispin)%homo
          END DO
       END IF
 
@@ -335,20 +316,23 @@ CONTAINS
       CALL cp_fm_struct_create(ao_mo_occ_fm_struct, nrow_global=nao, ncol_global=nmo_occ, context=blacs_env)
       CALL cp_fm_struct_create(ao_mo_virt_fm_struct, nrow_global=nao, ncol_global=nmo_virt, context=blacs_env)
 
-      NULLIFY (gs_mos%mos_occ, gs_mos%mos_virt, gs_mos%evals_occ_matrix)
-      ALLOCATE (gs_mos%mos_occ, gs_mos%mos_virt)
+      NULLIFY (gs_mos%mos_occ, gs_mos%mos_virt, gs_mos%evals_occ_matrix, gs_mos%mos_full)
+      ALLOCATE (gs_mos%mos_occ, gs_mos%mos_virt, gs_mos%mos_full)
       CALL cp_fm_create(gs_mos%mos_occ, ao_mo_occ_fm_struct)
       CALL cp_fm_create(gs_mos%mos_virt, ao_mo_virt_fm_struct)
 
       ALLOCATE (gs_mos%evals_occ(nmo_occ))
       ALLOCATE (gs_mos%evals_virt(nmo_virt))
+      ALLOCATE (gs_mos%evals_full(nao))
       ALLOCATE (gs_mos%phases_occ(nmo_occ))
       ALLOCATE (gs_mos%phases_virt(nmo_virt))
+      ALLOCATE (gs_mos%phases_full(nao))
 
       ! ++ nullify pointers
       NULLIFY (ao_ao_fm_struct, wfn_fm_struct)
       NULLIFY (mos_extended, mo_coeff_extended, mo_evals_extended, mo_occ_extended)
       CALL cp_fm_struct_create(ao_ao_fm_struct, nrow_global=nao, ncol_global=nao, context=blacs_env)
+      CALL cp_fm_create(gs_mos%mos_full, ao_ao_fm_struct)
 
       IF (do_eigen) THEN
          ! ++ set of molecular orbitals
@@ -471,6 +455,7 @@ CONTAINS
             END IF
          END IF
       END DO
+      gs_mos%phases_full(1:nmo_occ) = gs_mos%phases_occ(1:nmo_occ)
 
       DEALLOCATE (minrow_neg_array, minrow_pos_array, sum_sign_array)
 
@@ -483,12 +468,16 @@ CONTAINS
                           source_start=nmo_occ + 1, target_start=1)
          CALL cp_fm_to_fm(mos_virt, gs_mos%mos_virt, ncol=nmo_virt - (nmo_scf - nmo_occ), &
                           source_start=1, target_start=nmo_scf - nmo_occ + 1)
+         CALL cp_fm_to_fm(mo_coeff_extended, gs_mos%mos_full, ncol=nmo_scf, source_start=1, target_start=1)
          gs_mos%evals_virt(1:nmo_scf - nmo_occ) = evals_virt(nmo_occ + 1:nmo_occ + nmo_scf)
          gs_mos%evals_virt(nmo_scf - nmo_occ + 1:nmo_virt) = evals_virt(1:nmo_virt - (nmo_scf - nmo_occ))
       ELSE
          CALL cp_fm_to_fm(mo_coeff_extended, gs_mos%mos_virt, ncol=nmo_virt, source_start=nmo_occ + 1, target_start=1)
+         CALL cp_fm_to_fm(mo_coeff_extended, gs_mos%mos_full, ncol=nmo_scf, source_start=1, target_start=1)
          gs_mos%evals_virt(1:nmo_virt) = mo_evals_extended(nmo_occ + 1:nmo_occ + nmo_virt)
       END IF
+      gs_mos%evals_full(1:nmo_occ) = gs_mos%evals_occ(1:nmo_occ)
+      gs_mos%evals_full(nmo_occ+1:nmo_occ+nmo_virt) = gs_mos%evals_virt(1:nmo_virt)
 
       IF (print_phases) THEN
          ! compute the phase of molecular orbitals;
@@ -552,6 +541,7 @@ CONTAINS
                END IF
             END IF
          END DO
+         gs_mos%phases_full(nmo_occ+1:nmo_occ+nmo_virt) = gs_mos%phases_virt(1:nmo_virt)
          DEALLOCATE (minrow_neg_array, minrow_pos_array, sum_sign_array)
          CALL cp_fm_release(work_fm_virt)
       END IF !print_phases
@@ -586,6 +576,9 @@ CONTAINS
       IF (ALLOCATED(gs_mos%phases_occ)) &
          DEALLOCATE (gs_mos%phases_occ)
 
+      IF (ALLOCATED(gs_mos%evals_full)) &
+         DEALLOCATE(gs_mos%evals_full)
+
       IF (ALLOCATED(gs_mos%evals_virt)) &
          DEALLOCATE (gs_mos%evals_virt)
 
@@ -595,11 +588,8 @@ CONTAINS
       IF (ALLOCATED(gs_mos%phases_virt)) &
          DEALLOCATE (gs_mos%phases_virt)
 
-      IF (ALLOCATED(gs_mos%evals_full)) &
-         DEALLOCATE(gs_mos%evals_full)
-
-      IF (ALLOCATED(gs_mos%occ_full)) &
-         DEALLOCATE(gs_mos%occ_full)
+      IF (ALLOCATED(gs_mos%phases_full)) &
+         DEALLOCATE (gs_mos%phases_full)
 
       IF (ASSOCIATED(gs_mos%evals_occ_matrix)) THEN
          CALL cp_fm_release(gs_mos%evals_occ_matrix)

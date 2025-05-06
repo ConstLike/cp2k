@@ -222,7 +222,7 @@ CONTAINS
       tddfpt_control%hfxsr_re_int = .TRUE.
       tddfpt_control%do_hfxlr = do_hfxlr
       tddfpt_control%do_exck = do_exck
-      tddfpt_control%spinflip = tddfpt_control%sf_tddft
+!     tddfpt_control%spinflip = tddfpt_control%sf_tddft
       do_sf = tddfpt_control%spinflip /= no_sf_tddfpt
       IF (tddfpt_control%do_hfxlr) THEN
          kernel_section => section_vals_get_subs_vals(tddfpt_section, "XC%HFX_KERNEL%HFXLR")
@@ -305,7 +305,7 @@ CONTAINS
 
          CALL tddft%setup(qs_env, gs_mos, matrix_ks, logger, xc_section, &
             tddfpt_print_section, tddfpt_control, kernel_env, full_kernel_env, sub_env)
-
+ 
          CALL tddft%run(qs_env, tddfpt_control, logger, tddfpt_print_section, &
             gs_mos, kernel_env, matrix_ks, sub_env)
  
@@ -344,6 +344,7 @@ CONTAINS
 !              tddfpt_control%do_directional_exciton_descriptors, &
 !              qs_env)
 !        END IF
+         CALL tddft%clean()
       END IF
 
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
@@ -575,7 +576,6 @@ CONTAINS
 
 
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
-         CALL tddft%clean()
          IF (do_admm) CALL release_kernel_env(kernel_env%admm_kernel)
          IF (tddfpt_control%do_lrigpw) THEN
             CALL lri_env_release(kernel_env%full_kernel%lri_env)
