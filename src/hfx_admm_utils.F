@@ -2474,8 +2474,7 @@ CONTAINS
 !>     Simplified version of subroutine hfx_ks_matrix()
 ! **************************************************************************************************
    SUBROUTINE tddft_hfx_matrix(matrix_ks, rho_ao, qs_env, update_energy, recalc_integrals, &
-                               external_hfx_sections, external_x_data, external_para_env,&
-                               my_nspins)
+                               external_hfx_sections, external_x_data, external_para_env)
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(INOUT), &
          TARGET                                          :: matrix_ks, rho_ao
       TYPE(qs_environment_type), POINTER                 :: qs_env
@@ -2483,7 +2482,6 @@ CONTAINS
       TYPE(section_vals_type), OPTIONAL, POINTER         :: external_hfx_sections
       TYPE(hfx_type), DIMENSION(:, :), OPTIONAL, TARGET  :: external_x_data
       TYPE(mp_para_env_type), OPTIONAL, POINTER          :: external_para_env
-      INTEGER, OPTIONAL                                  :: my_nspins
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_hfx_matrix'
 
@@ -2526,7 +2524,6 @@ CONTAINS
 
       CPASSERT(dft_control%nimages == 1)
       nspins = dft_control%nspins
-      IF (PRESENT(my_nspins)) nspins = my_nspins
 
       CALL section_vals_get(hfx_sections, n_repetition=n_rep_hf)
       CALL section_vals_val_get(hfx_sections, "TREAT_LSD_IN_CORE", l_val=hfx_treat_lsd_in_core, &

@@ -145,7 +145,7 @@ CONTAINS
       gapw = dft_control%qs_control%gapw
       gapw_xc = dft_control%qs_control%gapw_xc
       spinflip = dft_control%tddfpt2_control%spinflip
-      
+
       do_noncol = spinflip.EQ.tddfpt_sf_noncol
 
       CALL cp_fm_get_info(evects(1, 1), nrow_global=nao)
@@ -236,7 +236,7 @@ CONTAINS
          DO ispin = 1, nspins
             CALL pw_zero(work_matrices%A_ia_rspace_sub(ispin))
          END DO
-        
+
          ! Skip kernel if collinear xc-kernel for spin-flip is requested
          IF (spinflip /= tddfpt_sf_col) THEN
 

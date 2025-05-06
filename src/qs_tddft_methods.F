@@ -11,7 +11,9 @@ MODULE qs_tddft_methods
    USE cp_fm_diag,                      ONLY: choose_eigv_solver
    USE cp_fm_basic_linalg,              ONLY: cp_fm_scale_and_add,&
                                               cp_fm_trace,&
-                                              cp_fm_transpose
+                                              cp_fm_transpose,&
+                                              cp_fm_column_scale,&
+                                              cp_fm_row_scale
    USE hfx_admm_utils,                  ONLY: tddft_hfx_matrix
    USE cp_dbcsr_operations,             ONLY: copy_fm_to_dbcsr,&
                                               copy_dbcsr_to_fm,&
@@ -70,9 +72,12 @@ MODULE qs_tddft_methods
                                               cp_fm_to_fm,&
                                               cp_fm_to_fm_submat,&
                                               cp_fm_type,&
-                                              cp_fm_set_element,&
+                                              cp_fm_set_element, &
+                                              cp_fm_get_element, &
                                               cp_fm_get_submatrix,&
-                                              cp_fm_write_formatted
+                                              cp_fm_write_formatted,&
+                                              cp_fm_write_unformatted,&
+                                              cp_fm_vectorsnorm
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_get_default_io_unit,&
                                               cp_logger_type
@@ -236,8 +241,19 @@ MODULE qs_tddft_methods
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: gs_rho_xc_ao
       TYPE(cp_fm_type), POINTER                          :: gs_rho_orb_ao_fm => NULL()
 
-
+      ! ---------- FOR DAVIDSON ----------
       TYPE(cp_fm_type), POINTER                          :: subspace => NULL()
+      TYPE(cp_fm_type), POINTER                          :: subspace_evecs => NULL()
+      TYPE(cp_fm_type), POINTER                          :: transformation_matrix => NULL()
+      REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: vector_norm
+      REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: vector_scal
+      TYPE(cp_fm_type) , ALLOCATABLE , DIMENSION(:) :: ritz_vecs      ! Y_k (MO basis)
+      TYPE(cp_fm_type) , ALLOCATABLE , DIMENSION(:) :: ritz_sigma     ! Σ Y_k
+      TYPE(cp_fm_type) , ALLOCATABLE , DIMENSION(:) :: residual_vecs  ! pre-conditioned R_k
+      REAL(kind=dp)    , ALLOCATABLE , DIMENSION(:) :: residual_norms  ! pre-conditioned R_k
+      REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: ritz_evals      ! ω_k
+      INTEGER                                   :: novec = 0          ! sub-space size
+
 
       CONTAINS
          PROCEDURE :: init => tddft_initialize_data
@@ -319,6 +335,7 @@ CONTAINS
       this%mxvec = min(this%maxvec*this%nstates, this%xvec_dim)
       this%nStates = min(this%nstates, this%mxvec)
       this%nvec = min(max(2*this%nStates, 5), this%mxvec)
+      this%novec = this%nvec
 
       IF (this%nStates > this%nStates_max) THEN
          CPWARN("NUMBER OF EXCITED STATES COULD LEAD TO PROBLEMS!")
@@ -331,6 +348,10 @@ CONTAINS
       !--------------------
       ALLOCATE (this%e_virt_minus_occ(this%xvec_dim))
       ALLOCATE (this%evals(this%mxvec))
+      ALLOCATE (this%ritz_evals(this%mxvec), source=0.0_dp)
+      ALLOCATE (this%vector_scal(this%mxvec))
+      ALLOCATE (this%vector_norm(this%mxvec))
+      ALLOCATE (this%residual_norms(this%nstates), source=0.0_dp)
 
       !--------------------
       ! ALLOCATE  FM
@@ -402,6 +423,15 @@ CONTAINS
       CALL fm_pool_create_fm(this%fm_pool_mo%pool, &
                              this%work_noc_vir)
 
+      ! MO POOL: ritz [nocca, nvirb]
+      ALLOCATE(this%ritz_vecs(this%nstates),   &
+               this%ritz_sigma(this%nstates),  &
+               this%residual_vecs(this%nstates))
+      DO ivec = 1, this%nstates
+         CALL fm_pool_create_fm(this%fm_pool_mo%pool, this%ritz_vecs(ivec))
+         CALL fm_pool_create_fm(this%fm_pool_mo%pool, this%ritz_sigma(ivec))
+         CALL fm_pool_create_fm(this%fm_pool_mo%pool, this%residual_vecs(ivec))
+      END DO
 
       !---------- AO POOL [nbf, nbf] : fm_pool_ao
       ALLOCATE (this%fm_pool_ao)
@@ -445,10 +475,10 @@ CONTAINS
       dbcsr_template_hfx => matrix_s(1)%matrix
 
       NULLIFY (this%work_rho_ao_ao_symm)
-      CALL dbcsr_allocate_matrix_set(this%work_rho_ao_ao_symm, 1)
+      CALL dbcsr_allocate_matrix_set(this%work_rho_ao_ao_symm, this%nSpins)
       NULLIFY (this%work_rho_ao_ao_asymm)
-      CALL dbcsr_allocate_matrix_set(this%work_rho_ao_ao_asymm, 1)
-      DO ispin = 1, 1
+      CALL dbcsr_allocate_matrix_set(this%work_rho_ao_ao_asymm, this%nSpins)
+      DO ispin = 1, this%nSpins
          CALL dbcsr_init_p(this%work_rho_ao_ao_symm(ispin)%matrix)
          CALL tddfpt_dbcsr_create_by_dist( &
                   this%work_rho_ao_ao_symm(ispin)%matrix, &
@@ -464,10 +494,9 @@ CONTAINS
                                           this%work_rho_ao_ao_asymm(ispin)%matrix)
       END DO
 
-      ispin = 1
-      CALL dbcsr_allocate_matrix_set(this%work_hmat_symm, ispin)
-      CALL dbcsr_allocate_matrix_set(this%work_hmat_asymm, ispin)
-      DO ispin = 1, 1
+      CALL dbcsr_allocate_matrix_set(this%work_hmat_symm, this%nSpins)
+      CALL dbcsr_allocate_matrix_set(this%work_hmat_asymm, this%nSpins)
+      DO ispin = 1, this%nSpins
          CALL dbcsr_init_p(this%work_hmat_symm(ispin)%matrix)
          CALL tddfpt_dbcsr_create_by_dist(this%work_hmat_symm(ispin)%matrix, &
                                           template=dbcsr_template_hfx, dbcsr_dist=sub_env%dbcsr_dist, sab=sab_hfx)
@@ -611,7 +640,7 @@ CONTAINS
                                       "GUESS_VECTORS", extension=".tddfptLog")
 
       CALL tddft_guess_vectors(this%evects_mo, this%evals, this%e_virt_minus_occ, &
-                               gs_mos, this%nstates, log_unit, tddfpt_control)
+                               gs_mos, this%nvec, log_unit, tddfpt_control)
       CALL cp_print_key_finished_output(log_unit, logger, &
                                         tddfpt_print_section, "GUESS_VECTORS")
       ! Close logger
@@ -642,7 +671,18 @@ CONTAINS
       IF (ALLOCATED(this%evals)) THEN
          DEALLOCATE(this%evals)
       END IF
-
+      IF (ALLOCATED(this%ritz_evals)) THEN
+         DEALLOCATE(this%ritz_evals)
+      END IF
+      IF (ALLOCATED(this%vector_scal)) THEN
+         DEALLOCATE (this%vector_scal)
+      END IF
+      IF (ALLOCATED(this%vector_norm)) THEN
+         DEALLOCATE (this%vector_norm)
+      END IF
+      IF (ALLOCATED(this%residual_norms)) THEN
+         DEALLOCATE (this%residual_norms)
+      END IF
       !--------------------
       ! ALLOCATE  FM
       !--------------------
@@ -718,6 +758,14 @@ CONTAINS
          CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
                                    this%gs_rho_orb_ao_fm)
          DEALLOCATE(this%gs_rho_orb_ao_fm)
+      END IF
+      IF (ALLOCATED(this%ritz_vecs))  THEN
+         DO ivec = SIZE(this%ritz_vecs),1,-1
+            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool,this%ritz_vecs(ivec))
+            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool,this%ritz_sigma(ivec))
+            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool,this%residual_vecs(ivec))
+         END DO
+         DEALLOCATE(this%ritz_vecs, this%ritz_sigma, this%residual_vecs)
       END IF
 
       IF (ASSOCIATED(this%fm_pool_mo)) THEN
@@ -826,10 +874,10 @@ CONTAINS
 
       CHARACTER(len=20)                                  :: nStates_str
       INTEGER                                            :: handle, log_unit, &
-         energy_unit, iter, niters, nv, iend, ist, ivec, max_krylov_vects, &
-         mxvec, i, a, ij, ierr, j
-      REAL(KIND=DP)                                      :: conv, val
-      REAL(dp), POINTER, CONTIGUOUS                      :: evects_data(:,:), aop_data(:,:)
+         energy_unit, iter, niters, iend, ist, ivec, max_krylov_vects, &
+         mxvec, i, a, ij, ierr, j, k, iv, ms
+      REAL(KIND=DP)                                      :: conv, val, sig, scal, val2, max_error
+      LOGICAL                                            :: is_converged
 
       CALL timeset(routineN, handle)
 
@@ -851,7 +899,6 @@ CONTAINS
                "-                     SF-TDDFT WAVEFUNCTION OPTIMIZATION                       -", &
                "-------------------------------------------------------------------------------"
 
-            WRITE (log_unit, '(/,T11,A,T27,A,T40,A,T62,A)') "Step", "Time", "Convergence", "Conv. states"
             WRITE (log_unit, '(1X,79("-"))')
          END IF
 
@@ -860,12 +907,11 @@ CONTAINS
          mxvec = this%nocca * this%nvirb
          max_krylov_vects = MIN(MAX(tddfpt_control%nkvs, this%nStates), INT(mxvec))
 
-         ierr = 0
          ist = 1
-         iend = this%nStates
+         iend = this%nvec
+         ierr = 0
+
          DO iter = 1, niters
-            ! Compute the number of vectors processed in current iteration
-            nv = iend-ist+1
 
             ! Transform trial vectors from MO to AO basis
             DO ivec = ist, iend
@@ -883,19 +929,22 @@ CONTAINS
                                   0.0_dp, this%evects_ao_ao(1))
 
                ! Print
+!              IF (log_unit > 0) THEN
+!                 CALL cp_fm_write_formatted(this%evects_ao_ao(1), log_unit)
+!              END IF
                CALL print_mat_ao_ao(this%evects_ao_ao(1), 'evects', logger, ivec)
 
                ! Transform to sym/asym
                ! symm
-               CALL cp_fm_set_all(this%work1_ao_ao, 0.0_dp)
-               ! work1_sym = 0.5*X
+               CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
+               ! work1 = 0.5*X
                CALL cp_fm_scale_and_add( &
                          alpha=0.0_dp, matrix_a=this%work1_ao_ao, &
                          beta=0.5_dp,  matrix_b=this%evects_ao_ao(1))
-               ! work2_sym = X^T
+               ! work2 = X^T
                CALL cp_fm_transpose(this%evects_ao_ao(1), this%work2_ao_ao)
 
-               ! work1_sym += 0.5*work2_sym
+               ! work1 += 0.5*work2
                CALL cp_fm_scale_and_add( &
                          alpha=1.0_dp, matrix_a=this%work1_ao_ao, &
                          beta=0.5_dp,  matrix_b=this%work2_ao_ao)
@@ -904,20 +953,21 @@ CONTAINS
                CALL print_mat_ao_ao(this%work1_ao_ao, 'work_sym', logger, ivec)
 
                ! Set density-like to 0.0
-               CALL dbcsr_set(this%work_rho_ao_ao_symm(1)%matrix, 0.0_dp)
+               CALL dbcsr_set(matrix=this%work_rho_ao_ao_symm(1)%matrix, &
+                              alpha=0.0_dp)
 
                ! FM to DBCSR
-               CALL copy_fm_to_dbcsr(this%work1_ao_ao, &
-                                     this%work_rho_ao_ao_symm(1)%matrix, &
+               CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
+                                     matrix=this%work_rho_ao_ao_symm(1)%matrix, &
                                      keep_sparsity=.TRUE.)
                ! asymm
-               CALL cp_fm_set_all(this%work1_ao_ao, 0.0_dp)
+               CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
 
-               ! work1_sym = 0.5*X
+               ! work1 = 0.5*X
                CALL cp_fm_scale_and_add( &
                          alpha=0.0_dp, matrix_a=this%work1_ao_ao, &
                          beta=0.5_dp,  matrix_b=this%evects_ao_ao(1))
-               ! work1_sym += 0.5*work2_sym
+               ! work1 -= 0.5*work2
                CALL cp_fm_scale_and_add( &
                          alpha=1.0_dp, matrix_a=this%work1_ao_ao, &
                          beta=-0.5_dp, matrix_b=this%work2_ao_ao)
@@ -926,43 +976,50 @@ CONTAINS
                CALL print_mat_ao_ao(this%work1_ao_ao, 'work_asym', logger, ivec)
 
                ! Set density-like to 0.0
-               CALL dbcsr_set(this%work_rho_ao_ao_asymm(1)%matrix, 0.0_dp)
+               CALL dbcsr_set(matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
+                              alpha=0.0_dp)
 
                ! FM to DBCSR
-               CALL copy_fm_to_dbcsr(this%work1_ao_ao, &
-                                     this%work_rho_ao_ao_asymm(1)%matrix, &
+               CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
+                                     matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
                                      keep_sparsity=.TRUE.)
 
                ! Set sigma to 0.0
-               CALL dbcsr_set(this%work_hmat_symm(1)%matrix, 0.0_dp)
-               CALL dbcsr_set(this%work_hmat_asymm(1)%matrix, 0.0_dp)
+               CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
+               CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
 
                !-----------------------------------------------
                ! ERI contraction: Sigma = ERI * X [DBCSR type]
                !-----------------------------------------------
-               CALL tddft_hfx_matrix(this%work_hmat_symm, this%work_rho_ao_ao_symm, qs_env, my_nspins=1)
-               CALL tddft_hfx_matrix(this%work_hmat_asymm, this%work_rho_ao_ao_asymm, qs_env, my_nspins=1)
-
+               qs_env = qs_env
+               CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
+                                     rho_ao=this%work_rho_ao_ao_symm, &
+                                     qs_env=qs_env)
+               CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
+                                     rho_ao=this%work_rho_ao_ao_asymm, &
+                                     qs_env=qs_env)
+ 
                !-----------------------------------------------
                ! Transform back to MO basis
                !-----------------------------------------------
                ! BDCSR to FM
-               CALL cp_fm_set_all(this%work1_ao_ao, 0.0_dp)
-               CALL cp_fm_set_all(this%work2_ao_ao, 0.0_dp)
-               CALL copy_dbcsr_to_fm(this%work_hmat_symm(1)%matrix, &
-                                     this%work1_ao_ao)
-               CALL copy_dbcsr_to_fm(this%work_hmat_asymm(1)%matrix, &
-                                     this%work2_ao_ao)
+               CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
+               CALL cp_fm_set_all(matrix=this%work2_ao_ao, alpha=0.0_dp)
+
+               CALL copy_dbcsr_to_fm(matrix=this%work_hmat_symm(1)%matrix, &
+                                     fm=this%work1_ao_ao)
+               CALL copy_dbcsr_to_fm(matrix=this%work_hmat_asymm(1)%matrix, &
+                                     fm=this%work2_ao_ao)
                ! Print
                CALL print_mat_ao_ao(this%work1_ao_ao, 'Awork_sym', logger, ivec)
                CALL print_mat_ao_ao(this%work2_ao_ao, 'Awork_asym', logger, ivec)
 
-               CALL cp_fm_set_all(this%hmat_ao_ao, 0.0_dp)
-               ! A = 0.0*A + 1.0*B_sym
+               CALL cp_fm_set_all(matrix=this%hmat_ao_ao, alpha=0.0_dp)
+               ! A = 0.0*A + 1.0*B
                CALL cp_fm_scale_and_add( &
                         alpha=0.0_dp, matrix_a=this%hmat_ao_ao, &
                         beta=1.0_dp,  matrix_b=this%work1_ao_ao)
-               ! A = 1.0*A + 1.0*B_asym
+               ! A = 1.0*A + 1.0*B
                CALL cp_fm_scale_and_add( &
                         alpha=1.0_dp, matrix_a=this%hmat_ao_ao, &
                         beta=1.0_dp,  matrix_b=this%work2_ao_ao)
@@ -980,6 +1037,8 @@ CONTAINS
                                   1.0_dp, this%work_noc_ao, &
                                           gs_mos(2)%mos_virt, &
                                   0.0_dp, this%sigma_vecs(ivec))
+               ! Print
+               CALL print_mat_ao_ao(this%sigma_vecs(ivec), "sigma_vecs", logger, ivec)
 
                IF (.TRUE.) THEN
                   ! Add ROHF corrections using Fock matrix contributions
@@ -997,165 +1056,235 @@ CONTAINS
                                       1.0_dp, this%work_noc_vir)
 
                   ! Add corrections to sigma_mo
+                  ! A = 1.0 * A + 1.0 * B
                   CALL cp_fm_scale_and_add( &
-                           alpha=1.0_dp, matrix_a=this%work_noc_vir, &
-                           beta=1.0_dp,  matrix_b=this%sigma_vecs(ivec))
+                           alpha=1.0_dp, matrix_a=this%sigma_vecs(ivec), &
+                           beta=1.0_dp,  matrix_b=this%work_noc_vir)
 
                ELSE
                   ! Add orbital energy difference contributions for UHF
-                  CALL cp_fm_get_info(this%evects_mo(ivec), &
-                                      local_data=evects_data)
-                  CALL cp_fm_get_info(this%sigma_vecs(ivec), &
-                                      local_data=aop_data)
                   ij = 0
                   DO a = 1, this%nvirb
                      DO i = 1, this%nocca
                         ij = ij + 1
-                        aop_data(i, a) = aop_data(i, a) + this%e_virt_minus_occ(ij) &
-                                                          * evects_data(i, a)
+
+                        CALL cp_fm_get_element(matrix=this%sigma_vecs(ivec), &
+                                               irow_global=i, &
+                                               icol_global=a, &
+                                               alpha=sig)
+                        CALL cp_fm_get_element(matrix=this%evects_mo(ivec), &
+                                               irow_global=i, &
+                                               icol_global=a, &
+                                               alpha=val)
+
+                        sig = sig + this%e_virt_minus_occ(ij) * val
+
+                        CALL cp_fm_set_element(matrix=this%sigma_vecs(ivec), &
+                                               irow_global=i, &
+                                               icol_global=a, &
+                                               alpha=sig)
                      END DO
                   END DO
                END IF
+               ! Print
+               CALL print_mat_ao_ao(this%sigma_vecs(ivec), 'sigma_mat', logger, ivec)
             END DO
-
 
             ! alloc A[nvec,nvec]
             CALL alloc_fm_mat(this%subspace, this%nvec, this%nvec, sub_env)
+            CALL alloc_fm_mat(this%subspace_evecs, this%nvec, this%nvec, sub_env)
 
+            ! (1) build sub-space matrix Atilde = X^T * sigma * X
+            ! Could be DGEMM
+            ! C[nvec,nvec] = 1.0*(A(nvec)[dim])^T*B(nvec)[dim] + 0.0*C[nvec,nvec]
+            DO i = 1, this%nvec
+               DO j = 1, i
+                  CALL cp_fm_trace(matrix_a=this%evects_mo(i), &
+                                   matrix_b=this%sigma_vecs(j), &
+                                   trace=val)
+                  CALL cp_fm_set_element(matrix=this%subspace, &
+                                         irow_global=i, &
+                                         icol_global=j, &
+                                         alpha=val)
+                  IF (i/=j) CALL cp_fm_set_element(matrix=this%subspace, &
+                                                   irow_global=j, &
+                                                   icol_global=i, &
+                                                   alpha=val)
+               END DO
+            END DO
             ! Print
             CALL print_mat_ao_ao(this%subspace, "subspace", logger, iter)
 
-            ! Form subspace matrix: X^T * A * X
-            ! Could be DGEMM
-            ! C[nvec,nvec] = 1.0*(A[xvec_dim,nvec])^T*B[xvec_dim,nvec] + 0.0*C[nvec,nvec]
-            ! but need to change matrix structure, therefore
-            ! C[nvec,nvec] = (A(1,nvec)[nocca,nvirb])^T * B(1,nvec)[nocca,nvirb]
+            ! (2) diagonalise Atilde  → omega_i & coeffs
+            ! Diagonalize subspace matrix
+            CALL choose_eigv_solver(matrix=this%subspace, &
+                                    eigenvalues=this%ritz_evals(1:this%nvec), &
+                                    eigenvectors=this%subspace_evecs, &
+                                    info=ierr)
+            CALL dealloc_fm_mat(this%subspace)
+            ! Print
+            print *, "KKK| ================ Energy ============== at iter=", iter
+            DO ivec = 1, this%nstates
+               print *, "KKK| Energy (eV):", ivec, this%ritz_evals(ivec)*evolt
+            END DO
+            CALL print_mat_ao_ao(this%subspace_evecs, "subspace_evecs", logger, iter)
+
+            ! Normalization
+            CALL cp_fm_vectorsnorm(this%subspace_evecs, this%vector_norm(1:this%nvec))
+            this%vector_scal(1:this%nvec) = 1.0_dp/this%vector_norm(1:this%nvec)
             DO i = 1, this%nvec
+               PRINT *, "Norm of column ", i, ": ", this%vector_norm(i)
+            END DO
+            CALL cp_fm_column_scale(this%subspace_evecs, this%vector_scal(1:this%nvec))
+
+            ! Print
+            CALL print_mat_ao_ao(this%subspace_evecs, "normed subspace_evecs", logger, iter)
+
+!           transformation_matrix = subspace_evecs
+            ! Flag(a)
+            DO iv = 1, this%nstates
+               CALL cp_fm_set_all(matrix=this%residual_vecs(iv), &
+                                  alpha=0.0_dp)
+
                DO j = 1, this%nvec
-                  CALL cp_fm_trace(this%evects_mo(i), &
-                                   this%sigma_vecs(j), val)
-                  CALL cp_fm_set_element(this%subspace, i, j, val)
+                  CALL cp_fm_get_element(matrix=this%subspace_evecs, &
+                                         irow_global=j, &
+                                         icol_global=iv, &
+                                         alpha=val)
+                  CALL cp_fm_scale_and_add( &
+                           alpha=1.0_dp, matrix_a=this%residual_vecs(iv), &
+                           beta=val,     matrix_b=this%sigma_vecs(j))
                END DO
             END DO
 
-            ! alloc A[nvec,nvec]
-!           CALL alloc_subspace_mat(this%ritz_vecs, this%nvec, sub_env)
-            ! alloc A[nvec,nvec]
-!           CALL alloc_subspace_mat(this%work_tmp, this%nvec, sub_env)
-
-!           CALL cp_fm_to_fm(this%subspace, &
-!                            this%work_tmp)
-
-            ! Symmetrize
-            ! C[nvec,nvec] = 0.5*(A[nvec,nvec])^T*B[nvec,nvec] + 0.5*C[nvec,nvec]
-!           CALL parallel_gemm('T', 'N', this%nvec, this%nvec, this%nvec, &
-!                              0.5_dp, this%work_tmp, &
-!                                      this%work_tmp, &
-!                              0.5_dp, this%subspace)  ! (X + X^T)/2
             ! Print
-!           CALL print_mat_ao_ao(this%subspace, "2davidson%subspace", logger, iter)
+            DO iv = 1, this%nstates
+               CALL print_mat_ao_ao(this%residual_vecs(iv), "residual_vecs", logger, iter)
+            END DO
 
-            ! Diagonalize subspace matrix
-!           CALL choose_eigv_solver(matrix=this%subspace, &
-!                                   eigenvectors=this%ritz_vecs, &
-!                                   eigenvalues=this%ritz_evals(1:this%nvec), &
-!                                   info=ierr)
+            ! Flag(b)
+            DO i = 1, this%nstates
+               DO j = 1, this%nvec
+                  CALL cp_fm_get_element(matrix=this%subspace_evecs, &
+                                         irow_global=j, &
+                                         icol_global=i, &
+                                         alpha=val)
+                   val = -val*this%ritz_evals(i)
+                  CALL cp_fm_set_element(matrix=this%subspace_evecs, &
+                                         irow_global=j, &
+                                         icol_global=i, &
+                                         alpha=val)
+
+               END DO
+            END DO
+
+            ! Flag(c)
+            DO iv = 1, this%nstates
+               DO j = 1, this%nvec
+                  CALL cp_fm_get_element(matrix=this%subspace_evecs, &
+                                         irow_global=j, &
+                                         icol_global=iv, &
+                                         alpha=val)
+                  CALL cp_fm_scale_and_add( &
+                           alpha=1.0_dp, matrix_a=this%residual_vecs(iv), &
+                           beta=val,     matrix_b=this%evects_mo(j))
+               END DO
+            END DO
+            CALL dealloc_fm_mat(this%subspace_evecs)
+
             ! Print
-!           print *, "ENERGY:",this%ritz_evals(1:this%nvec)
-!           IF (ierr /= 0) THEN
-!              print *, "Diagonalization failed in choose_eigv_solver"
-!           END IF
+            DO iv = 1, this%nstates
+               CALL print_mat_ao_ao(this%residual_vecs(iv), "2 residual_vecs", logger, iv)
+            END DO
 
-            CALL dealloc_fm_mat(this%subspace)
-!           CALL dealloc_subspace_mat(this%ritz_vecs)
-!           CALL dealloc_subspace_mat(this%work_tmp)
+            ! Flag(d)
+            DO iv = 1, this%nstates
+               CALL cp_fm_trace(this%residual_vecs(iv), &
+                                this%residual_vecs(iv), val)
+               this%residual_norms(iv) = val
+               print *, "dot_prod residual_vecs=", val
+            END DO
+
+            DO iv = 1, this%nstates
+               ij = 0
+               DO a = 1, this%nvirb
+                  DO i = 1, this%nocca
+                     ij = ij + 1
+                     val = this%ritz_evals(iv)-this%e_virt_minus_occ(ij)
+                     val2 = abs(val)
+                     IF (val2 < 1.e-12_dp) THEN
+                        val = 1.e-5_dp
+                     ELSE IF (val2< 1.e-5_dp) THEN
+                        sig = val2/val
+                        val = sig*1.e-5_dp
+                     END IF
+                     CALL cp_fm_get_element(this%residual_vecs(iv), i, a, scal)
+                     scal = scal/val
+                     CALL cp_fm_set_element(this%residual_vecs(iv), i, a, scal)
+                  END DO
+               END DO
+            END DO
+            IF (log_unit > 0) THEN
+               WRITE (log_unit, '(/,4X,A,T14,A,T36,A)') "State", "Exc. energy (eV)", "Convergence (eV)"
+               DO iv = 1, this%nstates
+                  WRITE (log_unit, '(1X,I8,T12,F14.7,T38,ES11.4)') iv, &
+                     this%ritz_evals(iv)*evolt, this%residual_norms(iv)
+               END DO
+               WRITE (log_unit, *)
+               CALL m_flush(log_unit)
+            END IF
+
+            max_error = maxval(this%residual_norms)
+
+            is_converged = .FALSE.
+            is_converged = max_error<=1.e-6_dp
+            print *, "is_converged=",is_converged, max_error
+            IF (is_converged) EXIT
+
+            if (this%nvec==this%mxvec) ierr = 1
+            if (ierr /= 0) EXIT
+
+            this%novec = this%nvec
+            ierr = 0
+
+            DO k = 1, this%nstates
+               DO iv = 1, this%nvec
+                  CALL cp_fm_trace(this%evects_mo(iv), &
+                                   this%residual_vecs(k), val)
+                  CALL cp_fm_scale_and_add( &
+                           alpha=1.0_dp, matrix_a=this%residual_vecs(k), &
+                           beta=-val,     matrix_b=this%evects_mo(iv))
+               END DO
+
+               CALL cp_fm_trace(this%residual_vecs(k), &
+                                this%residual_vecs(k), val)
+               scal = sqrt(val)
+
+               IF (scal<1.e-9_dp) CYCLE
+
+               IF (this%nvec == this%mxvec) THEN
+                  ierr = 2
+                  RETURN
+               END IF
+
+               this%nvec = this%nvec + 1
+               CALL cp_fm_scale_and_add( &
+                        alpha=0._dp,     matrix_a=this%evects_mo(this%nvec), &
+                        beta=1._dp/scal, matrix_b=this%residual_vecs(k))
+            END DO
+
+            ms = this%nvec - this%novec
+            IF (ms == 0) ierr = 3
+
+            IF (ierr /= 0) EXIT
+
+            ist = this%novec+1
+            iend = this%nvec
+
+            ! Print
+            print *, "ENERGY:",this%ritz_evals(1:this%nstates)
+
 !
-            ! Set up pointer for subspace eigenvectors
-!
-!           ! Create temporary matrices for diagonalization
-!           CALL cp_fm_struct_create(fm_struct, &
-!                                    nrow_global=nv, &
-!                                    ncol_global=nv, &
-!                                    context=sub_env%blacs_env)
-!           CALL cp_fm_create(temp_subspace, fm_struct)
-!           CALL cp_fm_create(temp_eigvecs, fm_struct)
-!           CALL cp_fm_struct_release(fm_struct)
-!
-            ! Copy subspace matrix to temporary matrix
-!           CALL cp_fm_to_fm_submat(davidson%subspace_matrix, temp_subspace, &
-!                                   nrow=this%nvec, ncol=this%nvec, &
-!                                   s_firstrow=1, s_firstcol=1, &
-!                                   t_firstrow=1, t_firstcol=1)
-
-            ! Diagonalize subspace matrix to get approximate eigenvalues and eigenvectors
-!           IF (this%nvec == 1) THEN
-!              CALL cp_fm_get_element(this%work_vecs_1, 1, 1, this%ritz_evals(1))
-!              CALL cp_fm_set_element(this%vr_fm, 1, 1, 1.0_dp)
-!           ELSE
-!              ! Diagonalize subspace matrix
-!              CALL cp_fm_syevd(temp_subspace, temp_eigvecs, davidson%ritz_evals(1:nv))
-!              CALL cp_fm_syevd(this%apb_fm, this%vr_fm, this%ritz_evals(1:this%nvec), info=ierr)
-!              IF (ierr /= 0) THEN
-!                 CALL cp_error_message("Diagonalization failed in cp_fm_syevd")
-!              END IF
-!           END IF
-
-            ! Copy eigenvectors back to subspace_eigvecs
-!           CALL cp_fm_to_fm_submat(temp_eigvecs, davidson%subspace_eigvecs, &
-!                                   nrow=nv, ncol=nv, &
-!                                   s_firstrow=1, s_firstcol=1, &
-!                                   t_firstrow=1, t_firstcol=1)
-
-            ! Normalize subspace eigenvectors
-
-            ! Store transformation matrix
-
-            ! Compute residuals: R = A * X * V - X * V * omega
-
-            ! Precondition residuals using orbital energy differences
-
-            ! Print iteration progress
-
-            ! Check convergence
-
-            ! Check vector space limit
-
-            ! Save current number of vectors
-
-            ! Generate new vectors via modified Gram-Schmidt orthogonalization
-
-            ! Check if new vectors were added
-
-!           DO ivec = ist, iend
-!             iv = ivec-ist+1
-!
-!             vbp => vb(:,noccb+1:)
-!             vap => va(:,1:nocca)
-!             call dgemm('t','n',nocca,nbf,nbf, &
-!                        1.0_dp,vap,nbf,pao,nbf, &
-!                        0.0_dp,scr,nocca)
-!              │
-!              call dgemm('n','n',nocca,nbf-noccb,nbf, &
-!                         1.0_dp,scr,nocca,vbp,nbf, &
-!                         0.0_dp,pmo,nocca)
-!             IF (roref) THEN
-!               call iatogen(evects_mo(:,ivec),abxc,nocca,noccb)
-!
-!               ! faz
-!               call dgemm('n','n',nocca,nbf,nocca, &
-!                          1.0_dp,fa,nbf,abxc,nbf, &
-!                          0.0_dp,scr1,nbf)
-!               ! zfb - faz
-!               call dgemm('n','n',nocca,nbf,nbf, &
-!                          1.0_dp,abxc,nbf,fb,nbf, &
-!                         -1.0_dp,scr1,nbf)
-!
-!               call sfroesum(scr1,ab2_mo,nocca,noccb,ivec)
-!             ELSE
-!               call sfesum(mo_energy_a,mo_energy_b,ab2_mo,evects_mo,nocca,noccb,ivec)
-!             END IF
-!           END DO
-
             ! ERI contraction is here
             IF (tddfpt_control%do_hfx) THEN
                IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
@@ -1166,29 +1295,6 @@ CONTAINS
             END IF
 
 
-!
-            ! Solve lin eqs
-
-            ! Print
-
-!           mxerr = maxval(rnorm)
-
-!           Check convergence
-!           converged = mxerr<=cnvtol
-!           if (converged) exit
-
-!           No space left for new vectors, exit
-!           if (nvec==mxvec) ierr = 1
-!           if (ierr/=0) exit
-
-!           call rpanewb(nStates,evects_mo,scr3,novec,nvec,ierr,tamm_dancoff=.true.)
-
-  !         ierr=1 nvec over mxvec: not converged case
-!           if (ierr/=0) exit
-
-!           ist = novec+1
-!           iend = nvec
-!        end do
 !        DO
 !           ! *** perform Davidson iterations ***
 !           conv = tddfpt_davidson_solver( &
