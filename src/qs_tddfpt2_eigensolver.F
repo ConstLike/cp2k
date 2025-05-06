@@ -355,7 +355,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE tddfpt_compute_Aop_evects(Aop_evects, evects, S_evects, gs_mos, tddfpt_control, &
                                         matrix_ks, qs_env, kernel_env, &
-                                        sub_env, work_matrices, matrix_s)
+                                        sub_env, work_matrices, matrix_s, logger)
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(INOUT)   :: Aop_evects
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(IN)      :: evects, S_evects
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
@@ -367,6 +367,7 @@ CONTAINS
       TYPE(tddfpt_subgroup_env_type), INTENT(in)         :: sub_env
       TYPE(tddfpt_work_matrices), INTENT(inout)          :: work_matrices
       TYPE(dbcsr_type), POINTER                          :: matrix_s
+      TYPE(cp_logger_type), POINTER                      :: logger
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_compute_Aop_evects'
 
@@ -493,7 +494,8 @@ CONTAINS
                                      work_hmat_symm=work_matrices%hfx_hmat_symm, &
                                      work_hmat_asymm=work_matrices%hfx_hmat_asymm, &
                                      work_rho_ia_ao_symm=work_matrices%hfx_rho_ao_symm, &
-                                     work_rho_ia_ao_asymm=work_matrices%hfx_rho_ao_asymm)
+                                     work_rho_ia_ao_asymm=work_matrices%hfx_rho_ao_asymm, &
+                                     logger=logger)
             ELSE IF (tddfpt_control%kernel == tddfpt_kernel_stda) THEN
                ! sTDA kernel
                ! special treatment of HFX term
@@ -850,12 +852,14 @@ CONTAINS
       ALLOCATE (Aop_ritz(nspins, nstates))
       DO istate = 1, nstates
          DO ispin = 1, nspins
-            CALL fm_pool_create_fm(work_matrices%fm_pool_ao_mo_occ(ispin)%pool, Aop_ritz(ispin, istate))
+            CALL fm_pool_create_fm(work_matrices%fm_pool_ao_mo_occ(ispin)%pool, &
+                                   Aop_ritz(ispin, istate))
          END DO
       END DO
 
       ALLOCATE (evals_last(max_krylov_vects))
-      ALLOCATE (Aop_krylov(nspins, max_krylov_vects), krylov_vects(nspins, max_krylov_vects), &
+      ALLOCATE (Aop_krylov(nspins, max_krylov_vects), &
+                krylov_vects(nspins, max_krylov_vects), &
                 S_krylov(nspins, max_krylov_vects))
 
       DO istate = 1, nstates
@@ -890,7 +894,8 @@ CONTAINS
                                         qs_env=qs_env, kernel_env=kernel_env, &
                                         sub_env=sub_env, &
                                         work_matrices=work_matrices, &
-                                        matrix_s=matrix_s(1)%matrix)
+                                        matrix_s=matrix_s(1)%matrix, &
+                                        logger=logger)
 
          CALL tddfpt_compute_ritz_vects(ritz_vects=evects, Aop_ritz=Aop_ritz, &
                                         evals=evals_last(1:nvects_exist + nvects_new), &

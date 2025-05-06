@@ -89,6 +89,8 @@ MODULE qs_tddfpt2_types
       TYPE(cp_fm_type), POINTER                          :: mos_occ => NULL()
       !> virtual MOs stored in a matrix form [nao x nmo_virt]
       TYPE(cp_fm_type), POINTER                          :: mos_virt => NULL()
+      !> Full MO coefficient matrix [nao x nmo]
+      TYPE(cp_fm_type), POINTER                          :: mos_full => NULL()
       !> negated occupied orbital energy matrix [nmo_occ x nmo_occ]: - mos_occ^T * KS * mos_occ .
       !> Allocated when orbital energy correction is in use, otherwise it is just a diagonal
       !> matrix with 'evals_occ' on its diagonal
@@ -97,17 +99,14 @@ MODULE qs_tddfpt2_types
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: evals_occ
       !> (non-corrected) virtual orbital energies
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: evals_virt
+      !> Full orbital energies [nmo]
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: evals_full
       !> phase of occupied MOs; +1.0 -- positive, -1.0 -- negative;
       !> it is mainly needed to make the restart file transferable
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: phases_occ
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: phases_virt
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: phases_full
 
-      !> Full MO coefficient matrix [nao x nmo]
-      TYPE(cp_fm_type), POINTER                          :: mos_full => NULL()
-      !> Full orbital energies [nmo]
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: evals_full
-      !> Full orbital occupations [nmo]
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: occ_full
       !> Index of HOMO (highest occupied molecular orbital)
       INTEGER                                            :: homo
    END TYPE tddfpt_ground_state_mos
