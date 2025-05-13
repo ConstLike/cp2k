@@ -182,7 +182,6 @@ MODULE qs_tddft_methods
 
 ! **************************************************************************************************
    TYPE tddft_info_type
-      INTEGER                                            :: reference_type = 0 ! 1 = ROKS/ROHF, 2 = UKS/UHF
       INTEGER                                            :: nSpins
       INTEGER                                            :: nbf
       INTEGER                                            :: nocca
@@ -329,11 +328,6 @@ CONTAINS
       CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=this%nvira)
       CALL cp_fm_get_info(gs_mos(2)%mos_virt, ncol_global=this%nvirb)
       CALL cp_fm_get_info(gs_mos(1)%mos_occ, nrow_global=this%nbf)
-
-      ! Set the reference type ROHF/UHF
-      this%reference_type = 0
-      IF (dft_control%roks) this%reference_type = 1
-      IF (dft_control%uks) this%reference_type = 2
 
       this%nStates = dft_control%tddfpt2_control%nStates
       this%nSpins = SIZE(gs_mos, 1)
@@ -670,7 +664,7 @@ CONTAINS
                                       "GUESS_VECTORS", extension=".tddfptLog")
 
       CALL tddft_guess_vectors(this%evects_mo, this%evals, this%e_virt_minus_occ, &
-                               gs_mos, this%nvec, this%nstates, log_unit, tddfpt_control)
+                               gs_mos, this%nvec, log_unit, tddfpt_control)
       CALL cp_print_key_finished_output(log_unit, logger, &
                                         tddfpt_print_section, "GUESS_VECTORS")
       ! Close logger
@@ -1075,8 +1069,7 @@ CONTAINS
                ! Print
                CALL print_mat_ao_ao(this%sigma_vecs(ivec), "sigma_vecs", logger, ivec)
 
-               SELECT CASE (this%reference_type)
-               CASE (1) ! ROKS/ROHF
+               IF (.FALSE.) THEN
                   ! Add ROHF corrections using Fock matrix contributions
                   ! Sigma = X*F_b - F_a*X
                   ! C[nocca,nvirb] = -1.0*A[nocca,nocca]*B[nocca,nvirb]+0.0*C[nocca,nvirb]
@@ -1097,7 +1090,7 @@ CONTAINS
                            alpha=1.0_dp, matrix_a=this%sigma_vecs(ivec), &
                            beta=1.0_dp,  matrix_b=this%work_noc_vir)
 
-               CASE (2) ! UKS/UHF
+               ELSE
                   ! Add orbital energy difference contributions for UHF
                   ij = 0
                   DO a = 1, this%nvirb
@@ -1121,7 +1114,7 @@ CONTAINS
                                                alpha=sig)
                      END DO
                   END DO
-               END SELECT
+               END IF
                ! Print
                CALL print_mat_ao_ao(this%sigma_vecs(ivec), 'sigma_mat', logger, ivec)
             END DO
@@ -1433,13 +1426,13 @@ CONTAINS
    END SUBROUTINE print_mat_ao_ao
 
    SUBROUTINE tddft_guess_vectors(evects_mo, evals, e_virt_minus_occ, &
-                                  gs_mos, nvec, nStates, log_unit, tddfpt_control)
+                                  gs_mos, nStates, log_unit, tddfpt_control)
       TYPE(cp_fm_type), DIMENSION(:), INTENT(inout)   :: evects_mo
       REAL(kind=dp), DIMENSION(:), INTENT(inout)         :: evals
       REAL(kind=dp), DIMENSION(:)                        :: e_virt_minus_occ
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), INTENT(in)                        :: gs_mos
-      INTEGER                                            :: nStates, nvec
+      INTEGER                                            :: nStates
       INTEGER, INTENT(in)                                :: log_unit
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
 
@@ -1487,18 +1480,27 @@ CONTAINS
          WRITE (log_unit, '(1X,79("-"))')
       END IF
 
-      DO istate = 1, nVec
+      DO istate = 1, nStates
          evals(istate) = e_virt_m_occ(istate)
          istate_orig = inds(istate)
          imo_occ = MOD(istate_orig - 1, gs_mos(1)%homo) + 1
          imo_virt = (istate_orig - 1) / gs_mos(1)%homo + 1
          CALL cp_fm_set_element(evects_mo(istate), imo_occ, imo_virt, 1.0_dp)
-         IF (istate > nStates) CYCLE
          IF (log_unit > 0) &
             WRITE (log_unit, '(T7,I8,T24,I8,T37,A5,T45,I8,T54,A5,T60,2F14.5)') &
             istate, imo_occ, '(alp)', gs_mos(2)%homo + imo_virt, '(bet)', e_virt_m_occ(istate)*evolt, &
             evects_mo(istate)%local_data(imo_occ, imo_virt)
       end do
+!     DO istate = 1, SIZE(e_virt_m_occ)
+!        DO i = 1, gs_mos(1)%homo
+!        DO j = 1, SIZE(gs_mos(2)%evals_full)-gs_mos(2)%homo
+!           IF (log_unit > 0) &
+!              WRITE (log_unit, '(T7,I8,T24,I8,T37,A5,T45,I8,T54,A5,T60,2F14.5)') &
+!              istate, i, '(alp)', gs_mos(2)%homo + j, '(bet)', e_virt_m_occ(istate)*evolt, &
+!              evects_mo(istate)%local_data(i, j)
+!        END DO
+!        END DO
+!     END DO
 
       IF (log_unit > 0) THEN
          WRITE (log_unit, '(/,T7,A,T50,I24)') 'Number of active states:', &
