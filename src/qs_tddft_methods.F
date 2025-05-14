@@ -6,6 +6,20 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddft_methods
+   USE qs_integrate_potential,          ONLY: integrate_v_rspace,&
+                                              integrate_v_rspace_one_center
+   USE qs_tddfpt2_operators,            ONLY: tddfpt_apply_coulomb,&
+                                              tddfpt_apply_xc,&
+                                              tddfpt_apply_xc_potential
+   USE qs_rho_methods,                  ONLY: qs_rho_update_rho,&
+                                              qs_rho_update_tddfpt
+   USE pw_methods,                      ONLY: pw_axpy,&
+                                              pw_scale,&
+                                              pw_zero
+   USE pw_env_types,                    ONLY: pw_env_get
+   USE pw_pool_types,                   ONLY: pw_pool_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
    USE machine,                         ONLY: m_flush,&
                                               m_walltime
    USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type,&
@@ -43,6 +57,7 @@ MODULE qs_tddft_methods
    USE qs_rho_types,                    ONLY: qs_rho_create,&
                                               qs_rho_release,&
                                               qs_rho_set,&
+                                              qs_rho_get,&
                                               qs_rho_type
    USE util,                            ONLY: sort
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create,&
@@ -232,17 +247,27 @@ MODULE qs_tddft_methods
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: evects_ao_ao
 
       ! DBCSR (nvec)
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)      :: work_rho_ao_ao_symm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)      :: work_rho_ao_ao_asymm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)      :: work_hmat_symm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)      :: work_hmat_asymm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_ao_ao_symm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_ao_ao_asymm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_symm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_asymm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: A_ia_munu_sub
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: rho_ia_ao
+
+      ! PW
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: A_ia_rspace_sub => NULL()
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_r => NULL()
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_g => NULL()
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: tau_r => NULL()
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc => NULL()
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc_tau => NULL()
+
+      ! RHO
+      TYPE(qs_rho_type), POINTER                         :: rho_orb_struct_sub => NULL()
 
       !> Ground-state density matrix in AO basis (shared across subgroups)
-      TYPE(qs_rho_type), POINTER                         :: gs_rho_orb_struct => NULL()
       TYPE(qs_rho_type), POINTER                         :: gs_rho_xc_struct => NULL()
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: gs_rho_orb_ao
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: gs_rho_xc_ao
-      TYPE(cp_fm_type), POINTER                          :: gs_rho_orb_ao_fm => NULL()
+      TYPE(cp_fm_type), POINTER                          :: rho_ia_ao_fm => NULL()
 
       ! ---------- FOR DAVIDSON ----------
       TYPE(cp_fm_type), POINTER                          :: subspace => NULL()
@@ -317,6 +342,7 @@ CONTAINS
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          POINTER                                         :: sab_hfx
       INTEGER                                            :: ivec, ispin, handle
+      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
 
       CALL timeset(routineN, handle)
 
@@ -400,6 +426,15 @@ CONTAINS
       CALL cp_fm_create(this%work_ao_vir, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
 
+      !=== rho_ia_ao_fm [nbf, nbf]
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=this%nbf, &
+                               ncol_global=this%nbf, &
+                               context=sub_env%blacs_env)
+      ALLOCATE(this%rho_ia_ao_fm)
+      CALL cp_fm_create(this%rho_ia_ao_fm, fm_struct)
+      CALL cp_fm_struct_release(fm_struct)
+
       !--------------------
       ! ALLOCATE  FM POOL
       !--------------------
@@ -481,9 +516,6 @@ CONTAINS
       CALL fm_pool_create_fm(this%fm_pool_ao(1)%pool, this%work2_ao_ao)
       ALLOCATE (this%hmat_ao_ao)
       CALL fm_pool_create_fm(this%fm_pool_ao(1)%pool, this%hmat_ao_ao)
-      ALLOCATE (this%gs_rho_orb_ao_fm)
-      CALL fm_pool_create_fm(this%fm_pool_ao(1)%pool, this%gs_rho_orb_ao_fm)
-
 
       !--------------------
       ! ALLOCATE  DBCSR
@@ -516,7 +548,9 @@ CONTAINS
       DO ispin = 1, this%nSpins
          CALL dbcsr_init_p(this%work_hmat_symm(ispin)%matrix)
          CALL tddfpt_dbcsr_create_by_dist(this%work_hmat_symm(ispin)%matrix, &
-                                          template=dbcsr_template_hfx, dbcsr_dist=sub_env%dbcsr_dist, sab=sab_hfx)
+                                          template=dbcsr_template_hfx, &
+                                          dbcsr_dist=sub_env%dbcsr_dist, &
+                                          sab=sab_hfx)
 
          CALL dbcsr_init_p(this%work_hmat_asymm(ispin)%matrix)
          CALL dbcsr_create(this%work_hmat_asymm(ispin)%matrix, matrix_type=dbcsr_type_antisymmetric, &
@@ -525,47 +559,67 @@ CONTAINS
                                           this%work_hmat_asymm(ispin)%matrix)
       END DO
 
-      ALLOCATE(this%gs_rho_orb_ao(this%nSpins))
-      DO ispin = 1, this%nSpins
-         CALL dbcsr_init_p(this%gs_rho_orb_ao(ispin)%matrix)
-         CALL tddfpt_dbcsr_create_by_dist( &
-                  this%gs_rho_orb_ao(ispin)%matrix, &
-                  template=matrix_s(1)%matrix, &
-                  dbcsr_dist=sub_env%dbcsr_dist, &
-                  sab=sub_env%sab_orb)
+      NULLIFY (this%A_ia_munu_sub)
+      CALL dbcsr_allocate_matrix_set(this%A_ia_munu_sub, 1)
+      DO ispin = 1, 1
+         CALL dbcsr_init_p(this%A_ia_munu_sub(ispin)%matrix)
+         CALL tddfpt_dbcsr_create_by_dist(this%A_ia_munu_sub(ispin)%matrix, &
+                                          template=matrix_s(1)%matrix, &
+                                          dbcsr_dist=sub_env%dbcsr_dist, &
+                                          sab=sub_env%sab_orb)
       END DO
 
+      !--------------------
+      ! ALLOCATE  RHO
+      !--------------------
+      NULLIFY (this%rho_ia_ao)
+      CALL dbcsr_allocate_matrix_set(this%rho_ia_ao, this%nSpins)
+      DO ispin = 1, this%nSpins
+         CALL dbcsr_init_p(this%rho_ia_ao(ispin)%matrix)
+         CALL tddfpt_dbcsr_create_by_dist(matrix=this%rho_ia_ao(ispin)%matrix, &
+                                          template=matrix_s(1)%matrix, &
+                                          dbcsr_dist=sub_env%dbcsr_dist, &
+                                          sab=sub_env%sab_orb)
+      END DO
 
       ! Allocate and set up qs_rho_type
-      ALLOCATE(this%gs_rho_orb_struct)
-      CALL qs_rho_create(this%gs_rho_orb_struct)
-      CALL qs_rho_set(this%gs_rho_orb_struct, rho_ao=this%gs_rho_orb_ao)
-      CALL qs_rho_rebuild(this%gs_rho_orb_struct, qs_env, &
+      NULLIFY (this%rho_orb_struct_sub)
+      ALLOCATE (this%rho_orb_struct_sub)
+      CALL qs_rho_create(this%rho_orb_struct_sub)
+      CALL qs_rho_set(this%rho_orb_struct_sub, rho_ao=this%rho_ia_ao)
+      CALL qs_rho_rebuild(this%rho_orb_struct_sub, qs_env, &
                           rebuild_ao=.FALSE., &
                           rebuild_grids=.TRUE., &
                           pw_env_external=sub_env%pw_env)
 
-      IF (dft_control%qs_control%gapw_xc) THEN
-         NULLIFY (this%gs_rho_xc_ao)
-         CALL dbcsr_allocate_matrix_set(this%gs_rho_xc_ao, this%nSpins)
-         DO ispin = 1, this%nSpins
-            CALL dbcsr_init_p(this%gs_rho_xc_ao(ispin)%matrix)
-            CALL tddfpt_dbcsr_create_by_dist( &
-                     this%gs_rho_xc_ao(ispin)%matrix, &
-                     template=matrix_s(1)%matrix, &
-                     dbcsr_dist=sub_env%dbcsr_dist, &
-                     sab=sub_env%sab_orb)
-         END DO
-         NULLIFY (this%gs_rho_xc_struct)
-         ALLOCATE (this%gs_rho_xc_struct)
-         CALL qs_rho_create(this%gs_rho_xc_struct)
-         CALL qs_rho_set(this%gs_rho_xc_struct, &
-                         rho_ao=this%gs_rho_xc_ao)
-         CALL qs_rho_rebuild(this%gs_rho_xc_struct, qs_env, &
-                             rebuild_ao=.FALSE., &
-                             rebuild_grids=.TRUE., &
-                             pw_env_external=sub_env%pw_env)
-      END IF
+      !--------------------
+      ! ALLOCATE  PW
+      !--------------------
+      CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
+      ALLOCATE (this%A_ia_rspace_sub(this%nSpins))
+      DO ispin = 1, this%nspins
+         CALL auxbas_pw_pool%create_pw(this%A_ia_rspace_sub(ispin))
+      END DO
+      ALLOCATE (this%rho_r(this%nspins))
+      DO ispin = 1, this%nspins
+         CALL auxbas_pw_pool%create_pw(this%rho_r(ispin))
+      END DO
+      ALLOCATE (this%rho_g(this%nspins))
+      DO ispin = 1, this%nspins
+         CALL auxbas_pw_pool%create_pw(this%rho_g(ispin))
+      END DO
+      ALLOCATE (this%tau_r(this%nspins))
+      DO ispin = 1, this%nspins
+         CALL auxbas_pw_pool%create_pw(this%tau_r(ispin))
+      END DO
+      ALLOCATE (this%work_v_xc(this%nspins))
+      DO ispin = 1, this%nspins
+         CALL auxbas_pw_pool%create_pw(this%work_v_xc(ispin))
+      END DO
+      ALLOCATE (this%work_v_xc_tau(this%nspins))
+      DO ispin = 1, this%nspins
+         CALL auxbas_pw_pool%create_pw(this%work_v_xc_tau(ispin))
+      END DO
 
       CALL timestop(handle)
 
@@ -590,39 +644,29 @@ CONTAINS
 
       INTEGER                                            :: handle, log_unit, ispin
       INTEGER                                            :: nrow, ncol
-      LOGICAL                                            :: do_exck
 
       CALL timeset(routineN, handle)
 
       this%nStates = this%nStates
       CALL tddfpt_construct_ground_state_orb_density( &
-               rho_orb_struct=this%gs_rho_orb_struct, &
+               rho_orb_struct=this%rho_orb_struct_sub, &
                rho_xc_struct=this%gs_rho_xc_struct, &
                is_rks_triplets=tddfpt_control%rks_triplets, &
                qs_env=qs_env, &
                sub_env=sub_env, &
-               wfm_rho_orb=this%gs_rho_orb_ao_fm)
+               wfm_rho_orb=this%rho_ia_ao_fm)
 
       ! Full kernel
       CALL create_kernel_env(kernel_env=full_kernel_env, &
-                             rho_struct_sub=this%gs_rho_orb_struct, &
+                             rho_struct_sub=this%rho_orb_struct_sub, &
                              xc_section=xc_section, &
                              is_rks_triplets=tddfpt_control%rks_triplets, &
                              sub_env=sub_env)
       kernel_env%full_kernel => full_kernel_env
       NULLIFY (kernel_env%admm_kernel)
 
-      ! Fxc from kernel definition
-      do_exck = tddfpt_control%do_exck
-      kernel_env%full_kernel%do_exck = do_exck
-      ! initilize xc kernel
-!     IF (do_exck) THEN
-!        CALL create_fxc_kernel(this%gs_rho_orb_struct, &
-!                               work_matrices%fxc_rspace_sub, &
-!                               xc_section, tddfpt_control%rks_triplets, sub_env, qs_env)
-!     END IF
-!
       ! Transfom matrix_ks from AO to MO basis
+      print *,  "nSpins = ", this%nSpins
       print *,  "nbf = ", this%nbf
       print *,  "nmo (alpha) = ", this%nocca + this%nvira
       print *,  "nmo (beta) = ", this%noccb + this%nvirb
@@ -683,17 +727,20 @@ CONTAINS
    !> \brief Releases all matrices and deallocates memory pools associated with TDDFT trial data.
    !> \param this Object of type tddft_info_type
    ! **************************************************************************************************
-   SUBROUTINE tddft_finalize_data(this)
+   SUBROUTINE tddft_finalize_data(this, sub_env, kernel_env)
       CLASS(tddft_info_type), INTENT(INOUT)              :: this
+      TYPE(tddfpt_subgroup_env_type)                     :: sub_env
+      TYPE(kernel_env_type)                              :: kernel_env
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_finalize_data'
 
       INTEGER                                            :: ivec, ispin, handle
+      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
 
       CALL timeset(routineN, handle)
 
       !--------------------
-      ! ALLOCATE  DP
+      ! DEALLOCATE  DP
       !--------------------
       IF (ALLOCATED(this%e_virt_minus_occ)) THEN
          DEALLOCATE(this%e_virt_minus_occ)
@@ -714,7 +761,7 @@ CONTAINS
          DEALLOCATE (this%residual_norms)
       END IF
       !--------------------
-      ! ALLOCATE  FM
+      ! DEALLOCATE  FM
       !--------------------
       IF (ASSOCIATED(this%focka_noc_noc)) THEN
          CALL cp_fm_release(this%focka_noc_noc)
@@ -733,7 +780,7 @@ CONTAINS
          DEALLOCATE(this%work_ao_vir)
       END IF
       !--------------------
-      ! ALLOCATE  FM POOL
+      ! DEALLOCATE  FM POOL
       !--------------------
       IF (ALLOCATED(this%fock)) THEN
          DO ispin = 1, SIZE(this%fock, 1)
@@ -784,11 +831,6 @@ CONTAINS
                                    this%hmat_ao_ao)
          DEALLOCATE(this%hmat_ao_ao)
       END IF
-      IF (ASSOCIATED(this%gs_rho_orb_ao_fm%matrix_struct)) THEN
-         CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
-                                   this%gs_rho_orb_ao_fm)
-         DEALLOCATE(this%gs_rho_orb_ao_fm)
-      END IF
       IF (ALLOCATED(this%ritz_vecs))  THEN
          DO ivec = SIZE(this%ritz_vecs),1,-1
             CALL fm_pool_give_back_fm(this%fm_pool_mo%pool,this%ritz_vecs(ivec))
@@ -810,32 +852,9 @@ CONTAINS
          DEALLOCATE(this%fm_pool_ao)
       END IF
 
-      IF (ASSOCIATED(this%gs_rho_orb_struct)) THEN
-         CALL qs_rho_release(this%gs_rho_orb_struct)
-         DEALLOCATE(this%gs_rho_orb_struct)
-      END IF
-
-      IF (ASSOCIATED(this%gs_rho_orb_ao)) THEN
-         DO ispin = 1, SIZE(this%gs_rho_orb_ao)
-            IF (ASSOCIATED(this%gs_rho_orb_ao(ispin)%matrix)) THEN
-               CALL dbcsr_release(this%gs_rho_orb_ao(ispin)%matrix)
-            END IF
-         END DO
-         DEALLOCATE(this%gs_rho_orb_ao)
-      END IF
-
       IF (ASSOCIATED(this%gs_rho_xc_struct)) THEN
          CALL qs_rho_release(this%gs_rho_xc_struct)
          DEALLOCATE(this%gs_rho_xc_struct)
-      END IF
-
-      IF (ASSOCIATED(this%gs_rho_xc_ao)) THEN
-         DO ispin = 1, SIZE(this%gs_rho_xc_ao)
-            IF (ASSOCIATED(this%gs_rho_xc_ao(ispin)%matrix)) THEN
-               CALL dbcsr_release(this%gs_rho_xc_ao(ispin)%matrix)
-            END IF
-         END DO
-         DEALLOCATE(this%gs_rho_xc_ao)
       END IF
 
       IF (ASSOCIATED(this%work_rho_ao_ao_symm)) THEN
@@ -862,6 +881,55 @@ CONTAINS
          END DO
          DEALLOCATE(this%work_hmat_asymm)
       END IF
+
+      !--------------------
+      ! DEALLOCATE  PW
+      !--------------------
+      CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
+      IF (ASSOCIATED(this%A_ia_rspace_sub)) THEN
+         DO ispin = 1, this%nSpins
+            CALL auxbas_pw_pool%give_back_pw(this%A_ia_rspace_sub(ispin))
+         END DO
+         DEALLOCATE(this%A_ia_rspace_sub)
+      END IF
+      IF (ASSOCIATED(this%rho_r)) THEN
+         DO ispin = 1, this%nSpins
+            CALL auxbas_pw_pool%give_back_pw(this%rho_r(ispin))
+         END DO
+         DEALLOCATE(this%rho_r)
+      END IF
+      IF (ASSOCIATED(this%rho_g)) THEN
+         DO ispin = 1, this%nSpins
+            CALL auxbas_pw_pool%give_back_pw(this%rho_g(ispin))
+         END DO
+         DEALLOCATE(this%rho_g)
+      END IF
+      IF (ASSOCIATED(this%tau_r)) THEN
+         DO ispin = 1, this%nSpins
+            CALL auxbas_pw_pool%give_back_pw(this%tau_r(ispin))
+         END DO
+         DEALLOCATE(this%tau_r)
+      END IF
+      IF (ASSOCIATED(this%work_v_xc)) THEN
+         DO ispin = 1, this%nSpins
+            CALL auxbas_pw_pool%give_back_pw(this%work_v_xc(ispin))
+         END DO
+         DEALLOCATE(this%work_v_xc)
+      END IF
+      IF (ASSOCIATED(this%work_v_xc_tau)) THEN
+         DO ispin = 1, this%nSpins
+            CALL auxbas_pw_pool%give_back_pw(this%work_v_xc_tau(ispin))
+         END DO
+         DEALLOCATE(this%work_v_xc_tau)
+      END IF
+
+!     IF (ASSOCIATED(this%rho_orb_struct_sub)) THEN
+!        CALL qs_rho_release(this%rho_orb_struct_sub)
+!        DEALLOCATE(this%rho_orb_struct_sub)
+!     END IF
+
+      kernel_env = kernel_env
+!     CALL release_kernel_env(kernel_env%full_kernel)
 
       CALL timestop(handle)
 

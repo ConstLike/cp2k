@@ -6,6 +6,11 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddfpt2_fhxc
+   USE machine,                         ONLY: m_flush,&
+                                              m_walltime
+   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
+                                              cp_logger_get_default_io_unit,&
+                                              cp_logger_type
    USE admm_types,                      ONLY: admm_type
    USE cp_control_types,                ONLY: dft_control_type,&
                                               stda_control_type
@@ -14,9 +19,12 @@ MODULE qs_tddfpt2_fhxc
         dbcsr_p_type, dbcsr_release, dbcsr_set, dbcsr_type, dbcsr_type_symmetric
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: copy_fm_to_dbcsr,&
+                                              copy_dbcsr_to_fm,&
                                               cp_dbcsr_plus_fm_fm_t,&
                                               cp_dbcsr_sm_fm_multiply
    USE cp_fm_types,                     ONLY: cp_fm_create,&
+                                              cp_fm_set_all,&
+                                              cp_fm_get_submatrix,&
                                               cp_fm_get_info,&
                                               cp_fm_release,&
                                               cp_fm_type
@@ -94,10 +102,41 @@ CONTAINS
 !>    * 03.2017 refactored [Sergey Chulkov]
 !>    * 04.2019 refactored [JHU]
 ! **************************************************************************************************
+   SUBROUTINE print_mat_ao_ao(mat, mat_name, logger, iter)
+      TYPE(cp_fm_type), INTENT(IN) :: mat
+      TYPE(cp_logger_type), POINTER      :: logger
+      INTEGER                             :: iter
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'print_hmat_ao_ao'
+      CHARACTER(LEN=*) :: mat_name
+      INTEGER :: handle, i, j, unit_nr
+      REAL(KIND=dp), DIMENSION(5,5) :: submatrix
+
+      CALL timeset(routineN, handle)
+
+      unit_nr = cp_logger_get_default_io_unit(logger)
+
+      CALL cp_fm_get_submatrix(mat, submatrix, &
+                               start_row=1, start_col=1, &
+                               n_rows=5, n_cols=5)
+
+      IF (unit_nr > 0) THEN
+         WRITE(unit_nr, '(A,A,A,I0,A)') "First 5x5 elements of ",TRIM(mat_name)," at iter ",iter,":"
+         DO i = 1, 5
+            WRITE(unit_nr, '(5F12.6)') (submatrix(i,j), j=1,5)
+         END DO
+         WRITE(unit_nr, '(A)') ""
+         CALL m_flush(unit_nr)
+      END IF
+
+      CALL timestop(handle)
+   END SUBROUTINE print_mat_ao_ao
+
    SUBROUTINE fhxc_kernel(Aop_evects, evects, is_rks_triplets, &
                           do_hfx, do_admm, qs_env, kernel_env, kernel_env_admm_aux, &
                           sub_env, work_matrices, admm_symm, admm_xc_correction, do_lrigpw, &
-                          tddfpt_mgrid)
+                          tddfpt_mgrid, logger)
+      TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(INOUT)   :: Aop_evects
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(IN)      :: evects
       LOGICAL, INTENT(in)                                :: is_rks_triplets, do_hfx, do_admm
@@ -128,7 +167,7 @@ CONTAINS
       TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_ia_g, rho_ia_g_aux_fit
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_r3d_rs_type), ALLOCATABLE, DIMENSION(:)    :: V_rspace_sub
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_ia_r, rho_ia_r_aux_fit
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_ia_r_aux_fit
       TYPE(rho_atom_type), DIMENSION(:), POINTER         :: rho1_atom_set, rho_atom_set
       TYPE(task_list_type), POINTER                      :: task_list
 
@@ -152,9 +191,10 @@ CONTAINS
       DO ispin = 1, nspins
          CALL cp_fm_get_info(evects(ispin, 1), ncol_global=nactive(ispin))
       END DO
+      PRINT *, "KKK| nspins=",nspins
 
       CALL qs_rho_get(work_matrices%rho_orb_struct_sub, rho_ao=rho_ia_ao, &
-                      rho_g=rho_ia_g, rho_r=rho_ia_r)
+                      rho_g=rho_ia_g)
       IF (do_hfx .AND. do_admm) THEN
          CALL get_qs_env(qs_env, admm_env=admm_env)
          CALL qs_rho_get(work_matrices%rho_aux_fit_struct_sub, &
@@ -187,6 +227,12 @@ CONTAINS
                                           ncol=nactive(ispin), symmetry_mode=1)
             END DO
          END IF
+         DO ispin = 1, nSpins
+            CALL cp_fm_set_all(matrix=work_matrices%check_xc, alpha=0.0_dp)
+            CALL copy_dbcsr_to_fm(matrix=rho_ia_ao(ispin)%matrix, &
+                                 fm=work_matrices%check_xc)
+            CALL print_mat_ao_ao(work_matrices%check_xc, 'rho_ia_ao', logger, ivect)
+         END DO
 
          IF (do_lrigpw) THEN
             CALL qs_rho_update_tddfpt(work_matrices%rho_orb_struct_sub, qs_env, &
@@ -268,9 +314,11 @@ CONTAINS
                   CALL tddfpt_apply_xc_potential(work_matrices%A_ia_rspace_sub, work_matrices%fxc_rspace_sub, &
                                                  work_matrices%rho_orb_struct_sub, is_rks_triplets)
                ELSE
-                  CALL tddfpt_apply_xc(A_ia_rspace=work_matrices%A_ia_rspace_sub, kernel_env=kernel_env, &
+                  CALL tddfpt_apply_xc(A_ia_rspace=work_matrices%A_ia_rspace_sub, &
+                                       kernel_env=kernel_env, &
                                        rho_ia_struct=work_matrices%rho_orb_struct_sub, &
-                                       is_rks_triplets=is_rks_triplets, pw_env=sub_env%pw_env, &
+                                       is_rks_triplets=is_rks_triplets, &
+                                       pw_env=sub_env%pw_env, &
                                        work_v_xc=work_matrices%wpw_rspace_sub, &
                                        work_v_xc_tau=work_matrices%wpw_tau_rspace_sub, &
                                        spinflip=spinflip)
@@ -455,6 +503,13 @@ CONTAINS
                END DO
             END IF ! for full kernel using lri
          END DO
+         DO ispin = 1, nSpins
+            CALL cp_fm_set_all(matrix=work_matrices%check_xc, alpha=0.0_dp)
+            CALL copy_dbcsr_to_fm(matrix=work_matrices%A_ia_munu_sub(ispin)%matrix, &
+                                 fm=work_matrices%check_xc)
+            CALL print_mat_ao_ao(work_matrices%check_xc, 'work_xc', logger, ivect)
+         END DO
+
 
          ! local atom contributions
          IF (.NOT. do_lrigpw) THEN

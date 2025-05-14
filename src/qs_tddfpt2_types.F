@@ -134,6 +134,8 @@ MODULE qs_tddfpt2_types
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: S_C0_C0T
       !> S * \rho_full(spin)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: S_C0_C0T_full
+
+      TYPE(cp_fm_type), POINTER  :: check_xc
       !
       ! *** dense matrices distributed across parallel (sub)groups ***
       !
@@ -332,7 +334,9 @@ CONTAINS
       END DO
       ALLOCATE (work_matrices%S_C0_C0T(nspins))
       ALLOCATE (work_matrices%S_C0_C0T_full(nspins))
+      ALLOCATE (work_matrices%check_xc)
       CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nao, context=blacs_env)
+      CALL cp_fm_create(work_matrices%check_xc, fm_struct)
       DO ispin = 1, nspins
          CALL cp_fm_create(work_matrices%S_C0_C0T(ispin), fm_struct)
          CALL cp_fm_create(work_matrices%S_C0_C0T_full(ispin), fm_struct)
@@ -417,6 +421,7 @@ CONTAINS
          CALL tddfpt_dbcsr_create_by_dist(rho_ia_ao(ispin)%matrix, template=matrix_s(1)%matrix, &
                                           dbcsr_dist=sub_env%dbcsr_dist, sab=sub_env%sab_orb)
       END DO
+      PRINT *, "KKK| Checks siae rho_ia_ao", SIZE(rho_ia_ao)
 
       NULLIFY (work_matrices%rho_orb_struct_sub)
       ALLOCATE (work_matrices%rho_orb_struct_sub)

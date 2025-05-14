@@ -344,7 +344,7 @@ CONTAINS
 !              tddfpt_control%do_directional_exciton_descriptors, &
 !              qs_env)
 !        END IF
-         CALL tddft%clean()
+         CALL tddft%clean(sub_env, kernel_env)
       END IF
 
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
