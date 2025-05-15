@@ -1012,8 +1012,7 @@ CONTAINS
 
       ! TO DO: the variable 'nstates_selected' should probably be declared as INTEGER(kind=int_8),
       !        however we need a special version of the subroutine sort() in order to do so
-      IF ((tddfpt_control%spinflip == no_sf_tddfpt) .or. &
-          (tddfpt_control%sf_tddft == no_sf_tddft)) THEN
+      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
          nstates_selected = DOT_PRODUCT(nmo_occ_selected(1:nspins), nmo_virt_selected(1:nspins))
       ELSE
          nstates_selected = nmo_occ_selected(1)*nmo_virt_selected(2)

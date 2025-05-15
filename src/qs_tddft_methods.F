@@ -6,6 +6,11 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddft_methods
+   USE qs_tddft_types,                  ONLY: tddft_info_type,&
+                                              tddft_allocate_data,&
+                                              tddft_deallocate_data,&
+                                              allocate_fm_matrix,&
+                                              deallocate_fm_matrix
    USE qs_integrate_potential,          ONLY: integrate_v_rspace,&
                                               integrate_v_rspace_one_center
    USE qs_tddfpt2_operators,            ONLY: tddfpt_apply_coulomb,&
@@ -193,441 +198,53 @@ MODULE qs_tddft_methods
    INTEGER, PARAMETER, PRIVATE          :: nderivs = 3
    INTEGER, PARAMETER, PRIVATE          :: maxspins = 2
 
-   PUBLIC :: tddft_info_type
-
-! **************************************************************************************************
-   TYPE tddft_info_type
-      INTEGER                                            :: reference_type = 0 ! 1 = ROKS/ROHF, 2 = UKS/UHF
-      INTEGER                                            :: nSpins
-      INTEGER                                            :: nbf
-      INTEGER                                            :: nocca
-      INTEGER                                            :: noccb
-      INTEGER                                            :: nvira
-      INTEGER                                            :: nvirb
-      INTEGER                                            :: nStates
-      INTEGER                                            :: nStates_max
-      INTEGER                                            :: nvec
-      INTEGER                                            :: maxvec
-      INTEGER                                            :: mxvec
-      INTEGER                                            :: xvec_dim
-
-      !> Energy difference E_virt - E_occ, used in initial guess and post-processing
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: e_virt_minus_occ
-      !> TDDFT excitation eigenvalues (e.g., omega_i)
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: evals
-
-      ! Fock
-      TYPE(cp_fm_type), POINTER                          :: Focka_noc_noc => NULL()
-      TYPE(cp_fm_type), POINTER                          :: Fockb_vir_vir => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work_ao_vir => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work_noc_ao => NULL()
-
-
-      ! POOL MO [nocca, nvirb]
-      TYPE(cp_fm_pool_p_type), POINTER                   :: fm_pool_mo => NULL()
-      ! Work
-      TYPE(cp_fm_type), POINTER                          :: work_noc_vir => NULL()
-
-      ! evects_mo (mxvec)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: evects_mo
-      ! sigma_vecs (mxvec)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: sigma_vecs
-
-
-      ! POOL AO [nbf, nbf]
-      TYPE(cp_fm_pool_p_type), POINTER, DIMENSION(:)     :: fm_pool_ao => NULL()
-      ! Work
-      TYPE(cp_fm_type), POINTER, DIMENSION(:)            :: work_ao_ao => NULL()
-      TYPE(cp_fm_type), POINTER                          :: hmat_ao_ao => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work1_ao_ao => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work2_ao_ao => NULL()
-      ! Fock: AO to MO (nSpins)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: fock
-      ! evects_ao_ao (nvec)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: evects_ao_ao
-
-      ! DBCSR (nvec)
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_ao_ao_symm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_ao_ao_asymm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_symm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_asymm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: A_ia_munu_sub
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: rho_ia_ao
-
-      ! PW
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: A_ia_rspace_sub => NULL()
-      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_r => NULL()
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_g => NULL()
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: tau_r => NULL()
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc => NULL()
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc_tau => NULL()
-
-      ! RHO
-      TYPE(qs_rho_type), POINTER                         :: rho_orb_struct_sub => NULL()
-
-      !> Ground-state density matrix in AO basis (shared across subgroups)
-      TYPE(qs_rho_type), POINTER                         :: gs_rho_xc_struct => NULL()
-      TYPE(cp_fm_type), POINTER                          :: rho_ia_ao_fm => NULL()
-
-      ! ---------- FOR DAVIDSON ----------
-      TYPE(cp_fm_type), POINTER                          :: subspace => NULL()
-      TYPE(cp_fm_type), POINTER                          :: subspace_evecs => NULL()
-      TYPE(cp_fm_type), POINTER                          :: transformation_matrix => NULL()
-      REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: vector_norm
-      REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: vector_scal
-      TYPE(cp_fm_type) , ALLOCATABLE , DIMENSION(:) :: ritz_vecs      ! Y_k (MO basis)
-      TYPE(cp_fm_type) , ALLOCATABLE , DIMENSION(:) :: ritz_sigma     ! Σ Y_k
-      TYPE(cp_fm_type) , ALLOCATABLE , DIMENSION(:) :: residual_vecs  ! pre-conditioned R_k
-      REAL(kind=dp)    , ALLOCATABLE , DIMENSION(:) :: residual_norms  ! pre-conditioned R_k
-      REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: ritz_evals      ! ω_k
-      INTEGER                                   :: novec = 0          ! sub-space size
-
-
-      CONTAINS
-         PROCEDURE :: init => tddft_initialize_data
-         PROCEDURE :: setup => tddft_setup_data
-         PROCEDURE :: run => tddft_run
-         PROCEDURE :: clean => tddft_finalize_data
-   END TYPE tddft_info_type
-
-! **************************************************************************************************
+   PUBLIC :: tddft_energies
 
 CONTAINS
-   SUBROUTINE alloc_fm_mat(mat, nrow, ncol, sub_env)
-      TYPE(cp_fm_type), POINTER, INTENT(OUT)             :: mat
-      INTEGER, INTENT(IN)                                :: nrow, ncol
-      TYPE(tddfpt_subgroup_env_type), INTENT(IN)         :: sub_env
 
-      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
-
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=nrow, &
-                               ncol_global=ncol, &
-                               context=sub_env%blacs_env)
-      ALLOCATE(mat)
-      CALL cp_fm_create(mat, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(mat, 0.0_dp)
-
-   END SUBROUTINE alloc_fm_mat
-
-   SUBROUTINE dealloc_fm_mat(mat)
-      TYPE(cp_fm_type), POINTER, INTENT(INOUT)             :: mat
-
-      IF (ASSOCIATED(mat)) THEN
-         CALL cp_fm_release(mat)
-         DEALLOCATE(mat)
-      END IF
-   END SUBROUTINE dealloc_fm_mat
-
-   ! **************************************************************************************************
-   !> \brief Initializes TDDFT matrix containers and internal pools for trial vector storage.
-   !> \param this Object of type tddft_info_type
-   !> \param qs_env Quickstep environment
-   !> \param gs_mos Ground-state molecular orbitals (spin-resolved)
-   ! **************************************************************************************************
-   SUBROUTINE tddft_initialize_data(this, qs_env, gs_mos, sub_env)
-      CLASS(tddft_info_type), INTENT(INOUT)              :: this
+   SUBROUTINE tddft_energies(qs_env, sub_env, kernel_env, full_kernel_env, &
+                             gs_mos, matrix_ks, logger, tddfpt_control, &
+                             xc_section, tddfpt_print_section)
       TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(tddfpt_subgroup_env_type)                     :: sub_env
+      TYPE(kernel_env_type)                              :: kernel_env
+      TYPE(full_kernel_env_type), TARGET                 :: full_kernel_env
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          POINTER                                         :: gs_mos
-      TYPE(tddfpt_subgroup_env_type), INTENT(IN)         :: sub_env
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks
+      TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
+      TYPE(section_vals_type), POINTER                   :: xc_section
+      TYPE(section_vals_type), POINTER                   :: tddfpt_print_section
 
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_initialize_data'
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_energies'
 
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
-      TYPE(dbcsr_type), POINTER                          :: dbcsr_template_hfx
-      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
-      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-         POINTER                                         :: sab_hfx
-      INTEGER                                            :: ivec, ispin, handle
-      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
+      TYPE(tddft_info_type)                              :: tddft_env
+
+      INTEGER                                            :: handle
 
       CALL timeset(routineN, handle)
 
-      CALL get_qs_env(qs_env, &
-                      dft_control=dft_control, &
-                      matrix_s=matrix_s)
+      CALL tddft_allocate_data(tddft_env, qs_env, gs_mos, sub_env)
 
-      CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=this%nocca)
-      CALL cp_fm_get_info(gs_mos(2)%mos_occ, ncol_global=this%noccb)
-      CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=this%nvira)
-      CALL cp_fm_get_info(gs_mos(2)%mos_virt, ncol_global=this%nvirb)
-      CALL cp_fm_get_info(gs_mos(1)%mos_occ, nrow_global=this%nbf)
+      CALL tddft_setup_data(tddft_env, qs_env, gs_mos, &
+                            matrix_ks, logger, xc_section, &
+                            tddfpt_print_section, tddfpt_control, &
+                            kernel_env, full_kernel_env, sub_env)
 
-      ! Set the reference type ROHF/UHF
-      this%reference_type = 0
-      IF (dft_control%roks) this%reference_type = 1
-      IF (dft_control%uks) this%reference_type = 2
+      CALL tddft_run(tddft_env, qs_env, tddfpt_control, logger, &
+                     tddfpt_print_section, gs_mos, kernel_env, &
+                     matrix_ks, sub_env)
 
-      this%nStates = dft_control%tddfpt2_control%nStates
-      this%nSpins = SIZE(gs_mos, 1)
-      this%nStates_max = this%nocca * this%nvirb
-      this%maxvec = dft_control%tddfpt2_control%nkvs
-      this%xvec_dim = this%nStates_max
-      this%mxvec = min(this%maxvec*this%nstates, this%xvec_dim)
-      this%nStates = min(this%nstates, this%mxvec)
-      this%nvec = min(max(2*this%nStates, 5), this%mxvec)
-      this%novec = this%nvec
-
-      IF (this%nStates > this%nStates_max) THEN
-         CPWARN("NUMBER OF EXCITED STATES COULD LEAD TO PROBLEMS!")
-         CPWARN("Experimental: CHANGED nStates TO ITS MAXIMUM VALUE!")
-         this%nStates = this%nStates_max
-      END IF
-
-      !--------------------
-      ! ALLOCATE  DP
-      !--------------------
-      ALLOCATE (this%e_virt_minus_occ(this%xvec_dim))
-      ALLOCATE (this%evals(this%mxvec))
-      ALLOCATE (this%ritz_evals(this%mxvec), source=0.0_dp)
-      ALLOCATE (this%vector_scal(this%mxvec))
-      ALLOCATE (this%vector_norm(this%mxvec))
-      ALLOCATE (this%residual_norms(this%nstates), source=0.0_dp)
-
-      !--------------------
-      ! ALLOCATE  FM
-      !--------------------
-      !=== focka_noc_noc [nocca, nocca]
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=this%nocca, &
-                               ncol_global=this%nocca, &
-                               context=sub_env%blacs_env)
-      ALLOCATE (this%focka_noc_noc)
-      CALL cp_fm_create(this%focka_noc_noc, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-
-      !=== fockb_vir_vir [nvirb, nvirb]
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=this%nvirb, &
-                               ncol_global=this%nvirb, &
-                               context=sub_env%blacs_env)
-      ALLOCATE (this%fockb_vir_vir)
-      CALL cp_fm_create(this%fockb_vir_vir, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-
-      !=== work_noc_ao [nocca, nbf]
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=this%nocca, &
-                               ncol_global=this%nbf, &
-                               context=sub_env%blacs_env)
-      ALLOCATE(this%work_noc_ao)
-      CALL cp_fm_create(this%work_noc_ao, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-
-      !=== work_ao_vir [nbf, nvirb]
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=this%nbf, &
-                               ncol_global=this%nvirb, &
-                               context=sub_env%blacs_env)
-      ALLOCATE(this%work_ao_vir)
-      CALL cp_fm_create(this%work_ao_vir, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-
-      !=== rho_ia_ao_fm [nbf, nbf]
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=this%nbf, &
-                               ncol_global=this%nbf, &
-                               context=sub_env%blacs_env)
-      ALLOCATE(this%rho_ia_ao_fm)
-      CALL cp_fm_create(this%rho_ia_ao_fm, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-
-      !--------------------
-      ! ALLOCATE  FM POOL
-      !--------------------
-      !---------- MO POOL [nocca, nvirb] : fm_pool_mo
-      ALLOCATE (this%fm_pool_mo)
-      NULLIFY (this%fm_pool_mo%pool)
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=this%nocca, &
-                               ncol_global=this%nvirb, &
-                               context=sub_env%blacs_env)
-      CALL fm_pool_create(this%fm_pool_mo%pool, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      !---------- END MO POOL [nocca, nvirb]
-
-      ! MO POOL: evects_mo (mxvec)[nocca, nvirb]
-      ALLOCATE (this%evects_mo(this%mxvec))
-      DO ivec = 1, this%mxvec
-         CALL fm_pool_create_fm(this%fm_pool_mo%pool, &
-                                this%evects_mo(ivec))
-      END DO
-      ! MO POOL: sigma_vecs (mxvec)[nocca, nvirb]
-      ALLOCATE (this%sigma_vecs(this%mxvec))
-      DO ivec = 1, this%mxvec
-         CALL fm_pool_create_fm(this%fm_pool_mo%pool, &
-                                this%sigma_vecs(ivec))
-      END DO
-      ! MO POOL: work_noc_vir [nocca, nvirb]
-      ALLOCATE(this%work_noc_vir)
-      CALL fm_pool_create_fm(this%fm_pool_mo%pool, &
-                             this%work_noc_vir)
-
-      ! MO POOL: ritz [nocca, nvirb]
-      ALLOCATE(this%ritz_vecs(this%nstates),   &
-               this%ritz_sigma(this%nstates),  &
-               this%residual_vecs(this%nstates))
-      DO ivec = 1, this%nstates
-         CALL fm_pool_create_fm(this%fm_pool_mo%pool, this%ritz_vecs(ivec))
-         CALL fm_pool_create_fm(this%fm_pool_mo%pool, this%ritz_sigma(ivec))
-         CALL fm_pool_create_fm(this%fm_pool_mo%pool, this%residual_vecs(ivec))
-      END DO
-
-      !---------- AO POOL [nbf, nbf] : fm_pool_ao
-      ALLOCATE (this%fm_pool_ao(this%nSpins))
-      DO ispin = 1, this%nSpins
-         NULLIFY (this%fm_pool_ao(ispin)%pool)
-
-         CALL cp_fm_struct_create(fm_struct, &
-                                  nrow_global=this%nbf, &
-                                  ncol_global=this%nbf, &
-                                  context=sub_env%blacs_env)
-         CALL fm_pool_create(this%fm_pool_ao(ispin)%pool, fm_struct)
-         CALL cp_fm_struct_release(fm_struct)
-      END DO
-      !---------- END AO POOL [nbf, nbf]
-
-      ! AO POOL: Fock (nSpins)[nbf, nbf]
-      ALLOCATE (this%fock(this%nSpins))
-      DO ispin = 1, this%nSpins
-         CALL fm_pool_create_fm(this%fm_pool_ao(ispin)%pool, &
-                                this%fock(ispin))
-      END DO
-      ! AO POOL: evects_ao_ao (nspin)
-      ALLOCATE (this%evects_ao_ao(1))
-      DO ispin = 1, 1
-         CALL fm_pool_create_fm(this%fm_pool_ao(ispin)%pool, &
-                                this%evects_ao_ao(ispin))
-      END DO
-      ! AO POOL: Fock (nSpins)[nbf, nbf]
-      ALLOCATE (this%work_ao_ao(this%nSpins))
-      DO ispin = 1, this%nSpins
-         CALL fm_pool_create_fm(this%fm_pool_ao(ispin)%pool, &
-                                this%work_ao_ao(ispin))
-      END DO
-
-      ! AO POOL: Work
-      ALLOCATE(this%work1_ao_ao)
-      CALL fm_pool_create_fm(this%fm_pool_ao(1)%pool, this%work1_ao_ao)
-      ALLOCATE(this%work2_ao_ao)
-      CALL fm_pool_create_fm(this%fm_pool_ao(1)%pool, this%work2_ao_ao)
-      ALLOCATE (this%hmat_ao_ao)
-      CALL fm_pool_create_fm(this%fm_pool_ao(1)%pool, this%hmat_ao_ao)
-
-      !--------------------
-      ! ALLOCATE  DBCSR
-      !--------------------
-      CALL get_qs_env(qs_env, dbcsr_dist=sub_env%dbcsr_dist, sab_orb=sab_hfx)
-      dbcsr_template_hfx => matrix_s(1)%matrix
-
-      NULLIFY (this%work_rho_ao_ao_symm)
-      CALL dbcsr_allocate_matrix_set(this%work_rho_ao_ao_symm, this%nSpins)
-      NULLIFY (this%work_rho_ao_ao_asymm)
-      CALL dbcsr_allocate_matrix_set(this%work_rho_ao_ao_asymm, this%nSpins)
-      DO ispin = 1, this%nSpins
-         CALL dbcsr_init_p(this%work_rho_ao_ao_symm(ispin)%matrix)
-         CALL tddfpt_dbcsr_create_by_dist( &
-                  this%work_rho_ao_ao_symm(ispin)%matrix, &
-                  template=dbcsr_template_hfx, &
-                  dbcsr_dist=sub_env%dbcsr_dist, &
-                  sab=sab_hfx)
-
-         CALL dbcsr_init_p(this%work_rho_ao_ao_asymm(ispin)%matrix)
-         CALL dbcsr_create(this%work_rho_ao_ao_asymm(ispin)%matrix, &
-                           matrix_type=dbcsr_type_antisymmetric, &
-                           template=this%work_rho_ao_ao_symm(ispin)%matrix)
-         CALL dbcsr_complete_redistribute(this%work_rho_ao_ao_symm(ispin)%matrix, &
-                                          this%work_rho_ao_ao_asymm(ispin)%matrix)
-      END DO
-
-      CALL dbcsr_allocate_matrix_set(this%work_hmat_symm, this%nSpins)
-      CALL dbcsr_allocate_matrix_set(this%work_hmat_asymm, this%nSpins)
-      DO ispin = 1, this%nSpins
-         CALL dbcsr_init_p(this%work_hmat_symm(ispin)%matrix)
-         CALL tddfpt_dbcsr_create_by_dist(this%work_hmat_symm(ispin)%matrix, &
-                                          template=dbcsr_template_hfx, &
-                                          dbcsr_dist=sub_env%dbcsr_dist, &
-                                          sab=sab_hfx)
-
-         CALL dbcsr_init_p(this%work_hmat_asymm(ispin)%matrix)
-         CALL dbcsr_create(this%work_hmat_asymm(ispin)%matrix, matrix_type=dbcsr_type_antisymmetric, &
-                           template=this%work_hmat_symm(ispin)%matrix)
-         CALL dbcsr_complete_redistribute(this%work_hmat_symm(ispin)%matrix, &
-                                          this%work_hmat_asymm(ispin)%matrix)
-      END DO
-
-      NULLIFY (this%A_ia_munu_sub)
-      CALL dbcsr_allocate_matrix_set(this%A_ia_munu_sub, 1)
-      DO ispin = 1, 1
-         CALL dbcsr_init_p(this%A_ia_munu_sub(ispin)%matrix)
-         CALL tddfpt_dbcsr_create_by_dist(this%A_ia_munu_sub(ispin)%matrix, &
-                                          template=matrix_s(1)%matrix, &
-                                          dbcsr_dist=sub_env%dbcsr_dist, &
-                                          sab=sub_env%sab_orb)
-      END DO
-
-      !--------------------
-      ! ALLOCATE  RHO
-      !--------------------
-      NULLIFY (this%rho_ia_ao)
-      CALL dbcsr_allocate_matrix_set(this%rho_ia_ao, this%nSpins)
-      DO ispin = 1, this%nSpins
-         CALL dbcsr_init_p(this%rho_ia_ao(ispin)%matrix)
-         CALL tddfpt_dbcsr_create_by_dist(matrix=this%rho_ia_ao(ispin)%matrix, &
-                                          template=matrix_s(1)%matrix, &
-                                          dbcsr_dist=sub_env%dbcsr_dist, &
-                                          sab=sub_env%sab_orb)
-      END DO
-
-      ! Allocate and set up qs_rho_type
-      NULLIFY (this%rho_orb_struct_sub)
-      ALLOCATE (this%rho_orb_struct_sub)
-      CALL qs_rho_create(this%rho_orb_struct_sub)
-      CALL qs_rho_set(this%rho_orb_struct_sub, rho_ao=this%rho_ia_ao)
-      CALL qs_rho_rebuild(this%rho_orb_struct_sub, qs_env, &
-                          rebuild_ao=.FALSE., &
-                          rebuild_grids=.TRUE., &
-                          pw_env_external=sub_env%pw_env)
-
-      !--------------------
-      ! ALLOCATE  PW
-      !--------------------
-      CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
-      ALLOCATE (this%A_ia_rspace_sub(this%nSpins))
-      DO ispin = 1, this%nspins
-         CALL auxbas_pw_pool%create_pw(this%A_ia_rspace_sub(ispin))
-      END DO
-      ALLOCATE (this%rho_r(this%nspins))
-      DO ispin = 1, this%nspins
-         CALL auxbas_pw_pool%create_pw(this%rho_r(ispin))
-      END DO
-      ALLOCATE (this%rho_g(this%nspins))
-      DO ispin = 1, this%nspins
-         CALL auxbas_pw_pool%create_pw(this%rho_g(ispin))
-      END DO
-      ALLOCATE (this%tau_r(this%nspins))
-      DO ispin = 1, this%nspins
-         CALL auxbas_pw_pool%create_pw(this%tau_r(ispin))
-      END DO
-      ALLOCATE (this%work_v_xc(this%nspins))
-      DO ispin = 1, this%nspins
-         CALL auxbas_pw_pool%create_pw(this%work_v_xc(ispin))
-      END DO
-      ALLOCATE (this%work_v_xc_tau(this%nspins))
-      DO ispin = 1, this%nspins
-         CALL auxbas_pw_pool%create_pw(this%work_v_xc_tau(ispin))
-      END DO
+      CALL tddft_deallocate_data(tddft_env, sub_env, kernel_env)
 
       CALL timestop(handle)
 
-   END SUBROUTINE tddft_initialize_data
+   END SUBROUTINE tddft_energies
 
-   SUBROUTINE tddft_setup_data(this, qs_env, gs_mos, matrix_ks, logger, xc_section, &
+   SUBROUTINE tddft_setup_data(tddft_env, qs_env, gs_mos, matrix_ks, logger, xc_section, &
          tddfpt_print_section, tddfpt_control, kernel_env, full_kernel_env, sub_env)
-      CLASS(tddft_info_type), INTENT(INOUT)              :: this
+      CLASS(tddft_info_type), INTENT(INOUT)              :: tddft_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(section_vals_type), POINTER                   :: tddfpt_print_section
@@ -647,18 +264,18 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      this%nStates = this%nStates
+      tddft_env%nStates = tddft_env%nStates
       CALL tddfpt_construct_ground_state_orb_density( &
-               rho_orb_struct=this%rho_orb_struct_sub, &
-               rho_xc_struct=this%gs_rho_xc_struct, &
+               rho_orb_struct=tddft_env%rho_orb_struct_sub, &
+               rho_xc_struct=tddft_env%gs_rho_xc_struct, &
                is_rks_triplets=tddfpt_control%rks_triplets, &
                qs_env=qs_env, &
                sub_env=sub_env, &
-               wfm_rho_orb=this%rho_ia_ao_fm)
+               wfm_rho_orb=tddft_env%rho_ia_ao_fm)
 
       ! Full kernel
       CALL create_kernel_env(kernel_env=full_kernel_env, &
-                             rho_struct_sub=this%rho_orb_struct_sub, &
+                             rho_struct_sub=tddft_env%rho_orb_struct_sub, &
                              xc_section=xc_section, &
                              is_rks_triplets=tddfpt_control%rks_triplets, &
                              sub_env=sub_env)
@@ -666,55 +283,55 @@ CONTAINS
       NULLIFY (kernel_env%admm_kernel)
 
       ! Transfom matrix_ks from AO to MO basis
-      print *,  "nSpins = ", this%nSpins
-      print *,  "nbf = ", this%nbf
-      print *,  "nmo (alpha) = ", this%nocca + this%nvira
-      print *,  "nmo (beta) = ", this%noccb + this%nvirb
-      DO ispin = 1, this%nSpins
+      print *,  "nSpins = ", tddft_env%nSpins
+      print *,  "nbf = ", tddft_env%nbf
+      print *,  "nmo (alpha) = ", tddft_env%nocca + tddft_env%nvira
+      print *,  "nmo (beta) = ", tddft_env%noccb + tddft_env%nvirb
+      DO ispin = 1, tddft_env%nSpins
          CALL cp_fm_get_info(gs_mos(ispin)%mos_full, nrow_global=nrow, ncol_global=ncol)
          print *,  "gs_mos(ispin)%mos_full: ", nrow, ncol
-         CALL cp_fm_get_info(this%fock(ispin), nrow_global=nrow, ncol_global=ncol)
-         print *,  "this%fock(ispin): ", nrow, ncol
-         CALL cp_fm_get_info(this%work_ao_ao(ispin), nrow_global=nrow, ncol_global=ncol)
-         print *,  "this%work_ao_ao: ", nrow, ncol
+         CALL cp_fm_get_info(tddft_env%fock(ispin), nrow_global=nrow, ncol_global=ncol)
+         print *,  "tddft_env%fock(ispin): ", nrow, ncol
+         CALL cp_fm_get_info(tddft_env%work_ao_ao(ispin), nrow_global=nrow, ncol_global=ncol)
+         print *,  "tddft_env%work_ao_ao: ", nrow, ncol
       END DO
 
-      DO ispin = 1, this%nSpins
-         CALL copy_dbcsr_to_fm(matrix_ks(ispin)%matrix, this%fock(ispin))
-         ! work_ao_ao = gs_mos(1)%mos_full^T * this%fock
-         CALL parallel_gemm('T', 'N', this%nbf, this%nbf, this%nbf, &
+      DO ispin = 1, tddft_env%nSpins
+         CALL copy_dbcsr_to_fm(matrix_ks(ispin)%matrix, tddft_env%fock(ispin))
+         ! work_ao_ao = gs_mos(1)%mos_full^T * tddft_env%fock
+         CALL parallel_gemm('T', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
                             1.0_dp, gs_mos(ispin)%mos_full, &
-                                    this%fock(ispin), &
-                            0.0_dp, this%work_ao_ao(ispin))
+                                    tddft_env%fock(ispin), &
+                            0.0_dp, tddft_env%work_ao_ao(ispin))
 
-         ! this%fock = work_ao_ao * gs_mos(2)%mos_full
-         CALL parallel_gemm('N', 'N', this%nbf, this%nbf, this%nbf, &
-                            1.0_dp, this%work_ao_ao(ispin), &
+         ! tddft_env%fock = work_ao_ao * gs_mos(2)%mos_full
+         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
+                            1.0_dp, tddft_env%work_ao_ao(ispin), &
                                     gs_mos(ispin)%mos_full, &
-                            0.0_dp, this%fock(ispin))
+                            0.0_dp, tddft_env%fock(ispin))
       END DO
 
       ! --- focka_occ = F_alpha( occ , occ )  ------------------------------------
-      CALL cp_fm_to_fm_submat(this%fock(1), this%focka_noc_noc, &
-                              nrow=this%nocca, ncol=this%nocca, &
+      CALL cp_fm_to_fm_submat(tddft_env%fock(1), tddft_env%focka_noc_noc, &
+                              nrow=tddft_env%nocca, ncol=tddft_env%nocca, &
                               s_firstrow=1, &
                               s_firstcol=1, &
                               t_firstrow=1, t_firstcol=1)
 
       ! --- fockb_vir = F_beta( vir , vir )  ------------------------------------
-      CALL cp_fm_to_fm_submat(this%fock(2), this%fockb_vir_vir, &
-                              nrow=this%nvirb, &
-                              ncol=this%nvirb, &
-                              s_firstrow=this%noccb+1, &
-                              s_firstcol=this%noccb+1, &
+      CALL cp_fm_to_fm_submat(tddft_env%fock(2), tddft_env%fockb_vir_vir, &
+                              nrow=tddft_env%nvirb, &
+                              ncol=tddft_env%nvirb, &
+                              s_firstrow=tddft_env%noccb+1, &
+                              s_firstcol=tddft_env%noccb+1, &
                               t_firstrow=1, t_firstcol=1)
 
       ! Open logger
       log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, &
                                       "GUESS_VECTORS", extension=".tddfptLog")
 
-      CALL tddft_guess_vectors(this%evects_mo, this%evals, this%e_virt_minus_occ, &
-                               gs_mos, this%nvec, this%nstates, log_unit, tddfpt_control)
+      CALL tddft_guess_vectors(tddft_env%evects_mo, tddft_env%evals, tddft_env%e_virt_minus_occ, &
+                               gs_mos, tddft_env%nvec, tddft_env%nstates, log_unit, tddfpt_control)
       CALL cp_print_key_finished_output(log_unit, logger, &
                                         tddfpt_print_section, "GUESS_VECTORS")
       ! Close logger
@@ -723,243 +340,9 @@ CONTAINS
 
    END SUBROUTINE tddft_setup_data
 
-   ! **************************************************************************************************
-   !> \brief Releases all matrices and deallocates memory pools associated with TDDFT trial data.
-   !> \param this Object of type tddft_info_type
-   ! **************************************************************************************************
-   SUBROUTINE tddft_finalize_data(this, sub_env, kernel_env)
-      CLASS(tddft_info_type), INTENT(INOUT)              :: this
-      TYPE(tddfpt_subgroup_env_type)                     :: sub_env
-      TYPE(kernel_env_type)                              :: kernel_env
-
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_finalize_data'
-
-      INTEGER                                            :: ivec, ispin, handle
-      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-
-      CALL timeset(routineN, handle)
-
-      !--------------------
-      ! DEALLOCATE  DP
-      !--------------------
-      IF (ALLOCATED(this%e_virt_minus_occ)) THEN
-         DEALLOCATE(this%e_virt_minus_occ)
-      END IF
-      IF (ALLOCATED(this%evals)) THEN
-         DEALLOCATE(this%evals)
-      END IF
-      IF (ALLOCATED(this%ritz_evals)) THEN
-         DEALLOCATE(this%ritz_evals)
-      END IF
-      IF (ALLOCATED(this%vector_scal)) THEN
-         DEALLOCATE (this%vector_scal)
-      END IF
-      IF (ALLOCATED(this%vector_norm)) THEN
-         DEALLOCATE (this%vector_norm)
-      END IF
-      IF (ALLOCATED(this%residual_norms)) THEN
-         DEALLOCATE (this%residual_norms)
-      END IF
-      !--------------------
-      ! DEALLOCATE  FM
-      !--------------------
-      IF (ASSOCIATED(this%focka_noc_noc)) THEN
-         CALL cp_fm_release(this%focka_noc_noc)
-         DEALLOCATE(this%focka_noc_noc)
-      END IF
-      IF (ASSOCIATED(this%fockb_vir_vir)) THEN
-         CALL cp_fm_release(this%fockb_vir_vir)
-         DEALLOCATE(this%fockb_vir_vir)
-      END IF
-      IF (ASSOCIATED(this%work_noc_ao)) THEN
-         CALL cp_fm_release(this%work_noc_ao)
-         DEALLOCATE(this%work_noc_ao)
-      END IF
-      IF (ASSOCIATED(this%work_ao_vir)) THEN
-         CALL cp_fm_release(this%work_ao_vir)
-         DEALLOCATE(this%work_ao_vir)
-      END IF
-      !--------------------
-      ! DEALLOCATE  FM POOL
-      !--------------------
-      IF (ALLOCATED(this%fock)) THEN
-         DO ispin = 1, SIZE(this%fock, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_ao(ispin)%pool, &
-                                      this%fock(ispin))
-         END DO
-         DEALLOCATE(this%fock)
-      END IF
-      IF (ALLOCATED(this%evects_mo)) THEN
-         DO ivec = 1, SIZE(this%evects_mo, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
-                                      this%evects_mo(ivec))
-         END DO
-         DEALLOCATE(this%evects_mo)
-      END IF
-      IF (ALLOCATED(this%sigma_vecs)) THEN
-         DO ivec = 1, SIZE(this%sigma_vecs, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
-                                      this%sigma_vecs(ivec))
-         END DO
-         DEALLOCATE(this%sigma_vecs)
-      END IF
-      IF (ASSOCIATED(this%work_noc_vir%matrix_struct)) THEN
-         CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
-                                   this%work_noc_vir)
-         DEALLOCATE(this%work_noc_vir)
-      END IF
-
-      IF (ALLOCATED(this%evects_ao_ao)) THEN
-         DO ivec = 1, SIZE(this%evects_ao_ao, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
-                                      this%evects_ao_ao(ivec))
-         END DO
-         DEALLOCATE(this%evects_ao_ao)
-      END IF
-      IF (ASSOCIATED(this%work1_ao_ao%matrix_struct)) THEN
-         CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
-                                   this%work1_ao_ao)
-         DEALLOCATE(this%work1_ao_ao)
-      END IF
-      IF (ASSOCIATED(this%work2_ao_ao%matrix_struct)) THEN
-         CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
-                                   this%work2_ao_ao)
-         DEALLOCATE(this%work2_ao_ao)
-      END IF
-      IF (ASSOCIATED(this%hmat_ao_ao%matrix_struct)) THEN
-         CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
-                                   this%hmat_ao_ao)
-         DEALLOCATE(this%hmat_ao_ao)
-      END IF
-      IF (ALLOCATED(this%ritz_vecs))  THEN
-         DO ivec = SIZE(this%ritz_vecs),1,-1
-            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool,this%ritz_vecs(ivec))
-            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool,this%ritz_sigma(ivec))
-            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool,this%residual_vecs(ivec))
-         END DO
-         DEALLOCATE(this%ritz_vecs, this%ritz_sigma, this%residual_vecs)
-      END IF
-
-      IF (ASSOCIATED(this%fm_pool_mo)) THEN
-         CALL fm_pool_release(this%fm_pool_mo%pool)
-         DEALLOCATE(this%fm_pool_mo)
-      END IF
-
-      IF (ASSOCIATED(this%fm_pool_ao)) THEN
-         DO ispin = SIZE(this%fm_pool_ao),1,-1
-            CALL fm_pool_release(this%fm_pool_ao(ispin)%pool)
-         END DO
-         DEALLOCATE(this%fm_pool_ao)
-      END IF
-
-      IF (ASSOCIATED(this%gs_rho_xc_struct)) THEN
-         CALL qs_rho_release(this%gs_rho_xc_struct)
-         DEALLOCATE(this%gs_rho_xc_struct)
-      END IF
-
-      IF (ASSOCIATED(this%work_rho_ao_ao_symm)) THEN
-         DO ivec = 1, SIZE(this%work_rho_ao_ao_symm)
-            CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_symm(ivec)%matrix)
-         END DO
-         DEALLOCATE(this%work_rho_ao_ao_symm)
-      END IF
-      IF (ASSOCIATED(this%work_rho_ao_ao_asymm)) THEN
-         DO ivec = 1, SIZE(this%work_rho_ao_ao_asymm)
-            CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_asymm(ivec)%matrix)
-         END DO
-         DEALLOCATE(this%work_rho_ao_ao_asymm)
-      END IF
-      IF (ASSOCIATED(this%work_hmat_symm)) THEN
-         DO ivec = 1, SIZE(this%work_hmat_symm)
-            CALL dbcsr_deallocate_matrix(this%work_hmat_symm(ivec)%matrix)
-         END DO
-         DEALLOCATE(this%work_hmat_symm)
-      END IF
-      IF (ASSOCIATED(this%work_hmat_asymm)) THEN
-         DO ivec = 1, SIZE(this%work_hmat_asymm)
-            CALL dbcsr_deallocate_matrix(this%work_hmat_asymm(ivec)%matrix)
-         END DO
-         DEALLOCATE(this%work_hmat_asymm)
-      END IF
-
-      !--------------------
-      ! DEALLOCATE  PW
-      !--------------------
-      CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
-      IF (ASSOCIATED(this%A_ia_rspace_sub)) THEN
-         DO ispin = 1, this%nSpins
-            CALL auxbas_pw_pool%give_back_pw(this%A_ia_rspace_sub(ispin))
-         END DO
-         DEALLOCATE(this%A_ia_rspace_sub)
-      END IF
-      IF (ASSOCIATED(this%rho_r)) THEN
-         DO ispin = 1, this%nSpins
-            CALL auxbas_pw_pool%give_back_pw(this%rho_r(ispin))
-         END DO
-         DEALLOCATE(this%rho_r)
-      END IF
-      IF (ASSOCIATED(this%rho_g)) THEN
-         DO ispin = 1, this%nSpins
-            CALL auxbas_pw_pool%give_back_pw(this%rho_g(ispin))
-         END DO
-         DEALLOCATE(this%rho_g)
-      END IF
-      IF (ASSOCIATED(this%tau_r)) THEN
-         DO ispin = 1, this%nSpins
-            CALL auxbas_pw_pool%give_back_pw(this%tau_r(ispin))
-         END DO
-         DEALLOCATE(this%tau_r)
-      END IF
-      IF (ASSOCIATED(this%work_v_xc)) THEN
-         DO ispin = 1, this%nSpins
-            CALL auxbas_pw_pool%give_back_pw(this%work_v_xc(ispin))
-         END DO
-         DEALLOCATE(this%work_v_xc)
-      END IF
-      IF (ASSOCIATED(this%work_v_xc_tau)) THEN
-         DO ispin = 1, this%nSpins
-            CALL auxbas_pw_pool%give_back_pw(this%work_v_xc_tau(ispin))
-         END DO
-         DEALLOCATE(this%work_v_xc_tau)
-      END IF
-
-!     IF (ASSOCIATED(this%rho_orb_struct_sub)) THEN
-!        CALL qs_rho_release(this%rho_orb_struct_sub)
-!        DEALLOCATE(this%rho_orb_struct_sub)
-!     END IF
-
-      kernel_env = kernel_env
-!     CALL release_kernel_env(kernel_env%full_kernel)
-
-      CALL timestop(handle)
-
-   END SUBROUTINE tddft_finalize_data
-
-
-! **************************************************************************************************
-!> \brief The energy calculation has been moved to its own subroutine
-!> \param qs_env ...
-!> \param nStates ...
-!> \param work_matrices ...
-!> \param tddfpt_control ...
-!> \param logger ...
-!> \param tddfpt_print_section ...
-!> \param evects ...
-!> \param evals ...
-!> \param gs_mos ...
-!> \param S_evects ...
-!> \param matrix_s ...
-!> \param kernel_env ...
-!> \param matrix_ks ...
-!> \param sub_env ...
-!> \param xc_section ...
-!> \param full_kernel_env ...
-!> \param kernel_env_admm_aux ...
-! **************************************************************************************************
-   SUBROUTINE tddft_run(this, qs_env, tddfpt_control, logger, tddfpt_print_section, &
+   SUBROUTINE tddft_run(tddft_env, qs_env, tddfpt_control, logger, tddfpt_print_section, &
                         gs_mos, kernel_env, matrix_ks, sub_env)
-
-      CLASS(tddft_info_type), INTENT(INOUT)              :: this
+      TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -1007,11 +390,11 @@ CONTAINS
 
          CALL cp_add_iter_level(logger%iter_info, "TDDFT_SCF")
 
-         mxvec = this%nocca * this%nvirb
-         max_krylov_vects = MIN(MAX(tddfpt_control%nkvs, this%nStates), INT(mxvec))
+         mxvec = tddft_env%nocca * tddft_env%nvirb
+         max_krylov_vects = MIN(MAX(tddfpt_control%nkvs, tddft_env%nStates), INT(mxvec))
 
          ist = 1
-         iend = this%nvec
+         iend = tddft_env%nvec
          ierr = 0
 
          DO iter = 1, niters
@@ -1021,169 +404,165 @@ CONTAINS
                ! Orthogonal_transform
                ! X_ao = C_alpha * X_mo * C_beta^T
                ! C[nbf,nvirb] = 1.0*A[nbf,nocca]*B[nocca,nvirb] + 0.0*C[nbf,nvirb]
-               CALL parallel_gemm('N', 'N', this%nbf, this%nvirb, this%nocca, &
+               CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nvirb, tddft_env%nocca, &
                                   1.0_dp, gs_mos(1)%mos_occ, &
-                                          this%evects_mo(ivec), &
-                                  0.0_dp, this%work_ao_vir)
+                                          tddft_env%evects_mo(ivec), &
+                                  0.0_dp, tddft_env%work_ao_vir)
                ! C[nbf,nbf] = 1.0*A[nbf,nvirb]*(B[nbf,nvirb])^T + 0.0*C[nbf,nbf]
-               CALL parallel_gemm('N', 'T', this%nbf, this%nbf, this%nvirb, &
-                                  1.0_dp, this%work_ao_vir, &
+               CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nbf, tddft_env%nvirb, &
+                                  1.0_dp, tddft_env%work_ao_vir, &
                                           gs_mos(2)%mos_virt, &
-                                  0.0_dp, this%evects_ao_ao(1))
+                                  0.0_dp, tddft_env%evects_ao_ao(1))
 
                ! Print
-!              IF (log_unit > 0) THEN
-!                 CALL cp_fm_write_formatted(this%evects_ao_ao(1), log_unit)
-!              END IF
-               CALL print_mat_ao_ao(this%evects_ao_ao(1), 'evects', logger, ivec)
+               CALL print_mat_ao_ao(tddft_env%evects_ao_ao(1), 'evects', logger, ivec)
 
                ! Transform to sym/asym
                ! symm
-               CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
+               CALL cp_fm_set_all(matrix=tddft_env%work1_ao_ao, alpha=0.0_dp)
                ! work1 = 0.5*X
                CALL cp_fm_scale_and_add( &
-                         alpha=0.0_dp, matrix_a=this%work1_ao_ao, &
-                         beta=0.5_dp,  matrix_b=this%evects_ao_ao(1))
+                         alpha=0.0_dp, matrix_a=tddft_env%work1_ao_ao, &
+                         beta=0.5_dp,  matrix_b=tddft_env%evects_ao_ao(1))
                ! work2 = X^T
-               CALL cp_fm_transpose(this%evects_ao_ao(1), this%work2_ao_ao)
+               CALL cp_fm_transpose(tddft_env%evects_ao_ao(1), tddft_env%work2_ao_ao)
 
                ! work1 += 0.5*work2
                CALL cp_fm_scale_and_add( &
-                         alpha=1.0_dp, matrix_a=this%work1_ao_ao, &
-                         beta=0.5_dp,  matrix_b=this%work2_ao_ao)
+                         alpha=1.0_dp, matrix_a=tddft_env%work1_ao_ao, &
+                         beta=0.5_dp,  matrix_b=tddft_env%work2_ao_ao)
 
                ! Print
-               CALL print_mat_ao_ao(this%work1_ao_ao, 'work_sym', logger, ivec)
+               CALL print_mat_ao_ao(tddft_env%work1_ao_ao, 'work_sym', logger, ivec)
 
                ! Set density-like to 0.0
-               CALL dbcsr_set(matrix=this%work_rho_ao_ao_symm(1)%matrix, &
+               CALL dbcsr_set(matrix=tddft_env%work_rho_ao_ao_symm(1)%matrix, &
                               alpha=0.0_dp)
 
                ! FM to DBCSR
-               CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
-                                     matrix=this%work_rho_ao_ao_symm(1)%matrix, &
+               CALL copy_fm_to_dbcsr(fm=tddft_env%work1_ao_ao, &
+                                     matrix=tddft_env%work_rho_ao_ao_symm(1)%matrix, &
                                      keep_sparsity=.TRUE.)
                ! asymm
-               CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
+               CALL cp_fm_set_all(matrix=tddft_env%work1_ao_ao, alpha=0.0_dp)
 
                ! work1 = 0.5*X
                CALL cp_fm_scale_and_add( &
-                         alpha=0.0_dp, matrix_a=this%work1_ao_ao, &
-                         beta=0.5_dp,  matrix_b=this%evects_ao_ao(1))
+                         alpha=0.0_dp, matrix_a=tddft_env%work1_ao_ao, &
+                         beta=0.5_dp,  matrix_b=tddft_env%evects_ao_ao(1))
                ! work1 -= 0.5*work2
                CALL cp_fm_scale_and_add( &
-                         alpha=1.0_dp, matrix_a=this%work1_ao_ao, &
-                         beta=-0.5_dp, matrix_b=this%work2_ao_ao)
+                         alpha=1.0_dp, matrix_a=tddft_env%work1_ao_ao, &
+                         beta=-0.5_dp, matrix_b=tddft_env%work2_ao_ao)
 
                ! Print
-               CALL print_mat_ao_ao(this%work1_ao_ao, 'work_asym', logger, ivec)
+               CALL print_mat_ao_ao(tddft_env%work1_ao_ao, 'work_asym', logger, ivec)
 
                ! Set density-like to 0.0
-               CALL dbcsr_set(matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
+               CALL dbcsr_set(matrix=tddft_env%work_rho_ao_ao_asymm(1)%matrix, &
                               alpha=0.0_dp)
 
                ! FM to DBCSR
-               CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
-                                     matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
+               CALL copy_fm_to_dbcsr(fm=tddft_env%work1_ao_ao, &
+                                     matrix=tddft_env%work_rho_ao_ao_asymm(1)%matrix, &
                                      keep_sparsity=.TRUE.)
 
                ! Set sigma to 0.0
-               CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
-               CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
+               CALL dbcsr_set(matrix=tddft_env%work_hmat_symm(1)%matrix, alpha=0.0_dp)
+               CALL dbcsr_set(matrix=tddft_env%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
 
                !-----------------------------------------------
                ! ERI contraction: Sigma = ERI * X [DBCSR type]
                !-----------------------------------------------
-               qs_env = qs_env
-               CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
-                                     rho_ao=this%work_rho_ao_ao_symm, &
+               CALL tddft_hfx_matrix(matrix_ks=tddft_env%work_hmat_symm, &
+                                     rho_ao=tddft_env%work_rho_ao_ao_symm, &
                                      qs_env=qs_env)
-               CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
-                                     rho_ao=this%work_rho_ao_ao_asymm, &
+               CALL tddft_hfx_matrix(matrix_ks=tddft_env%work_hmat_asymm, &
+                                     rho_ao=tddft_env%work_rho_ao_ao_asymm, &
                                      qs_env=qs_env)
  
                !-----------------------------------------------
                ! Transform back to MO basis
                !-----------------------------------------------
                ! BDCSR to FM
-               CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
-               CALL cp_fm_set_all(matrix=this%work2_ao_ao, alpha=0.0_dp)
+               CALL cp_fm_set_all(matrix=tddft_env%work1_ao_ao, alpha=0.0_dp)
+               CALL cp_fm_set_all(matrix=tddft_env%work2_ao_ao, alpha=0.0_dp)
 
-               CALL copy_dbcsr_to_fm(matrix=this%work_hmat_symm(1)%matrix, &
-                                     fm=this%work1_ao_ao)
-               CALL copy_dbcsr_to_fm(matrix=this%work_hmat_asymm(1)%matrix, &
-                                     fm=this%work2_ao_ao)
+               CALL copy_dbcsr_to_fm(matrix=tddft_env%work_hmat_symm(1)%matrix, &
+                                     fm=tddft_env%work1_ao_ao)
+               CALL copy_dbcsr_to_fm(matrix=tddft_env%work_hmat_asymm(1)%matrix, &
+                                     fm=tddft_env%work2_ao_ao)
                ! Print
-               CALL print_mat_ao_ao(this%work1_ao_ao, 'Awork_sym', logger, ivec)
-               CALL print_mat_ao_ao(this%work2_ao_ao, 'Awork_asym', logger, ivec)
+               CALL print_mat_ao_ao(tddft_env%work1_ao_ao, 'Awork_sym', logger, ivec)
+               CALL print_mat_ao_ao(tddft_env%work2_ao_ao, 'Awork_asym', logger, ivec)
 
-               CALL cp_fm_set_all(matrix=this%hmat_ao_ao, alpha=0.0_dp)
+               CALL cp_fm_set_all(matrix=tddft_env%hmat_ao_ao, alpha=0.0_dp)
                ! A = 0.0*A + 1.0*B
                CALL cp_fm_scale_and_add( &
-                        alpha=0.0_dp, matrix_a=this%hmat_ao_ao, &
-                        beta=1.0_dp,  matrix_b=this%work1_ao_ao)
+                        alpha=0.0_dp, matrix_a=tddft_env%hmat_ao_ao, &
+                        beta=1.0_dp,  matrix_b=tddft_env%work1_ao_ao)
                ! A = 1.0*A + 1.0*B
                CALL cp_fm_scale_and_add( &
-                        alpha=1.0_dp, matrix_a=this%hmat_ao_ao, &
-                        beta=1.0_dp,  matrix_b=this%work2_ao_ao)
+                        alpha=1.0_dp, matrix_a=tddft_env%hmat_ao_ao, &
+                        beta=1.0_dp,  matrix_b=tddft_env%work2_ao_ao)
                ! Print
-               CALL print_mat_ao_ao(this%hmat_ao_ao, "hmat_ao_tot", logger, ivec)
+               CALL print_mat_ao_ao(tddft_env%hmat_ao_ao, "hmat_ao_tot", logger, ivec)
 
                ! C[nocca,nbf] = 1.0*(A[nbf,nocca])^T * B[nbf,nbf] + 0.0*C[nocca,nbf]
-               CALL parallel_gemm('T', 'N', this%nocca, this%nbf, this%nbf, &
+               CALL parallel_gemm('T', 'N', tddft_env%nocca, tddft_env%nbf, tddft_env%nbf, &
                                   1.0_dp, gs_mos(1)%mos_occ, &
-                                          this%hmat_ao_ao, &
-                                  0.0_dp, this%work_noc_ao)
+                                          tddft_env%hmat_ao_ao, &
+                                  0.0_dp, tddft_env%work_noc_ao)
 
                ! C[nocca,nvirb] = 1.0*A[noc,nbf] * B[nbf,nvirb] + 0.0*C[nocca,nvirb]
-               CALL parallel_gemm('N', 'N', this%nocca, this%nvirb, this%nbf, &
-                                  1.0_dp, this%work_noc_ao, &
+               CALL parallel_gemm('N', 'N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nbf, &
+                                  1.0_dp, tddft_env%work_noc_ao, &
                                           gs_mos(2)%mos_virt, &
-                                  0.0_dp, this%sigma_vecs(ivec))
+                                  0.0_dp, tddft_env%sigma_vecs(ivec))
                ! Print
-               CALL print_mat_ao_ao(this%sigma_vecs(ivec), "sigma_vecs", logger, ivec)
+               CALL print_mat_ao_ao(tddft_env%sigma_vecs(ivec), "sigma_vecs", logger, ivec)
 
-               SELECT CASE (this%reference_type)
+               SELECT CASE (tddft_env%reference_type)
                CASE (1) ! ROKS/ROHF
                   ! Add ROHF corrections using Fock matrix contributions
                   ! Sigma = X*F_b - F_a*X
                   ! C[nocca,nvirb] = -1.0*A[nocca,nocca]*B[nocca,nvirb]+0.0*C[nocca,nvirb]
-                  CALL parallel_gemm('N','N', this%nocca, this%nvirb, this%nocca, &
-                                     -1.0_dp, this%focka_noc_noc, &
-                                              this%evects_mo(ivec), &
-                                      0.0_dp, this%work_noc_vir)
+                  CALL parallel_gemm('N','N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nocca, &
+                                     -1.0_dp, tddft_env%focka_noc_noc, &
+                                              tddft_env%evects_mo(ivec), &
+                                      0.0_dp, tddft_env%work_noc_vir)
 
                   ! C[nocca,nvirb] = 1.0*A[nocca,nvirb]*B[nvirb,nvirb] + 1.0*C[nocca,nvirb]
-                  CALL parallel_gemm('N','N', this%nocca, this%nvirb, this%nvirb, &
-                                      1.0_dp, this%evects_mo(ivec), &
-                                              this%fockb_vir_vir, &
-                                      1.0_dp, this%work_noc_vir)
+                  CALL parallel_gemm('N','N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nvirb, &
+                                      1.0_dp, tddft_env%evects_mo(ivec), &
+                                              tddft_env%fockb_vir_vir, &
+                                      1.0_dp, tddft_env%work_noc_vir)
 
                   ! Add corrections to sigma_mo
                   ! A = 1.0 * A + 1.0 * B
                   CALL cp_fm_scale_and_add( &
-                           alpha=1.0_dp, matrix_a=this%sigma_vecs(ivec), &
-                           beta=1.0_dp,  matrix_b=this%work_noc_vir)
+                           alpha=1.0_dp, matrix_a=tddft_env%sigma_vecs(ivec), &
+                           beta=1.0_dp,  matrix_b=tddft_env%work_noc_vir)
 
                CASE (2) ! UKS/UHF
                   ! Add orbital energy difference contributions for UHF
                   ij = 0
-                  DO a = 1, this%nvirb
-                     DO i = 1, this%nocca
+                  DO a = 1, tddft_env%nvirb
+                     DO i = 1, tddft_env%nocca
                         ij = ij + 1
 
-                        CALL cp_fm_get_element(matrix=this%sigma_vecs(ivec), &
+                        CALL cp_fm_get_element(matrix=tddft_env%sigma_vecs(ivec), &
                                                irow_global=i, &
                                                icol_global=a, &
                                                alpha=sig)
-                        CALL cp_fm_get_element(matrix=this%evects_mo(ivec), &
+                        CALL cp_fm_get_element(matrix=tddft_env%evects_mo(ivec), &
                                                irow_global=i, &
                                                icol_global=a, &
                                                alpha=val)
 
-                        sig = sig + this%e_virt_minus_occ(ij) * val
+                        sig = sig + tddft_env%e_virt_minus_occ(ij) * val
 
-                        CALL cp_fm_set_element(matrix=this%sigma_vecs(ivec), &
+                        CALL cp_fm_set_element(matrix=tddft_env%sigma_vecs(ivec), &
                                                irow_global=i, &
                                                icol_global=a, &
                                                alpha=sig)
@@ -1191,90 +570,90 @@ CONTAINS
                   END DO
                END SELECT
                ! Print
-               CALL print_mat_ao_ao(this%sigma_vecs(ivec), 'sigma_mat', logger, ivec)
+               CALL print_mat_ao_ao(tddft_env%sigma_vecs(ivec), 'sigma_mat', logger, ivec)
             END DO
 
             ! alloc A[nvec,nvec]
-            CALL alloc_fm_mat(this%subspace, this%nvec, this%nvec, sub_env)
-            CALL alloc_fm_mat(this%subspace_evecs, this%nvec, this%nvec, sub_env)
+            CALL allocate_fm_matrix(tddft_env%subspace, tddft_env%nvec, tddft_env%nvec, sub_env)
+            CALL allocate_fm_matrix(tddft_env%subspace_evecs, tddft_env%nvec, tddft_env%nvec, sub_env)
 
             ! (1) build sub-space matrix Atilde = X^T * sigma * X
             ! Could be DGEMM
             ! C[nvec,nvec] = 1.0*(A(nvec)[dim])^T*B(nvec)[dim] + 0.0*C[nvec,nvec]
-            DO i = 1, this%nvec
+            DO i = 1, tddft_env%nvec
                DO j = 1, i
-                  CALL cp_fm_trace(matrix_a=this%evects_mo(i), &
-                                   matrix_b=this%sigma_vecs(j), &
+                  CALL cp_fm_trace(matrix_a=tddft_env%evects_mo(i), &
+                                   matrix_b=tddft_env%sigma_vecs(j), &
                                    trace=val)
-                  CALL cp_fm_set_element(matrix=this%subspace, &
+                  CALL cp_fm_set_element(matrix=tddft_env%subspace, &
                                          irow_global=i, &
                                          icol_global=j, &
                                          alpha=val)
-                  IF (i/=j) CALL cp_fm_set_element(matrix=this%subspace, &
+                  IF (i/=j) CALL cp_fm_set_element(matrix=tddft_env%subspace, &
                                                    irow_global=j, &
                                                    icol_global=i, &
                                                    alpha=val)
                END DO
             END DO
             ! Print
-            CALL print_mat_ao_ao(this%subspace, "subspace", logger, iter)
+            CALL print_mat_ao_ao(tddft_env%subspace, "subspace", logger, iter)
 
             ! (2) diagonalise Atilde  → omega_i & coeffs
             ! Diagonalize subspace matrix
-            CALL choose_eigv_solver(matrix=this%subspace, &
-                                    eigenvalues=this%ritz_evals(1:this%nvec), &
-                                    eigenvectors=this%subspace_evecs, &
+            CALL choose_eigv_solver(matrix=tddft_env%subspace, &
+                                    eigenvalues=tddft_env%ritz_evals(1:tddft_env%nvec), &
+                                    eigenvectors=tddft_env%subspace_evecs, &
                                     info=ierr)
-            CALL dealloc_fm_mat(this%subspace)
+            CALL deallocate_fm_matrix(tddft_env%subspace)
             ! Print
             print *, "KKK| ================ Energy ============== at iter=", iter
-            DO ivec = 1, this%nstates
-               print *, "KKK| Energy (eV):", ivec, this%ritz_evals(ivec)*evolt
+            DO ivec = 1, tddft_env%nstates
+               print *, "KKK| Energy (eV):", ivec, tddft_env%ritz_evals(ivec)*evolt
             END DO
-            CALL print_mat_ao_ao(this%subspace_evecs, "subspace_evecs", logger, iter)
+            CALL print_mat_ao_ao(tddft_env%subspace_evecs, "subspace_evecs", logger, iter)
 
             ! Normalization
-            CALL cp_fm_vectorsnorm(this%subspace_evecs, this%vector_norm(1:this%nvec))
-            this%vector_scal(1:this%nvec) = 1.0_dp/this%vector_norm(1:this%nvec)
-            DO i = 1, this%nvec
-               PRINT *, "Norm of column ", i, ": ", this%vector_norm(i)
+            CALL cp_fm_vectorsnorm(tddft_env%subspace_evecs, tddft_env%vector_norm(1:tddft_env%nvec))
+            tddft_env%vector_scal(1:tddft_env%nvec) = 1.0_dp/tddft_env%vector_norm(1:tddft_env%nvec)
+            DO i = 1, tddft_env%nvec
+               PRINT *, "Norm of column ", i, ": ", tddft_env%vector_norm(i)
             END DO
-            CALL cp_fm_column_scale(this%subspace_evecs, this%vector_scal(1:this%nvec))
+            CALL cp_fm_column_scale(tddft_env%subspace_evecs, tddft_env%vector_scal(1:tddft_env%nvec))
 
             ! Print
-            CALL print_mat_ao_ao(this%subspace_evecs, "normed subspace_evecs", logger, iter)
+            CALL print_mat_ao_ao(tddft_env%subspace_evecs, "normed subspace_evecs", logger, iter)
 
 !           transformation_matrix = subspace_evecs
             ! Flag(a)
-            DO iv = 1, this%nstates
-               CALL cp_fm_set_all(matrix=this%residual_vecs(iv), &
+            DO iv = 1, tddft_env%nstates
+               CALL cp_fm_set_all(matrix=tddft_env%residual_vecs(iv), &
                                   alpha=0.0_dp)
 
-               DO j = 1, this%nvec
-                  CALL cp_fm_get_element(matrix=this%subspace_evecs, &
+               DO j = 1, tddft_env%nvec
+                  CALL cp_fm_get_element(matrix=tddft_env%subspace_evecs, &
                                          irow_global=j, &
                                          icol_global=iv, &
                                          alpha=val)
                   CALL cp_fm_scale_and_add( &
-                           alpha=1.0_dp, matrix_a=this%residual_vecs(iv), &
-                           beta=val,     matrix_b=this%sigma_vecs(j))
+                           alpha=1.0_dp, matrix_a=tddft_env%residual_vecs(iv), &
+                           beta=val,     matrix_b=tddft_env%sigma_vecs(j))
                END DO
             END DO
 
             ! Print
-            DO iv = 1, this%nstates
-               CALL print_mat_ao_ao(this%residual_vecs(iv), "residual_vecs", logger, iter)
+            DO iv = 1, tddft_env%nstates
+               CALL print_mat_ao_ao(tddft_env%residual_vecs(iv), "residual_vecs", logger, iter)
             END DO
 
             ! Flag(b)
-            DO i = 1, this%nstates
-               DO j = 1, this%nvec
-                  CALL cp_fm_get_element(matrix=this%subspace_evecs, &
+            DO i = 1, tddft_env%nstates
+               DO j = 1, tddft_env%nvec
+                  CALL cp_fm_get_element(matrix=tddft_env%subspace_evecs, &
                                          irow_global=j, &
                                          icol_global=i, &
                                          alpha=val)
-                   val = -val*this%ritz_evals(i)
-                  CALL cp_fm_set_element(matrix=this%subspace_evecs, &
+                   val = -val*tddft_env%ritz_evals(i)
+                  CALL cp_fm_set_element(matrix=tddft_env%subspace_evecs, &
                                          irow_global=j, &
                                          icol_global=i, &
                                          alpha=val)
@@ -1283,38 +662,37 @@ CONTAINS
             END DO
 
             ! Flag(c)
-            DO iv = 1, this%nstates
-               DO j = 1, this%nvec
-                  CALL cp_fm_get_element(matrix=this%subspace_evecs, &
+            DO iv = 1, tddft_env%nstates
+               DO j = 1, tddft_env%nvec
+                  CALL cp_fm_get_element(matrix=tddft_env%subspace_evecs, &
                                          irow_global=j, &
                                          icol_global=iv, &
                                          alpha=val)
                   CALL cp_fm_scale_and_add( &
-                           alpha=1.0_dp, matrix_a=this%residual_vecs(iv), &
-                           beta=val,     matrix_b=this%evects_mo(j))
+                           alpha=1.0_dp, matrix_a=tddft_env%residual_vecs(iv), &
+                           beta=val,     matrix_b=tddft_env%evects_mo(j))
                END DO
             END DO
-            CALL dealloc_fm_mat(this%subspace_evecs)
+            CALL deallocate_fm_matrix(tddft_env%subspace_evecs)
 
             ! Print
-            DO iv = 1, this%nstates
-               CALL print_mat_ao_ao(this%residual_vecs(iv), "2 residual_vecs", logger, iv)
+            DO iv = 1, tddft_env%nstates
+               CALL print_mat_ao_ao(tddft_env%residual_vecs(iv), "2 residual_vecs", logger, iv)
             END DO
 
             ! Flag(d)
-            DO iv = 1, this%nstates
-               CALL cp_fm_trace(this%residual_vecs(iv), &
-                                this%residual_vecs(iv), val)
-               this%residual_norms(iv) = val
-               print *, "dot_prod residual_vecs=", val
+            DO iv = 1, tddft_env%nstates
+               CALL cp_fm_trace(tddft_env%residual_vecs(iv), &
+                                tddft_env%residual_vecs(iv), val)
+               tddft_env%residual_norms(iv) = val
             END DO
 
-            DO iv = 1, this%nstates
+            DO iv = 1, tddft_env%nstates
                ij = 0
-               DO a = 1, this%nvirb
-                  DO i = 1, this%nocca
+               DO a = 1, tddft_env%nvirb
+                  DO i = 1, tddft_env%nocca
                      ij = ij + 1
-                     val = this%ritz_evals(iv)-this%e_virt_minus_occ(ij)
+                     val = tddft_env%ritz_evals(iv)-tddft_env%e_virt_minus_occ(ij)
                      val2 = abs(val)
                      IF (val2 < 1.e-12_dp) THEN
                         val = 1.e-5_dp
@@ -1322,23 +700,23 @@ CONTAINS
                         sig = val2/val
                         val = sig*1.e-5_dp
                      END IF
-                     CALL cp_fm_get_element(this%residual_vecs(iv), i, a, scal)
+                     CALL cp_fm_get_element(tddft_env%residual_vecs(iv), i, a, scal)
                      scal = scal/val
-                     CALL cp_fm_set_element(this%residual_vecs(iv), i, a, scal)
+                     CALL cp_fm_set_element(tddft_env%residual_vecs(iv), i, a, scal)
                   END DO
                END DO
             END DO
             IF (log_unit > 0) THEN
                WRITE (log_unit, '(/,4X,A,T14,A,T36,A)') "State", "Exc. energy (eV)", "Convergence (eV)"
-               DO iv = 1, this%nstates
+               DO iv = 1, tddft_env%nstates
                   WRITE (log_unit, '(1X,I8,T12,F14.7,T38,ES11.4)') iv, &
-                     this%ritz_evals(iv)*evolt, this%residual_norms(iv)
+                     tddft_env%ritz_evals(iv)*evolt, tddft_env%residual_norms(iv)
                END DO
                WRITE (log_unit, *)
                CALL m_flush(log_unit)
             END IF
 
-            max_error = maxval(this%residual_norms)
+            max_error = maxval(tddft_env%residual_norms)
             t2 = m_walltime()
             IF (log_unit > 0) THEN
                WRITE (log_unit, '(T7,I8,T24,F7.1,T40,ES11.4,T66)') iter, t2 - t1, max_error
@@ -1351,48 +729,48 @@ CONTAINS
             print *, "is_converged=",is_converged, max_error
             IF (is_converged) EXIT
 
-            if (this%nvec==this%mxvec) ierr = 1
+            if (tddft_env%nvec==tddft_env%mxvec) ierr = 1
             if (ierr /= 0) EXIT
 
-            this%novec = this%nvec
+            tddft_env%novec = tddft_env%nvec
             ierr = 0
 
-            DO k = 1, this%nstates
-               DO iv = 1, this%nvec
-                  CALL cp_fm_trace(this%evects_mo(iv), &
-                                   this%residual_vecs(k), val)
+            DO k = 1, tddft_env%nstates
+               DO iv = 1, tddft_env%nvec
+                  CALL cp_fm_trace(tddft_env%evects_mo(iv), &
+                                   tddft_env%residual_vecs(k), val)
                   CALL cp_fm_scale_and_add( &
-                           alpha=1.0_dp, matrix_a=this%residual_vecs(k), &
-                           beta=-val,     matrix_b=this%evects_mo(iv))
+                           alpha=1.0_dp, matrix_a=tddft_env%residual_vecs(k), &
+                           beta=-val,     matrix_b=tddft_env%evects_mo(iv))
                END DO
 
-               CALL cp_fm_trace(this%residual_vecs(k), &
-                                this%residual_vecs(k), val)
+               CALL cp_fm_trace(tddft_env%residual_vecs(k), &
+                                tddft_env%residual_vecs(k), val)
                scal = sqrt(val)
 
                IF (scal<1.e-9_dp) CYCLE
 
-               IF (this%nvec == this%mxvec) THEN
+               IF (tddft_env%nvec == tddft_env%mxvec) THEN
                   ierr = 2
                   RETURN
                END IF
 
-               this%nvec = this%nvec + 1
+               tddft_env%nvec = tddft_env%nvec + 1
                CALL cp_fm_scale_and_add( &
-                        alpha=0._dp,     matrix_a=this%evects_mo(this%nvec), &
-                        beta=1._dp/scal, matrix_b=this%residual_vecs(k))
+                        alpha=0._dp,     matrix_a=tddft_env%evects_mo(tddft_env%nvec), &
+                        beta=1._dp/scal, matrix_b=tddft_env%residual_vecs(k))
             END DO
 
-            ms = this%nvec - this%novec
+            ms = tddft_env%nvec - tddft_env%novec
             IF (ms == 0) ierr = 3
 
             IF (ierr /= 0) EXIT
 
-            ist = this%novec+1
-            iend = this%nvec
+            ist = tddft_env%novec+1
+            iend = tddft_env%nvec
 
             ! Print
-            print *, "ENERGY:",this%ritz_evals(1:this%nstates)
+            print *, "ENERGY:",tddft_env%ritz_evals(1:tddft_env%nstates)
 
 !
             ! ERI contraction is here
