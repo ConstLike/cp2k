@@ -192,10 +192,108 @@ MODULE qs_tddft_types
    LOGICAL, PARAMETER, PRIVATE          :: debug_this_module = .FALSE.
 
    PUBLIC :: tddft_info_type
+   PUBLIC :: tddft_type
+   PUBLIC :: tddft_davidson_type
    PUBLIC :: tddft_allocate_data
    PUBLIC :: tddft_deallocate_data
    PUBLIC :: allocate_fm_matrix
    PUBLIC :: deallocate_fm_matrix
+
+! **************************************************************************************************
+!> \brief Universal TDDFT/Davidson infrastructure for excitation solvers.
+!>        Contains all state vectors, residuals, subspace matrices, eigenvalues, etc.
+!> \author  Konstantin Komarov (constlike@gmail.com)
+!> \date    2025-05-18
+! **************************************************************************************************
+   TYPE tddft_davidson_type
+
+      !> Number of states to solve for
+      INTEGER :: nstates
+      !> Current number of vectors in subspace (Krylov dimension)
+      INTEGER :: nvec
+      !> Max allowed number of vectors in subspace
+      INTEGER :: mxvec
+
+      !> Number of basis functions (AO)
+      INTEGER :: nbf
+      !> Number of alpha/beta occupied, virtual orbitals
+      INTEGER :: nocca, noccb, nvirb, nvira
+      !> Number of spin channels
+      INTEGER :: nspins
+
+      !> Trial vectors in MO basis: X_k
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: evects_mo
+      !> Sigma vectors in MO basis: sigma_k = H X_k
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: sigma_vecs
+      !> Ritz vectors in MO basis
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: ritz_vects
+      !> Residual vectors for convergence check
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: residual_vecs
+
+      !> Eigenvalues of current subspace (Ritz values)
+      REAL(dp), ALLOCATABLE, DIMENSION(:) :: ritz_evals
+      !> Eigenvalues from previous iteration (for convergence)
+      REAL(dp), ALLOCATABLE, DIMENSION(:) :: ritz_evals_prev
+      !> Norms of residual vectors
+      REAL(dp), ALLOCATABLE, DIMENSION(:) :: residual_norms
+
+      !> Subspace matrix (Atilde, for diagonalization)
+      TYPE(cp_fm_type) :: subspace
+      !> Subspace eigenvectors (coefficients for Ritz vectors)
+      TYPE(cp_fm_type) :: subspace_evecs
+
+      !> Other working buffers for orthogonalization, normalization, etc.
+      REAL(dp), ALLOCATABLE, DIMENSION(:) :: vector_norm
+      REAL(dp), ALLOCATABLE, DIMENSION(:) :: vector_scal
+
+      !> Diagonal MO energy differences (universal for guess, etc)
+      REAL(dp), ALLOCATABLE, DIMENSION(:) :: e_virt_minus_occ
+
+   END TYPE tddft_davidson_type
+
+! **************************************************************************************************
+!> \brief General TDDFT buffers and configuration
+!>        Holds only what is needed for a specific TDDFT theory (SF, MRSF, ...)
+!>        All data here is private for theory_handler%fields.
+!> \author  Konstantin Komarov (constlike@gmail.com)
+!> \date    2025-05-18
+! **************************************************************************************************
+   TYPE tddft_type
+
+      !> Reference type: 1=ROKS/ROHF, 2=UKS/UHF
+      INTEGER :: reference_type
+
+      !> [nbf, nbf] intermediate work matrices (for sym/antisym density etc)
+      TYPE(cp_fm_type) :: work1_ao_ao
+      TYPE(cp_fm_type) :: work2_ao_ao
+
+      !> [nbf, nbf] AO trial vector in AO form (symmetric, antisymmetric components)
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: evects_ao_ao
+
+      !> [nbf, nbf] DBCSR work matrices for density-like, symmetric/antisymmetric matrices
+      TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:) :: work_rho_ao_ao_symm
+      TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:) :: work_rho_ao_ao_asymm
+
+      !> DBCSR/CP_FM working matrices for HFX, AO sigma
+      TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:) :: work_hmat_symm, work_hmat_asymm
+
+      !> Buffers for AO sigma, AO-to-MO transformation
+      TYPE(cp_fm_type) :: hmat_ao_ao
+      TYPE(cp_fm_type) :: work_ao_vir
+      TYPE(cp_fm_type) :: work_noc_ao
+      TYPE(cp_fm_type) :: work_noc_vir
+
+      ! Buffers for alpha and beta Fock(1:2) and Fock submatrices in MO basis
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: fock
+      TYPE(cp_fm_type), POINTER                          :: Focka_noc_noc => NULL()
+      TYPE(cp_fm_type), POINTER                          :: Fockb_vir_vir => NULL()
+
+      !> AO density and grid representations
+      TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:) :: rho_ia_ao
+      TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:) :: A_ia_munu_sub
+      TYPE(pw_c1d_gs_type), ALLOCATABLE, DIMENSION(:) :: A_ia_rspace_sub
+
+   END TYPE tddft_type
 
    TYPE tddft_info_type
       INTEGER                                            :: reference_type = 0 ! 1 = ROKS/ROHF, 2 = UKS/UHF
@@ -230,6 +328,7 @@ MODULE qs_tddft_types
 
       ! evects_mo (mxvec)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: evects_mo
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: ritz_vects
       ! sigma_vecs (mxvec)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: sigma_vecs
 
@@ -277,6 +376,7 @@ MODULE qs_tddft_types
       TYPE(cp_fm_type) , ALLOCATABLE , DIMENSION(:) :: residual_vecs
       REAL(kind=dp)    , ALLOCATABLE , DIMENSION(:) :: residual_norms
       REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: ritz_evals
+      REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: ritz_evals_prev
       INTEGER                                       :: novec = 0          ! sub-space size
    END TYPE tddft_info_type
 
@@ -382,6 +482,7 @@ CONTAINS
       ALLOCATE (tddft_env%e_virt_minus_occ(tddft_env%xvec_dim), source=0.0_dp)
       ALLOCATE (tddft_env%evals(tddft_env%mxvec), source=0.0_dp)
       ALLOCATE (tddft_env%ritz_evals(tddft_env%mxvec), source=0.0_dp)
+      ALLOCATE (tddft_env%ritz_evals_prev(tddft_env%nstates), source=1.0E10_dp)
       ALLOCATE (tddft_env%vector_scal(tddft_env%mxvec), source=0.0_dp)
       ALLOCATE (tddft_env%vector_norm(tddft_env%mxvec), source=0.0_dp)
       ALLOCATE (tddft_env%residual_norms(tddft_env%nstates), source=0.0_dp)
@@ -434,6 +535,12 @@ CONTAINS
       DO ivec = 1, tddft_env%mxvec
          CALL fm_pool_create_fm(tddft_env%fm_pool_mo%pool, &
                                 tddft_env%evects_mo(ivec))
+      END DO
+      ! MO POOL: ritz_vects (nstates)[nocca, nvirb]
+      ALLOCATE (tddft_env%ritz_vects(tddft_env%nstates))
+      DO ivec = 1, tddft_env%nstates
+         CALL fm_pool_create_fm(tddft_env%fm_pool_mo%pool, &
+                                tddft_env%ritz_vects(ivec))
       END DO
       ! MO POOL: sigma_vecs (mxvec)[nocca, nvirb]
       ALLOCATE (tddft_env%sigma_vecs(tddft_env%mxvec))
@@ -625,6 +732,9 @@ CONTAINS
       IF (ALLOCATED(this%ritz_evals)) THEN
          DEALLOCATE(this%ritz_evals)
       END IF
+      IF (ALLOCATED(this%ritz_evals_prev)) THEN
+         DEALLOCATE(this%ritz_evals_prev)
+      END IF
       IF (ALLOCATED(this%vector_scal)) THEN
          DEALLOCATE (this%vector_scal)
       END IF
@@ -669,6 +779,13 @@ CONTAINS
                                       this%evects_mo(ivec))
          END DO
          DEALLOCATE(this%evects_mo)
+      END IF
+      IF (ALLOCATED(this%ritz_vects)) THEN
+         DO ivec = 1, SIZE(this%ritz_vects, 1)
+            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
+                                      this%ritz_vects(ivec))
+         END DO
+         DEALLOCATE(this%ritz_vects)
       END IF
       IF (ALLOCATED(this%sigma_vecs)) THEN
          DO ivec = 1, SIZE(this%sigma_vecs, 1)
@@ -752,6 +869,18 @@ CONTAINS
             CALL dbcsr_deallocate_matrix(this%work_hmat_asymm(ivec)%matrix)
          END DO
          DEALLOCATE(this%work_hmat_asymm)
+      END IF
+      IF (ASSOCIATED(this%rho_ia_ao)) THEN
+         DO ivec = 1, SIZE(this%rho_ia_ao)
+            CALL dbcsr_deallocate_matrix(this%rho_ia_ao(ivec)%matrix)
+         END DO
+         DEALLOCATE(this%rho_ia_ao)
+      END IF
+      IF (ASSOCIATED(this%A_ia_munu_sub)) THEN
+         DO ivec = 1, SIZE(this%A_ia_munu_sub)
+            CALL dbcsr_deallocate_matrix(this%A_ia_munu_sub(ivec)%matrix)
+         END DO
+         DEALLOCATE(this%A_ia_munu_sub)
       END IF
 
       !--------------------
