@@ -7,6 +7,12 @@
 !
 MODULE qs_tddft_theory_sf
 
+   USE qs_rho_methods,                  ONLY: qs_rho_rebuild
+   USE qs_rho_types,                    ONLY: qs_rho_create,&
+                                              qs_rho_release,&
+                                              qs_rho_set,&
+                                              qs_rho_get,&
+                                              qs_rho_type
    USE qs_tddfpt2_densities,            ONLY: tddfpt_construct_aux_fit_density,&
                                               tddfpt_construct_ground_state_orb_density
    USE qs_tddfpt2_subgroups,            ONLY: tddfpt_dbcsr_create_by_dist,&
@@ -115,11 +121,15 @@ MODULE qs_tddft_theory_sf
       TYPE(cp_fm_type), POINTER :: work1_ao_ao => NULL()
       TYPE(cp_fm_type), POINTER :: work2_ao_ao => NULL()
 
-      TYPE(cp_fm_type), POINTER :: rho_ia_ao_fm => NULL()
-
       !-------------------------------
       ! KERNELs related
       !-------------------------------
+      !> [XC kernel] NO NAME
+      TYPE(cp_fm_type), POINTER :: rho_ia_ao_fm => NULL()
+      TYPE(qs_rho_type), POINTER :: gs_rho_xc_struct => NULL()
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: A_ia_munu_sub
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: A_ia_rspace_sub => NULL()
+
       !> [HFX kernel] Symmetric AO density matrices [nSpins]
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: work_rho_ao_ao_symm
 
@@ -259,10 +269,23 @@ CONTAINS
       CALL cp_fm_set_all(this%rho_ia_ao_fm, 0.0_dp)
       !=================================================
 
+      !--------------------
+      ! ALLOCATE  DBCSR
+      !--------------------
       CALL get_qs_env(qs_env=qs_env, &
                       matrix_s=matrix_s, &
                       dbcsr_dist=sub_env%dbcsr_dist, &
                       sab_orb=sab_hfx)
+
+      NULLIFY (this%A_ia_munu_sub)
+      CALL dbcsr_allocate_matrix_set(this%A_ia_munu_sub, 1)
+      DO ispin = 1, 1
+         CALL dbcsr_init_p(this%A_ia_munu_sub(ispin)%matrix)
+         CALL tddfpt_dbcsr_create_by_dist(this%A_ia_munu_sub(ispin)%matrix, &
+                                          template=matrix_s(1)%matrix, &
+                                          dbcsr_dist=sub_env%dbcsr_dist, &
+                                          sab=sub_env%sab_orb)
+      END DO
 
       NULLIFY (this%work_rho_ao_ao_symm)
       CALL dbcsr_allocate_matrix_set(this%work_rho_ao_ao_symm, tddft_env%nSpins)
@@ -307,6 +330,10 @@ CONTAINS
       !--------------------
       CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
 
+      ALLOCATE (this%A_ia_rspace_sub(tddft_env%nSpins))
+      DO ispin = 1, tddft_env%nSpins
+         CALL auxbas_pw_pool%create_pw(this%A_ia_rspace_sub(ispin))
+      END DO
       ALLOCATE (this%rho_r(tddft_env%nspins))
       DO ispin = 1, tddft_env%nspins
          CALL auxbas_pw_pool%create_pw(this%rho_r(ispin))
@@ -345,7 +372,7 @@ CONTAINS
       CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
       TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
 
-      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
+      TYPE(pw_pool_type), POINTER :: auxbas_pw_pool
       INTEGER :: ivec, ispin
 
       IF (ASSOCIATED(this%hmat_ao_ao)) THEN
@@ -382,6 +409,14 @@ CONTAINS
          CALL cp_fm_release(this%rho_ia_ao_fm)
          DEALLOCATE(this%rho_ia_ao_fm)
       END IF
+
+      IF (ASSOCIATED(this%A_ia_munu_sub)) THEN
+         DO ivec = 1, SIZE(this%A_ia_munu_sub)
+            CALL dbcsr_deallocate_matrix(this%A_ia_munu_sub(ivec)%matrix)
+         END DO
+         DEALLOCATE(this%A_ia_munu_sub)
+      END IF
+
       IF (ASSOCIATED(this%work_rho_ao_ao_symm)) THEN
          DO ivec = 1, SIZE(this%work_rho_ao_ao_symm)
             CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_symm(ivec)%matrix)
@@ -409,6 +444,12 @@ CONTAINS
 
       CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
 
+      IF (ASSOCIATED(this%A_ia_rspace_sub)) THEN
+         DO ispin = 1, SIZE(this%A_ia_rspace_sub)
+            CALL auxbas_pw_pool%give_back_pw(this%A_ia_rspace_sub(ispin))
+         END DO
+         DEALLOCATE(this%A_ia_rspace_sub)
+      END IF
       IF (ASSOCIATED(this%rho_r)) THEN
          DO ispin = 1, SIZE(this%rho_r)
             CALL auxbas_pw_pool%give_back_pw(this%rho_r(ispin))
@@ -465,7 +506,7 @@ CONTAINS
 
       CALL tddfpt_construct_ground_state_orb_density( &
                rho_orb_struct=tddft_env%rho_orb_struct_sub, &
-               rho_xc_struct=tddft_env%gs_rho_xc_struct, &
+               rho_xc_struct=this%gs_rho_xc_struct, &
                is_rks_triplets=tddfpt_control%rks_triplets, &
                qs_env=qs_env, &
                sub_env=sub_env, &
@@ -692,9 +733,9 @@ CONTAINS
 !                            task_list_external=sub_env%task_list_orb, &
 !                            para_env_external=sub_env%para_env)
 !     DO i = 1, tddft_env%nSpins
-!        CALL pw_zero(tddft_env%A_ia_rspace_sub(i))
+!        CALL pw_zero(this%A_ia_rspace_sub(i))
 !     END DO
-!     CALL tddfpt_apply_xc(A_ia_rspace=tddft_env%A_ia_rspace_sub, &
+!     CALL tddfpt_apply_xc(A_ia_rspace=this%A_ia_rspace_sub, &
 !                          kernel_env=kernel_env%full_kernel, &
 !                          rho_ia_struct=tddft_env%rho_orb_struct_sub, &
 !                          is_rks_triplets=tddfpt_control%rks_triplets, &
@@ -702,18 +743,18 @@ CONTAINS
 !                          work_v_xc=this%work_v_xc, &
 !                          work_v_xc_tau=this%work_v_xc_tau, &
 !                          spinflip=tddfpt_control%spinflip) ! 1 collinear, 2=noncollinear
-!     CALL pw_scale(tddft_env%A_ia_rspace_sub(1), &
-!                   tddft_env%A_ia_rspace_sub(1)%pw_grid%dvol)
+!     CALL pw_scale(this%A_ia_rspace_sub(1), &
+!                   this%A_ia_rspace_sub(1)%pw_grid%dvol)
 !     ! Integrate XC contribution into the TDDFT operator (add to hmat_ao_ao)
-!     CALL dbcsr_set(matrix=tddft_env%A_ia_munu_sub(1)%matrix, alpha=0.0_dp)
-!     CALL integrate_v_rspace(v_rspace=tddft_env%A_ia_rspace_sub(1), &
-!                             hmat=tddft_env%A_ia_munu_sub(1), &
+!     CALL dbcsr_set(matrix=this%A_ia_munu_sub(1)%matrix, alpha=0.0_dp)
+!     CALL integrate_v_rspace(v_rspace=this%A_ia_rspace_sub(1), &
+!                             hmat=this%A_ia_munu_sub(1), &
 !                             qs_env=qs_env, &
 !                             calculate_forces=.FALSE., &
 !                             gapw=.FALSE., &
 !                             pw_env_external=sub_env%pw_env, &
 !                             task_list_external=sub_env%task_list_orb)
-!     CALL copy_dbcsr_to_fm(matrix=tddft_env%A_ia_munu_sub(1)%matrix, &
+!     CALL copy_dbcsr_to_fm(matrix=this%A_ia_munu_sub(1)%matrix, &
 !                           fm=this%work2_ao_ao)
 !     ! Print
 !     CALL print_mat_ao_ao(this%work2_ao_ao, 'Awork_xc', logger, ivec)

@@ -231,18 +231,10 @@ MODULE qs_tddft_types
       !-------------------------------
       ! KERNELs related
 
-      !> [XC kernel] NO NAME
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: A_ia_munu_sub
-      !> [XC kernel] NO NAME
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: rho_ia_ao
-      !> [XC kernel] NO NAME
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: A_ia_rspace_sub => NULL()
-
       !> Orbital-pair density structure
       TYPE(qs_rho_type), POINTER :: rho_orb_struct_sub => NULL()
-
-      !> Ground-state density matrix in AO basis (shared across subgroups)
-      TYPE(qs_rho_type), POINTER :: gs_rho_xc_struct => NULL()
+      !> [XC kernel] NO NAME
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: rho_ia_ao
 
       !--------------------------------------------
       ! DAVIDSON NEEDS
@@ -369,7 +361,6 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
       INTEGER                                            :: ivec, ispin, handle
-      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
 
       CALL timeset(routineN, handle)
 
@@ -494,19 +485,6 @@ CONTAINS
                                 tddft_env%work_ao_ao(ispin))
       END DO
 
-      !--------------------
-      ! ALLOCATE  DBCSR
-      !--------------------
-
-      NULLIFY (tddft_env%A_ia_munu_sub)
-      CALL dbcsr_allocate_matrix_set(tddft_env%A_ia_munu_sub, 1)
-      DO ispin = 1, 1
-         CALL dbcsr_init_p(tddft_env%A_ia_munu_sub(ispin)%matrix)
-         CALL tddfpt_dbcsr_create_by_dist(tddft_env%A_ia_munu_sub(ispin)%matrix, &
-                                          template=matrix_s(1)%matrix, &
-                                          dbcsr_dist=sub_env%dbcsr_dist, &
-                                          sab=sub_env%sab_orb)
-      END DO
 
       !--------------------
       ! ALLOCATE  RHO
@@ -531,14 +509,6 @@ CONTAINS
                           rebuild_grids=.TRUE., &
                           pw_env_external=sub_env%pw_env)
 
-      !--------------------
-      ! ALLOCATE  PW
-      !--------------------
-      CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
-      ALLOCATE (tddft_env%A_ia_rspace_sub(tddft_env%nSpins))
-      DO ispin = 1, tddft_env%nspins
-         CALL auxbas_pw_pool%create_pw(tddft_env%A_ia_rspace_sub(ispin))
-      END DO
 
       CALL timestop(handle)
 
@@ -552,10 +522,10 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_deallocate_data'
 
       INTEGER                                            :: ivec, ispin, handle
-      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
 
       CALL timeset(routineN, handle)
 
+      sub_env = sub_env
       !--------------------
       ! DEALLOCATE  DP
       !--------------------
@@ -642,33 +612,12 @@ CONTAINS
          DEALLOCATE(this%fm_pool_ao)
       END IF
 
-      IF (ASSOCIATED(this%gs_rho_xc_struct)) THEN
-         CALL qs_rho_release(this%gs_rho_xc_struct)
-         DEALLOCATE(this%gs_rho_xc_struct)
-      END IF
 
       IF (ASSOCIATED(this%rho_ia_ao)) THEN
          DO ivec = 1, SIZE(this%rho_ia_ao)
             CALL dbcsr_deallocate_matrix(this%rho_ia_ao(ivec)%matrix)
          END DO
          DEALLOCATE(this%rho_ia_ao)
-      END IF
-      IF (ASSOCIATED(this%A_ia_munu_sub)) THEN
-         DO ivec = 1, SIZE(this%A_ia_munu_sub)
-            CALL dbcsr_deallocate_matrix(this%A_ia_munu_sub(ivec)%matrix)
-         END DO
-         DEALLOCATE(this%A_ia_munu_sub)
-      END IF
-
-      !--------------------
-      ! DEALLOCATE  PW
-      !--------------------
-      CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
-      IF (ASSOCIATED(this%A_ia_rspace_sub)) THEN
-         DO ispin = 1, this%nSpins
-            CALL auxbas_pw_pool%give_back_pw(this%A_ia_rspace_sub(ispin))
-         END DO
-         DEALLOCATE(this%A_ia_rspace_sub)
       END IF
 
 !     IF (ASSOCIATED(this%rho_orb_struct_sub)) THEN
