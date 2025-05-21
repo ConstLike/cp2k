@@ -228,14 +228,6 @@ MODULE qs_tddft_types
       !> Per-spin AO Fock matrices (used in transformation to MO)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: fock
 
-      !-------------------------------
-      ! KERNELs related
-
-      !> Orbital-pair density structure
-      TYPE(qs_rho_type), POINTER :: rho_orb_struct_sub => NULL()
-      !> [XC kernel] NO NAME
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: rho_ia_ao
-
       !--------------------------------------------
       ! DAVIDSON NEEDS
       !--------------------------------------------
@@ -489,25 +481,8 @@ CONTAINS
       !--------------------
       ! ALLOCATE  RHO
       !--------------------
-      NULLIFY (tddft_env%rho_ia_ao)
-      CALL dbcsr_allocate_matrix_set(tddft_env%rho_ia_ao, tddft_env%nSpins)
-      DO ispin = 1, tddft_env%nSpins
-         CALL dbcsr_init_p(tddft_env%rho_ia_ao(ispin)%matrix)
-         CALL tddfpt_dbcsr_create_by_dist(matrix=tddft_env%rho_ia_ao(ispin)%matrix, &
-                                          template=matrix_s(1)%matrix, &
-                                          dbcsr_dist=sub_env%dbcsr_dist, &
-                                          sab=sub_env%sab_orb)
-      END DO
 
       ! Allocate and set up qs_rho_type
-      NULLIFY (tddft_env%rho_orb_struct_sub)
-      ALLOCATE (tddft_env%rho_orb_struct_sub)
-      CALL qs_rho_create(tddft_env%rho_orb_struct_sub)
-      CALL qs_rho_set(tddft_env%rho_orb_struct_sub, rho_ao=tddft_env%rho_ia_ao)
-      CALL qs_rho_rebuild(tddft_env%rho_orb_struct_sub, qs_env, &
-                          rebuild_ao=.FALSE., &
-                          rebuild_grids=.TRUE., &
-                          pw_env_external=sub_env%pw_env)
 
 
       CALL timestop(handle)
@@ -613,12 +588,6 @@ CONTAINS
       END IF
 
 
-      IF (ASSOCIATED(this%rho_ia_ao)) THEN
-         DO ivec = 1, SIZE(this%rho_ia_ao)
-            CALL dbcsr_deallocate_matrix(this%rho_ia_ao(ivec)%matrix)
-         END DO
-         DEALLOCATE(this%rho_ia_ao)
-      END IF
 
 !     IF (ASSOCIATED(this%rho_orb_struct_sub)) THEN
 !        CALL qs_rho_release(this%rho_orb_struct_sub)

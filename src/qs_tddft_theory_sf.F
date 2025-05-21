@@ -129,6 +129,8 @@ MODULE qs_tddft_theory_sf
       TYPE(qs_rho_type), POINTER :: gs_rho_xc_struct => NULL()
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: A_ia_munu_sub
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: A_ia_rspace_sub => NULL()
+      TYPE(qs_rho_type), POINTER :: rho_orb_struct_sub => NULL()
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: rho_ia_ao
 
       !> [HFX kernel] Symmetric AO density matrices [nSpins]
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: work_rho_ao_ao_symm
@@ -325,6 +327,24 @@ CONTAINS
                                           this%work_hmat_asymm(ispin)%matrix)
       END DO
 
+      NULLIFY (this%rho_ia_ao)
+      CALL dbcsr_allocate_matrix_set(this%rho_ia_ao, tddft_env%nSpins)
+      DO ispin = 1, tddft_env%nSpins
+         CALL dbcsr_init_p(this%rho_ia_ao(ispin)%matrix)
+         CALL tddfpt_dbcsr_create_by_dist(matrix=this%rho_ia_ao(ispin)%matrix, &
+                                          template=matrix_s(1)%matrix, &
+                                          dbcsr_dist=sub_env%dbcsr_dist, &
+                                          sab=sub_env%sab_orb)
+      END DO
+      NULLIFY (this%rho_orb_struct_sub)
+      ALLOCATE (this%rho_orb_struct_sub)
+      CALL qs_rho_create(this%rho_orb_struct_sub)
+      CALL qs_rho_set(this%rho_orb_struct_sub, rho_ao=this%rho_ia_ao)
+      CALL qs_rho_rebuild(this%rho_orb_struct_sub, qs_env, &
+                          rebuild_ao=.FALSE., &
+                          rebuild_grids=.TRUE., &
+                          pw_env_external=sub_env%pw_env)
+
       !--------------------
       ! ALLOCATE  PW
       !--------------------
@@ -357,7 +377,7 @@ CONTAINS
 
 !     ! Full kernel
 !     CALL create_kernel_env(kernel_env=full_kernel_env, &
-!                            rho_struct_sub=tddft_env%rho_orb_struct_sub, &
+!                            rho_struct_sub=this%rho_orb_struct_sub, &
 !                            xc_section=xc_section, &
 !                            is_rks_triplets=tddfpt_control%rks_triplets, &
 !                            sub_env=sub_env)
@@ -480,6 +500,12 @@ CONTAINS
          END DO
          DEALLOCATE(this%work_v_xc_tau)
       END IF
+      IF (ASSOCIATED(this%rho_ia_ao)) THEN
+         DO ivec = 1, SIZE(this%rho_ia_ao)
+            CALL dbcsr_deallocate_matrix(this%rho_ia_ao(ivec)%matrix)
+         END DO
+         DEALLOCATE(this%rho_ia_ao)
+      END IF
 
    END SUBROUTINE sf_deallocate_theory_data
 
@@ -505,7 +531,7 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       CALL tddfpt_construct_ground_state_orb_density( &
-               rho_orb_struct=tddft_env%rho_orb_struct_sub, &
+               rho_orb_struct=this%rho_orb_struct_sub, &
                rho_xc_struct=this%gs_rho_xc_struct, &
                is_rks_triplets=tddfpt_control%rks_triplets, &
                qs_env=qs_env, &
@@ -625,7 +651,7 @@ CONTAINS
       CALL dbcsr_set(matrix=this%work_rho_ao_ao_symm(1)%matrix, &
                      alpha=0.0_dp)
 !     ! XC part
-!     CALL dbcsr_set(matrix=tddft_env%rho_ia_ao(1)%matrix, &
+!     CALL dbcsr_set(matrix=this%rho_ia_ao(1)%matrix, &
 !                    alpha=0.0_dp)
 
       ! FM to DBCSR
@@ -634,7 +660,7 @@ CONTAINS
                             keep_sparsity=.TRUE.)
 !     ! XC part
 !     CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
-!                           matrix=tddft_env%rho_ia_ao(1)%matrix, &
+!                           matrix=this%rho_ia_ao(1)%matrix, &
 !                           keep_sparsity=.TRUE.)
       !--------------------------------------
       ! Get Antisymmetric part of X vector
@@ -727,7 +753,7 @@ CONTAINS
 !     !-----------------------------------------------
 !     ! Density set at initial step to work_rho_ao_ao_symm
 !     ! Rebuild response density grids with current trial vector
-!     CALL qs_rho_update_rho(rho_struct=tddft_env%rho_orb_struct_sub, &
+!     CALL qs_rho_update_rho(rho_struct=this%rho_orb_struct_sub, &
 !                            qs_env=qs_env, &
 !                            pw_env_external=sub_env%pw_env, &
 !                            task_list_external=sub_env%task_list_orb, &
@@ -737,7 +763,7 @@ CONTAINS
 !     END DO
 !     CALL tddfpt_apply_xc(A_ia_rspace=this%A_ia_rspace_sub, &
 !                          kernel_env=kernel_env%full_kernel, &
-!                          rho_ia_struct=tddft_env%rho_orb_struct_sub, &
+!                          rho_ia_struct=this%rho_orb_struct_sub, &
 !                          is_rks_triplets=tddfpt_control%rks_triplets, &
 !                          pw_env=sub_env%pw_env, &
 !                          work_v_xc=this%work_v_xc, &
