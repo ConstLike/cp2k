@@ -192,35 +192,143 @@ MODULE qs_tddft_types
    LOGICAL, PARAMETER, PRIVATE          :: debug_this_module = .FALSE.
 
    PUBLIC :: tddft_info_type
-   PUBLIC :: tddft_type
-   PUBLIC :: tddft_davidson_type
-   PUBLIC :: tddft_allocate_data
-   PUBLIC :: tddft_deallocate_data
+   PUBLIC :: tddft_initialization
+   PUBLIC :: tddft_finalization
    PUBLIC :: allocate_fm_matrix
    PUBLIC :: deallocate_fm_matrix
 
 ! **************************************************************************************************
-!> \brief Universal TDDFT/Davidson infrastructure for excitation solvers.
-!>        Contains all state vectors, residuals, subspace matrices, eigenvalues, etc.
+!> \brief General TDDFT buffers and configuration
+!>        Holds only what is needed for a specific TDDFT theory (SF, MRSF, ...)
+!>        All data here is private for theory_handler%fields.
 !> \author  Konstantin Komarov (constlike@gmail.com)
 !> \date    2025-05-18
 ! **************************************************************************************************
-   TYPE tddft_davidson_type
+   TYPE tddft_info_type
 
+      !> Type of SCF reference: 1=ROKS/ROHF, 2=UKS/UHF
+      INTEGER :: reference_type
+
+      !> Number of spin channels (1 = restricted, 2 = unrestricted)
+      INTEGER :: nSpins
+
+      !> Fock matrix for Alpha occupied orbitals block [nocca, nocca]
+      TYPE(cp_fm_type), POINTER :: Focka_noc_noc => NULL()
+
+      !> Fock matrix for Beta virtual orbitals block [nvirb, nvirb]
+      TYPE(cp_fm_type), POINTER :: Fockb_vir_vir => NULL()
+
+      !> AO–MO transformation buffer [nbf, nvirb]
+      TYPE(cp_fm_type), POINTER :: work_ao_vir => NULL()
+
+      !> MO–AO transformation buffer [nocca, nbf]
+      TYPE(cp_fm_type), POINTER :: work_noc_ao => NULL()
+
+      !> Matrix pool for MO-space matrices [nocca, nvirb]
+      TYPE(cp_fm_pool_p_type), POINTER :: fm_pool_mo => NULL()
+
+      !> Scratch matrix [nocca, nvirb], used for Fock response, dipoles, etc.
+      TYPE(cp_fm_type), POINTER :: work_noc_vir => NULL()
+
+      !> Matrix pools for AO-space matrices [nbf, nbf] per spin channel
+      TYPE(cp_fm_pool_p_type), POINTER, DIMENSION(:) :: fm_pool_ao => NULL()
+
+      !> Per-spin AO scratch matrices [nbf, nbf]
+      TYPE(cp_fm_type), POINTER, DIMENSION(:) :: work_ao_ao => NULL()
+
+      !> Hamiltonian matrix in AO basis
+      TYPE(cp_fm_type), POINTER :: hmat_ao_ao => NULL()
+
+      !> Scratch matrices used in AO contraction (sym, asym)
+      TYPE(cp_fm_type), POINTER :: work1_ao_ao => NULL()
+      TYPE(cp_fm_type), POINTER :: work2_ao_ao => NULL()
+
+      !> Per-spin AO Fock matrices (used in transformation to MO)
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: fock
+
+      !> AO trial vectors (size is 1)
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: evects_ao_ao
+
+      !-------------------------------
+      ! KERNELs related
+      !-------------------------------
+      !> [HFX kernel] Symmetric AO density matrices [nSpins]
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: work_rho_ao_ao_symm
+
+      !> [HFX kernel] Antisymmetric AO density matrices [nSpins]
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: work_rho_ao_ao_asymm
+
+      !> [HFX kernel] Symmetric Hamiltonian-like matrices in AO space [nSpins]
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: work_hmat_symm
+
+      !> [HFX kernel] Antisymmetric Hamiltonian-like matrices in AO space [nSpins]
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: work_hmat_asymm
+
+      !> [XC kernel] NO NAME
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: A_ia_munu_sub
+      !> [XC kernel] NO NAME
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: rho_ia_ao
+      !> [XC kernel] NO NAME
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: A_ia_rspace_sub => NULL()
+
+      !> [Coulomb kernel] Density on grid in real-space [nSpins]
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER :: rho_r => NULL()
+
+      !> [Coulomb kernel] Density in G-space [nSpins]
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: rho_g => NULL()
+
+      !> [.. kernel] Kinetic energy density (tau) on grid [nSpins]
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: tau_r => NULL()
+
+      !> Exchange-correlation potential v_XC(r) [nSpins]
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: work_v_xc => NULL()
+      !> tau-dependent v_XC components (meta-GGA) [nSpins]
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: work_v_xc_tau => NULL()
+
+      !> Orbital-pair density structure
+      TYPE(qs_rho_type), POINTER :: rho_orb_struct_sub => NULL()
+
+      !> Ground-state density matrix in AO basis (shared across subgroups)
+      TYPE(qs_rho_type), POINTER :: gs_rho_xc_struct => NULL()
+      TYPE(cp_fm_type), POINTER :: rho_ia_ao_fm => NULL()
+
+      !--------------------------------------------
+      ! DAVIDSON NEEDS
+      !--------------------------------------------
       !> Number of states to solve for
       INTEGER :: nstates
+      !> Maximum number of states
+      INTEGER :: nstates_max != nocca * nvirb (spin-flip)
       !> Current number of vectors in subspace (Krylov dimension)
       INTEGER :: nvec
-      !> Max allowed number of vectors in subspace
-      INTEGER :: mxvec
-
+      !> The value of nvec at the beginning of the iteration (before adding new vectors),
+      !> used to determine how many new vectors are added (nvec - novec).
+      INTEGER :: novec
+      !> Max number of Krylov vectors per state (from input)
+      INTEGER :: maxvec
+      !> Maximum number of trial vectors allowed in the Davidson subspace
+      INTEGER :: mxvec  != maxvec * nStates
       !> Number of basis functions (AO)
       INTEGER :: nbf
       !> Number of alpha/beta occupied, virtual orbitals
       INTEGER :: nocca, noccb, nvirb, nvira
-      !> Number of spin channels
-      INTEGER :: nspins
+      !> Consecutive-iteration stall counter
+      INTEGER :: stall_count
+      !> Maximum residual norm in current iteration
+      REAL(KIND=dp) :: max_error
+      !> Maximum change of Ritz eigenvalues in current iteration
+      REAL(KIND=dp) :: max_delta_eval
+      !> Stored maximum residual norm from previous iteration
+      REAL(KIND=dp) :: max_error_prev
+      !> Stored maximum eigenvalue change from previous iteration
+      REAL(KIND=dp) :: max_delta_eval_prev
+      !> Logical flags indicating convergence status:
+      !> status(1) = .TRUE. if converged
+      !> status(2) = .TRUE. if restart is needed
+      LOGICAL, DIMENSION(2) :: status
 
+      !> TDDFT excitation eigenvalues (e.g., omega_i)
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:) :: evals
       !> Trial vectors in MO basis: X_k
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: evects_mo
       !> Sigma vectors in MO basis: sigma_k = H X_k
@@ -238,148 +346,17 @@ MODULE qs_tddft_types
       REAL(dp), ALLOCATABLE, DIMENSION(:) :: residual_norms
 
       !> Subspace matrix (Atilde, for diagonalization)
-      TYPE(cp_fm_type) :: subspace
+      TYPE(cp_fm_type), POINTER :: subspace
       !> Subspace eigenvectors (coefficients for Ritz vectors)
-      TYPE(cp_fm_type) :: subspace_evecs
+      TYPE(cp_fm_type), POINTER :: subspace_evecs
 
       !> Other working buffers for orthogonalization, normalization, etc.
       REAL(dp), ALLOCATABLE, DIMENSION(:) :: vector_norm
       REAL(dp), ALLOCATABLE, DIMENSION(:) :: vector_scal
 
-      !> Diagonal MO energy differences (universal for guess, etc)
+      !> Energy difference E_virt - E_occ
       REAL(dp), ALLOCATABLE, DIMENSION(:) :: e_virt_minus_occ
 
-   END TYPE tddft_davidson_type
-
-! **************************************************************************************************
-!> \brief General TDDFT buffers and configuration
-!>        Holds only what is needed for a specific TDDFT theory (SF, MRSF, ...)
-!>        All data here is private for theory_handler%fields.
-!> \author  Konstantin Komarov (constlike@gmail.com)
-!> \date    2025-05-18
-! **************************************************************************************************
-   TYPE tddft_type
-
-      !> Reference type: 1=ROKS/ROHF, 2=UKS/UHF
-      INTEGER :: reference_type
-
-      !> [nbf, nbf] intermediate work matrices (for sym/antisym density etc)
-      TYPE(cp_fm_type) :: work1_ao_ao
-      TYPE(cp_fm_type) :: work2_ao_ao
-
-      !> [nbf, nbf] AO trial vector in AO form (symmetric, antisymmetric components)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: evects_ao_ao
-
-      !> [nbf, nbf] DBCSR work matrices for density-like, symmetric/antisymmetric matrices
-      TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:) :: work_rho_ao_ao_symm
-      TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:) :: work_rho_ao_ao_asymm
-
-      !> DBCSR/CP_FM working matrices for HFX, AO sigma
-      TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:) :: work_hmat_symm, work_hmat_asymm
-
-      !> Buffers for AO sigma, AO-to-MO transformation
-      TYPE(cp_fm_type) :: hmat_ao_ao
-      TYPE(cp_fm_type) :: work_ao_vir
-      TYPE(cp_fm_type) :: work_noc_ao
-      TYPE(cp_fm_type) :: work_noc_vir
-
-      ! Buffers for alpha and beta Fock(1:2) and Fock submatrices in MO basis
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: fock
-      TYPE(cp_fm_type), POINTER                          :: Focka_noc_noc => NULL()
-      TYPE(cp_fm_type), POINTER                          :: Fockb_vir_vir => NULL()
-
-      !> AO density and grid representations
-      TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:) :: rho_ia_ao
-      TYPE(dbcsr_p_type), ALLOCATABLE, DIMENSION(:) :: A_ia_munu_sub
-      TYPE(pw_c1d_gs_type), ALLOCATABLE, DIMENSION(:) :: A_ia_rspace_sub
-
-   END TYPE tddft_type
-
-   TYPE tddft_info_type
-      INTEGER                                            :: reference_type = 0 ! 1 = ROKS/ROHF, 2 = UKS/UHF
-      INTEGER                                            :: nSpins
-      INTEGER                                            :: nbf
-      INTEGER                                            :: nocca
-      INTEGER                                            :: noccb
-      INTEGER                                            :: nvira
-      INTEGER                                            :: nvirb
-      INTEGER                                            :: nStates
-      INTEGER                                            :: nStates_max
-      INTEGER                                            :: nvec
-      INTEGER                                            :: maxvec
-      INTEGER                                            :: mxvec
-      INTEGER                                            :: xvec_dim
-
-      !> Energy difference E_virt - E_occ, used in initial guess and post-processing
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: e_virt_minus_occ
-      !> TDDFT excitation eigenvalues (e.g., omega_i)
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: evals
-
-      ! Fock
-      TYPE(cp_fm_type), POINTER                          :: Focka_noc_noc => NULL()
-      TYPE(cp_fm_type), POINTER                          :: Fockb_vir_vir => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work_ao_vir => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work_noc_ao => NULL()
-
-      ! POOL MO [nocca, nvirb]
-      TYPE(cp_fm_pool_p_type), POINTER                   :: fm_pool_mo => NULL()
-      ! Work
-      TYPE(cp_fm_type), POINTER                          :: work_noc_vir => NULL()
-
-      ! evects_mo (mxvec)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: evects_mo
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: ritz_vects
-      ! sigma_vecs (mxvec)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: sigma_vecs
-
-      ! POOL AO [nbf, nbf]
-      TYPE(cp_fm_pool_p_type), POINTER, DIMENSION(:)     :: fm_pool_ao => NULL()
-      ! Work
-      TYPE(cp_fm_type), POINTER, DIMENSION(:)            :: work_ao_ao => NULL()
-      TYPE(cp_fm_type), POINTER                          :: hmat_ao_ao => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work1_ao_ao => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work2_ao_ao => NULL()
-      ! Fock: AO to MO (nSpins)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: fock
-      ! evects_ao_ao (nvec)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: evects_ao_ao
-      ! Dypoles dummy
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:,:)      :: dipole_op_mos_occ
-
-      ! DBCSR (nvec)
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_ao_ao_symm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_ao_ao_asymm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_symm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_asymm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: A_ia_munu_sub
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: rho_ia_ao
-
-      ! PW
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: A_ia_rspace_sub => NULL()
-      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_r => NULL()
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_g => NULL()
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: tau_r => NULL()
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc => NULL()
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc_tau => NULL()
-
-      ! RHO
-      TYPE(qs_rho_type), POINTER                         :: rho_orb_struct_sub => NULL()
-
-      !> Ground-state density matrix in AO basis (shared across subgroups)
-      TYPE(qs_rho_type), POINTER                         :: gs_rho_xc_struct => NULL()
-      TYPE(cp_fm_type), POINTER                          :: rho_ia_ao_fm => NULL()
-
-      ! ---------- FOR DAVIDSON ----------
-      TYPE(cp_fm_type), POINTER                          :: subspace => NULL()
-      TYPE(cp_fm_type), POINTER                          :: subspace_evecs => NULL()
-      TYPE(cp_fm_type), POINTER                          :: transformation_matrix => NULL()
-      REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: vector_norm
-      REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: vector_scal
-      TYPE(cp_fm_type) , ALLOCATABLE , DIMENSION(:) :: residual_vecs
-      REAL(kind=dp)    , ALLOCATABLE , DIMENSION(:) :: residual_norms
-      REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: ritz_evals
-      REAL(dp)        , ALLOCATABLE , DIMENSION(:)  :: ritz_evals_prev
-      INTEGER                                       :: novec = 0          ! sub-space size
    END TYPE tddft_info_type
 
 CONTAINS
@@ -427,7 +404,7 @@ CONTAINS
 
    END SUBROUTINE deallocate_fm_matrix
 
-   SUBROUTINE tddft_allocate_data(tddft_env, qs_env, gs_mos, sub_env)
+   SUBROUTINE tddft_initialization(tddft_env, qs_env, gs_mos, sub_env)
       CLASS(tddft_info_type), INTENT(INOUT)              :: tddft_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
@@ -466,8 +443,7 @@ CONTAINS
       tddft_env%nSpins = SIZE(gs_mos, 1)
       tddft_env%nStates_max = tddft_env%nocca * tddft_env%nvirb
       tddft_env%maxvec = dft_control%tddfpt2_control%nkvs
-      tddft_env%xvec_dim = tddft_env%nStates_max
-      tddft_env%mxvec = min(tddft_env%maxvec*tddft_env%nstates, tddft_env%xvec_dim)
+      tddft_env%mxvec = min(tddft_env%maxvec*tddft_env%nstates, tddft_env%nStates_max)
       tddft_env%nStates = min(tddft_env%nstates, tddft_env%mxvec)
       tddft_env%nvec = min(max(2*tddft_env%nStates, 5), tddft_env%mxvec)
       tddft_env%novec = tddft_env%nvec
@@ -481,7 +457,7 @@ CONTAINS
       !--------------------
       ! ALLOCATE  DP
       !--------------------
-      ALLOCATE (tddft_env%e_virt_minus_occ(tddft_env%xvec_dim), source=0.0_dp)
+      ALLOCATE (tddft_env%e_virt_minus_occ(tddft_env%nStates_max), source=0.0_dp)
       ALLOCATE (tddft_env%evals(tddft_env%mxvec), source=0.0_dp)
       ALLOCATE (tddft_env%ritz_evals(tddft_env%mxvec), source=0.0_dp)
       ALLOCATE (tddft_env%ritz_evals_prev(tddft_env%nstates), source=1.0E10_dp)
@@ -518,15 +494,6 @@ CONTAINS
                               ncol=tddft_env%nbf, &
                               sub_env=sub_env)
 
-      ALLOCATE(tddft_env%dipole_op_mos_occ(tddft_env%nstates, tddft_env%nSpins))
-      DO ivec = 1, tddft_env%nstates
-         DO ispin = 1, tddft_env%nSpins
-            CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, matrix_struct=fm_struct)
-            CALL cp_fm_create(tddft_env%dipole_op_mos_occ(ivec, ispin), fm_struct)
-            CALL cp_fm_set_all(tddft_env%dipole_op_mos_occ(ivec, ispin), 0.0_dp)
-            NULLIFY (fm_struct)
-         END DO
-      END DO
       !--------------------
       ! ALLOCATE  FM POOL
       !--------------------
@@ -717,9 +684,9 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE tddft_allocate_data
+   END SUBROUTINE tddft_initialization
 
-   SUBROUTINE tddft_deallocate_data(this, sub_env, kernel_env)
+   SUBROUTINE tddft_finalization(this, sub_env, kernel_env)
       CLASS(tddft_info_type), INTENT(INOUT)              :: this
       TYPE(tddfpt_subgroup_env_type)                     :: sub_env
       TYPE(kernel_env_type)                              :: kernel_env
@@ -773,14 +740,6 @@ CONTAINS
       IF (ASSOCIATED(this%work_ao_vir)) THEN
          CALL cp_fm_release(this%work_ao_vir)
          DEALLOCATE(this%work_ao_vir)
-      END IF
-      IF (ALLOCATED(this%dipole_op_mos_occ)) THEN
-         DO ivec = 1, this%nstates
-            DO ispin = 1, this%nSpins
-               CALL cp_fm_release(this%dipole_op_mos_occ(ivec, ispin))
-            END DO
-         END DO
-         DEALLOCATE(this%dipole_op_mos_occ)
       END IF
       !--------------------
       ! DEALLOCATE  FM POOL
@@ -953,6 +912,6 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE tddft_deallocate_data
+   END SUBROUTINE tddft_finalization
 
 END MODULE qs_tddft_types

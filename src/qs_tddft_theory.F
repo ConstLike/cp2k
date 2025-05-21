@@ -105,22 +105,25 @@ MODULE qs_tddft_theory
          INTEGER                                         :: log_unit
       END SUBROUTINE
       !> Transform a given trial vector from MO to AO basis
-      SUBROUTINE mo_to_ao_iface(this, tddft_env, gs_mos, ivec)
+      SUBROUTINE mo_to_ao_iface(this, tddft_env, gs_mos, ivec, logger)
          IMPORT                                          :: tddft_theory_type, &
                                                             tddft_info_type, &
+                                                            cp_logger_type, &
                                                             tddfpt_ground_state_mos
          CLASS(tddft_theory_type), INTENT(INOUT)         :: this
          TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
          TYPE(tddfpt_ground_state_mos), &
             DIMENSION(:), POINTER                        :: gs_mos
          INTEGER, INTENT(IN)                             :: ivec
+         TYPE(cp_logger_type), POINTER                   :: logger
       END SUBROUTINE
       !> Apply all HFX/XC/Coulomb/... operators for this theory, in AO basis
       SUBROUTINE apply_op_iface(this, qs_env, tddft_env, kernel_env, sub_env, &
-                                tddfpt_control, ivec)
+                                tddfpt_control, ivec, logger)
          IMPORT                                          :: tddft_theory_type, &
                                                             tddft_info_type, &
                                                             qs_environment_type, &
+                                                            cp_logger_type, &
                                                             kernel_env_type, &
                                                             tddfpt_subgroup_env_type, &
                                                             tddfpt2_control_type
@@ -131,10 +134,12 @@ MODULE qs_tddft_theory
          TYPE(tddfpt_subgroup_env_type)                  :: sub_env
          TYPE(tddfpt2_control_type), POINTER             :: tddfpt_control
          INTEGER, INTENT(IN)                             :: ivec
+         TYPE(cp_logger_type), POINTER                   :: logger
       END SUBROUTINE
       !> Transform operator results from AO back to MO basis
-      SUBROUTINE ao_to_mo_iface(this, tddft_env, gs_mos, ivec)
+      SUBROUTINE ao_to_mo_iface(this, tddft_env, gs_mos, ivec, logger)
          IMPORT                                          :: tddft_theory_type, &
+                                                            cp_logger_type, &
                                                             tddft_info_type, &
                                                             tddfpt_ground_state_mos
          CLASS(tddft_theory_type), INTENT(INOUT)         :: this
@@ -142,6 +147,7 @@ MODULE qs_tddft_theory
          TYPE(tddfpt_ground_state_mos), &
             DIMENSION(:), POINTER                        :: gs_mos
          INTEGER, INTENT(IN)                             :: ivec
+         TYPE(cp_logger_type), POINTER                   :: logger
       END SUBROUTINE
       !> Print theory-specific excitation analysis
       SUBROUTINE print_theory_iface(this, tddft_env)
