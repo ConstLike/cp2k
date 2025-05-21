@@ -654,8 +654,8 @@ CONTAINS
                ELSE
                   CALL copy_fm_to_dbcsr(wfm_rho_orb, work_rho_ia_ao_symm(ispin)%matrix, keep_sparsity=.TRUE.)
                END IF
-               print *, "KKK| iver=",ivect, "ispin=", ispin
-               CALL print_mat_ao_ao(wfm_rho_orb, 'SYM: X_ao_ao', logger, ivect)
+!              print *, "KKK| iver=",ivect, "ispin=", ispin
+!              CALL print_mat_ao_ao(wfm_rho_orb, 'SYM: X_ao_ao', logger, ivect)
             END DO
 
             CALL tddft_hfx_matrix(work_hmat_symm, work_rho_ia_ao_symm, qs_env)
@@ -676,14 +676,15 @@ CONTAINS
                   CALL cp_fm_set_all(matrix=wfm_rho_orb, alpha=0.0_dp)
                   CALL copy_dbcsr_to_fm(matrix=work_hmat_symm(ispin)%matrix, &
                                         fm=wfm_rho_orb)
-                  print *, "KKK After| iver=",ivect, "ispin=", ispin
-                  CALL print_mat_ao_ao(wfm_rho_orb, 'SYM: X_ao_ao*ERI', logger, ivect)
+!                 print *, "KKK After| iver=",ivect, "ispin=", ispin
+!                 CALL print_mat_ao_ao(wfm_rho_orb, 'SYM: X_ao_ao*ERI', logger, ivect)
 
                   CALL cp_dbcsr_sm_fm_multiply(work_hmat_symm(ispin)%matrix, gs_mos(ispin)%mos_occ, &
                                                Aop_evects(ispin, ivect), ncol=nactive(ispin), &
                                                alpha=alpha, beta=1.0_dp)
                END DO
             END IF
+            logger = logger
 
             !The anti-symmetric density matrix
             DO ispin = 1, nspins
@@ -704,8 +705,8 @@ CONTAINS
                ELSE
                   CALL copy_fm_to_dbcsr(wfm_rho_orb, work_rho_ia_ao_asymm(ispin)%matrix, keep_sparsity=.TRUE.)
                END IF
-               print *, "KKK| iver=",ivect, "ispin=", ispin
-               CALL print_mat_ao_ao(wfm_rho_orb, 'A-SYM: X_ao_ao', logger, ivect)
+!              print *, "KKK| iver=",ivect, "ispin=", ispin
+!              CALL print_mat_ao_ao(wfm_rho_orb, 'A-SYM: X_ao_ao', logger, ivect)
             END DO
 
             CALL tddft_hfx_matrix(work_hmat_asymm, work_rho_ia_ao_asymm, qs_env)
@@ -726,8 +727,8 @@ CONTAINS
                   CALL cp_fm_set_all(matrix=wfm_rho_orb, alpha=0.0_dp)
                   CALL copy_dbcsr_to_fm(matrix=work_hmat_asymm(ispin)%matrix, &
                                         fm=wfm_rho_orb)
-                  print *, "KKK After| iver=",ivect, "ispin=", ispin
-                  CALL print_mat_ao_ao(wfm_rho_orb, 'A-SYM: X_ao_ao*ERI', logger, ivect)
+!                 print *, "KKK After| iver=",ivect, "ispin=", ispin
+!                 CALL print_mat_ao_ao(wfm_rho_orb, 'A-SYM: X_ao_ao*ERI', logger, ivect)
 
                   CALL cp_dbcsr_sm_fm_multiply(work_hmat_asymm(ispin)%matrix, gs_mos(ispin)%mos_occ, &
                                                Aop_evects(ispin, ivect), ncol=nactive(ispin), &

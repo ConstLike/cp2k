@@ -191,7 +191,7 @@ CONTAINS
       DO ispin = 1, nspins
          CALL cp_fm_get_info(evects(ispin, 1), ncol_global=nactive(ispin))
       END DO
-      PRINT *, "KKK| nspins=",nspins
+!     PRINT *, "KKK| nspins=",nspins
 
       CALL qs_rho_get(work_matrices%rho_orb_struct_sub, rho_ao=rho_ia_ao, &
                       rho_g=rho_ia_g)
@@ -231,8 +231,9 @@ CONTAINS
             CALL cp_fm_set_all(matrix=work_matrices%check_xc, alpha=0.0_dp)
             CALL copy_dbcsr_to_fm(matrix=rho_ia_ao(ispin)%matrix, &
                                  fm=work_matrices%check_xc)
-            CALL print_mat_ao_ao(work_matrices%check_xc, 'rho_ia_ao', logger, ivect)
+!           CALL print_mat_ao_ao(work_matrices%check_xc, 'rho_ia_ao', logger, ivect)
          END DO
+         logger = logger
 
          IF (do_lrigpw) THEN
             CALL qs_rho_update_tddfpt(work_matrices%rho_orb_struct_sub, qs_env, &
@@ -507,7 +508,7 @@ CONTAINS
             CALL cp_fm_set_all(matrix=work_matrices%check_xc, alpha=0.0_dp)
             CALL copy_dbcsr_to_fm(matrix=work_matrices%A_ia_munu_sub(ispin)%matrix, &
                                  fm=work_matrices%check_xc)
-            CALL print_mat_ao_ao(work_matrices%check_xc, 'work_xc', logger, ivect)
+!           CALL print_mat_ao_ao(work_matrices%check_xc, 'work_xc', logger, ivect)
          END DO
 
 

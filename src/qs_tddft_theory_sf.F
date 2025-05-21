@@ -45,16 +45,25 @@ MODULE qs_tddft_theory_sf
    TYPE, EXTENDS(tddft_theory_type) :: tddft_sf_theory_type
       ! -- theory-specific fields if needed --
    CONTAINS
+      PROCEDURE, PASS(this) :: allocate_theory_data     => sf_allocate_theory_data
       PROCEDURE, PASS(this) :: initialize_guess_vectors => sf_initialize_guess_vectors
       PROCEDURE, PASS(this) :: mo_to_ao_transform       => sf_mo_to_ao_transform
       PROCEDURE, PASS(this) :: apply_operator           => sf_apply_operator
       PROCEDURE, PASS(this) :: ao_to_mo_transform       => sf_ao_to_mo_transform
-      PROCEDURE, PASS(this) :: allocate_theory_data     => sf_allocate_theory_data
+      PROCEDURE, PASS(this) :: print_theory_data        => sf_print_theory_data
       PROCEDURE, PASS(this) :: deallocate_theory_data   => sf_deallocate_theory_data
    END TYPE
 
 CONTAINS
 
+   SUBROUTINE sf_allocate_theory_data(this, tddft_env)
+      CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
+      TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env
+      IF (.FALSE.) THEN
+         print *, this%unused
+         tddft_env = tddft_env
+      END IF
+   END SUBROUTINE sf_allocate_theory_data
    SUBROUTINE sf_initialize_guess_vectors(this, tddft_env, gs_mos, &
                                           tddfpt_control, log_unit)
       CLASS(tddft_sf_theory_type), INTENT(INOUT)         :: this
@@ -174,14 +183,14 @@ CONTAINS
          NULLIFY(gs_mos)
       END IF
    END SUBROUTINE sf_ao_to_mo_transform
-   SUBROUTINE sf_allocate_theory_data(this, tddft_env)
+   SUBROUTINE sf_print_theory_data(this, tddft_env)
       CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
       TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env
       IF (.FALSE.) THEN
          print *, this%unused
          tddft_env = tddft_env
       END IF
-   END SUBROUTINE sf_allocate_theory_data
+   END SUBROUTINE sf_print_theory_data
    SUBROUTINE sf_deallocate_theory_data(this, tddft_env)
       CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
       TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env

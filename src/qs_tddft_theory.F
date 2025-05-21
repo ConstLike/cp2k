@@ -16,19 +16,20 @@
 !> type must implement the deferred procedures (type-bound) for all major steps of the iterative
 !> Davidson diagonalization and operator application.
 !>
-!> **Usage:**
+!> Usage:
 !>   - To add a new theory (e.g. SF), create a new module (e.g. qs_tddft_theory_sf.F)
 !>     that `EXTENDS(tddft_theory_type)` and implements all deferred procedures.
 !>   - In the main TDDFT driver, select the theory at runtime (via input section or logic),
 !>     allocate the corresponding handler, and use only the abstract interface throughout
 !>     the driver code. No changes to the main loop are needed for additional theories.
 !>
-!> **Contract (deferred procedures to implement):**
+!> Contract (deferred procedures to implement):
+!>   - allocate_theory_data     : allocate any additional data required by this theory
 !>   - initialize_guess_vectors : set up initial guess vectors in MO space
 !>   - mo_to_ao_transform       : transform trial vectors from MO to AO basis
 !>   - apply_operator           : apply all HFX/XC/Coulomb/... operators in AO
 !>   - ao_to_mo_transform       : transform operator results back to MO basis
-!>   - allocate_theory_data     : allocate any additional data required by this theory
+!>   - print_theory_data        : print excitation analysis available for this theory
 !>   - deallocate_theory_data   : free all theory-specific resources
 !>
 !> [tddft_info_type] is used to store universal Davidson/infrastructure data.
@@ -74,6 +75,8 @@ MODULE qs_tddft_theory
       PROCEDURE(allocate_theory_iface), DEFERRED :: allocate_theory_data
       !> Deallocate all theory-specific data/arrays
       PROCEDURE(deallocate_theory_iface), DEFERRED :: deallocate_theory_data
+      !> Print theory-specific excitation analysis
+      PROCEDURE(print_theory_iface), DEFERRED :: print_theory_data
    END TYPE tddft_theory_type
 
 ! **************************************************************************************************
@@ -81,6 +84,12 @@ MODULE qs_tddft_theory
 !>        Each derived theory type (SF, MRSF, ...) must implement these.
 ! **************************************************************************************************
    ABSTRACT INTERFACE
+      !> Allocate any theory-specific working arrays, buffers, etc.
+      SUBROUTINE allocate_theory_iface(this, tddft_env)
+         IMPORT :: tddft_theory_type, tddft_info_type
+         CLASS(tddft_theory_type), INTENT(INOUT) :: this
+         TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env
+      END SUBROUTINE
       !> Set up initial guess vectors (theory-specific, e.g. SF, MRSF, ...)
       SUBROUTINE init_guess_iface(this, tddft_env, gs_mos, tddfpt_control, log_unit)
          IMPORT                                          :: tddft_theory_type, &
@@ -134,8 +143,8 @@ MODULE qs_tddft_theory
             DIMENSION(:), POINTER                        :: gs_mos
          INTEGER, INTENT(IN)                             :: ivec
       END SUBROUTINE
-      !> Allocate any theory-specific working arrays, buffers, etc.
-      SUBROUTINE allocate_theory_iface(this, tddft_env)
+      !> Print theory-specific excitation analysis
+      SUBROUTINE print_theory_iface(this, tddft_env)
          IMPORT :: tddft_theory_type, tddft_info_type
          CLASS(tddft_theory_type), INTENT(INOUT) :: this
          TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env
@@ -161,7 +170,7 @@ MODULE qs_tddft_theory
 !>          CASE('MRSF')
 !>            ALLOCATE(tddft_mrsf_theory_type :: theory_handler)
 !>        END SELECT
-!>   5. Use only theory_handler%method(...) in all driver routines.
+!>   5. Use only theory_handler%initialize_guess_vectors(...) in all driver routines.
 ! **************************************************************************************************
 
 END MODULE qs_tddft_theory

@@ -343,6 +343,8 @@ MODULE qs_tddft_types
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: fock
       ! evects_ao_ao (nvec)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: evects_ao_ao
+      ! Dypoles dummy
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:,:)      :: dipole_op_mos_occ
 
       ! DBCSR (nvec)
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_ao_ao_symm
@@ -516,6 +518,15 @@ CONTAINS
                               ncol=tddft_env%nbf, &
                               sub_env=sub_env)
 
+      ALLOCATE(tddft_env%dipole_op_mos_occ(tddft_env%nstates, tddft_env%nSpins))
+      DO ivec = 1, tddft_env%nstates
+         DO ispin = 1, tddft_env%nSpins
+            CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, matrix_struct=fm_struct)
+            CALL cp_fm_create(tddft_env%dipole_op_mos_occ(ivec, ispin), fm_struct)
+            CALL cp_fm_set_all(tddft_env%dipole_op_mos_occ(ivec, ispin), 0.0_dp)
+            NULLIFY (fm_struct)
+         END DO
+      END DO
       !--------------------
       ! ALLOCATE  FM POOL
       !--------------------
@@ -762,6 +773,14 @@ CONTAINS
       IF (ASSOCIATED(this%work_ao_vir)) THEN
          CALL cp_fm_release(this%work_ao_vir)
          DEALLOCATE(this%work_ao_vir)
+      END IF
+      IF (ALLOCATED(this%dipole_op_mos_occ)) THEN
+         DO ivec = 1, this%nstates
+            DO ispin = 1, this%nSpins
+               CALL cp_fm_release(this%dipole_op_mos_occ(ivec, ispin))
+            END DO
+         END DO
+         DEALLOCATE(this%dipole_op_mos_occ)
       END IF
       !--------------------
       ! DEALLOCATE  FM POOL

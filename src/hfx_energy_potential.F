@@ -263,7 +263,6 @@ CONTAINS
       logger => cp_get_default_logger()
 
       is_anti_symmetric = dbcsr_get_matrix_type(rho_ao(1, 1)%matrix) .EQ. dbcsr_type_antisymmetric
-      print *, "KKK| is_anti_symmetric=", is_anti_symmetric
 
       IF (my_geo_change) THEN
          CALL m_memory(memsize_before)

@@ -2538,7 +2538,6 @@ CONTAINS
       matrix_ks_kp(1:nspins, 1:1) => matrix_ks(1:nspins)
       rho_ao_kp(1:nspins, 1:1) => rho_ao(1:nspins)
 
-      print *, "KKK| mspin=", nspins, "size rho_ao=", size(rho_ao, 1)
       DO irep = 1, n_rep_hf
          ! the real hfx calulation
          ehfx = 0.0_dp

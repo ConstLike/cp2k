@@ -6,6 +6,12 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddft_methods
+   USE message_passing,                 ONLY: mp_comm_type,&
+                                              mp_para_env_type,&
+                                              mp_request_type
+   USE kahan_sum,                       ONLY: accurate_dot_product
+   USE input_constants,                 ONLY: tddfpt_dipole_berry,&
+                                              tddfpt_dipole_length
    USE qs_tddft_theory_sf,              ONLY: tddft_sf_theory_type
    USE qs_tddft_theory,                 ONLY: tddft_theory_type
    USE qs_tddft_types,                  ONLY: tddft_info_type,&
@@ -131,11 +137,12 @@ MODULE qs_tddft_methods
                                               section_vals_type,&
                                               section_vals_val_get,&
                                               section_vals_val_set
-   USE kinds,                           ONLY: dp
+   USE kinds,                           ONLY: default_path_length,&
+                                              dp,&
+                                              int_8
    USE lri_environment_methods,         ONLY: lri_print_stat
    USE lri_environment_types,           ONLY: lri_density_release,&
                                               lri_env_release
-   USE message_passing,                 ONLY: mp_para_env_type
    USE min_basis_set,                   ONLY: create_minbas_set
    USE particle_types,                  ONLY: particle_type
    USE physcon,                         ONLY: evolt
@@ -160,10 +167,8 @@ MODULE qs_tddft_methods
    USE qs_tddfpt2_fprint,               ONLY: tddfpt_print_forces
    USE qs_tddfpt2_lri_utils,            ONLY: tddfpt2_lri_init
    USE qs_tddfpt2_properties,           ONLY: tddfpt_dipole_operator,&
-                                              tddfpt_print_excitation_analysis,&
                                               tddfpt_print_exciton_descriptors,&
-                                              tddfpt_print_nto_analysis,&
-                                              tddfpt_print_summary
+                                              tddfpt_print_nto_analysis
    USE qs_tddfpt2_restart,              ONLY: tddfpt_read_restart,&
                                               tddfpt_write_newtonx_output,&
                                               tddfpt_write_restart
@@ -269,7 +274,7 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_setup_data'
 
       INTEGER                                            :: handle, log_unit, ispin
-      INTEGER                                            :: nrow, ncol
+!     INTEGER                                            :: nrow, ncol
 
       CALL timeset(routineN, handle)
 
@@ -295,19 +300,19 @@ CONTAINS
       kernel_env%full_kernel => full_kernel_env
       NULLIFY (kernel_env%admm_kernel)
 
-      ! Transfom matrix_ks from AO to MO basis
-      print *,  "nSpins = ", tddft_env%nSpins
-      print *,  "nbf = ", tddft_env%nbf
-      print *,  "nmo (alpha) = ", tddft_env%nocca + tddft_env%nvira
-      print *,  "nmo (beta) = ", tddft_env%noccb + tddft_env%nvirb
-      DO ispin = 1, tddft_env%nSpins
-         CALL cp_fm_get_info(gs_mos(ispin)%mos_full, nrow_global=nrow, ncol_global=ncol)
-         print *,  "gs_mos(ispin)%mos_full: ", nrow, ncol
-         CALL cp_fm_get_info(tddft_env%fock(ispin), nrow_global=nrow, ncol_global=ncol)
-         print *,  "tddft_env%fock(ispin): ", nrow, ncol
-         CALL cp_fm_get_info(tddft_env%work_ao_ao(ispin), nrow_global=nrow, ncol_global=ncol)
-         print *,  "tddft_env%work_ao_ao: ", nrow, ncol
-      END DO
+!     ! Transfom matrix_ks from AO to MO basis
+!     print *,  "nSpins = ", tddft_env%nSpins
+!     print *,  "nbf = ", tddft_env%nbf
+!     print *,  "nmo (alpha) = ", tddft_env%nocca + tddft_env%nvira
+!     print *,  "nmo (beta) = ", tddft_env%noccb + tddft_env%nvirb
+!     DO ispin = 1, tddft_env%nSpins
+!        CALL cp_fm_get_info(gs_mos(ispin)%mos_full, nrow_global=nrow, ncol_global=ncol)
+!        print *,  "gs_mos(ispin)%mos_full: ", nrow, ncol
+!        CALL cp_fm_get_info(tddft_env%fock(ispin), nrow_global=nrow, ncol_global=ncol)
+!        print *,  "tddft_env%fock(ispin): ", nrow, ncol
+!        CALL cp_fm_get_info(tddft_env%work_ao_ao(ispin), nrow_global=nrow, ncol_global=ncol)
+!        print *,  "tddft_env%work_ao_ao: ", nrow, ncol
+!     END DO
 
       DO ispin = 1, tddft_env%nSpins
          CALL copy_dbcsr_to_fm(matrix_ks(ispin)%matrix, tddft_env%fock(ispin))
@@ -363,10 +368,13 @@ CONTAINS
       INTEGER                                            :: handle, log_unit, &
          energy_unit, iter, niters, iend, ist, ivec, max_krylov_vects, &
          mxvec, i, a, ij, ierr, k, iv, ms, stall_count
-      REAL(kind=dp)                                      :: t1, t2, max_delta_eval
+      REAL(kind=dp)                                      :: t1, t2, max_delta_eval, max_delta_eval_prev
+      REAL(kind=dp)                                      :: rel_error_change, rel_delta_eval_change
       REAL(KIND=DP)                                      :: val, sig, scal, max_error, max_error_prev
       LOGICAL                                            :: is_converged
       CLASS(tddft_theory_type), ALLOCATABLE              :: theory_handler
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: ostrength
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
 
       CALL timeset(routineN, handle)
 
@@ -379,6 +387,17 @@ CONTAINS
 
       niters = tddfpt_control%niters
       IF (niters > 0) THEN
+         ! Open logger
+         log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, &
+                                         "GUESS_VECTORS", extension=".tddfptLog")
+
+!        CALL tddft_guess_vectors(tddft_env, gs_mos, tddfpt_control, log_unit)
+         CALL theory_handler%initialize_guess_vectors(tddft_env, gs_mos, tddfpt_control, log_unit)
+
+         ! Close logger
+         CALL cp_print_key_finished_output(log_unit, logger, &
+                                           tddfpt_print_section, "GUESS_VECTORS")
+
          log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, &
                                          "ITERATION_INFO", extension=".tddfptLog")
          energy_unit = cp_print_key_unit_nr(logger, &
@@ -400,16 +419,8 @@ CONTAINS
          mxvec = tddft_env%nocca * tddft_env%nvirb
          max_krylov_vects = MIN(MAX(tddfpt_control%nkvs, tddft_env%nStates), INT(mxvec))
 
-         ! Open logger
-         log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, &
-                                         "GUESS_VECTORS", extension=".tddfptLog")
-
-!        CALL tddft_guess_vectors(tddft_env, gs_mos, tddfpt_control, log_unit)
-         CALL theory_handler%initialize_guess_vectors(tddft_env, gs_mos, tddfpt_control, log_unit)
-
-         CALL cp_print_key_finished_output(log_unit, logger, &
-                                           tddfpt_print_section, "GUESS_VECTORS")
-         ! Close logger
+         max_error_prev = 10.0_dp
+         max_delta_eval_prev = 10.0_dp
 
          ! Outer loop for managing restarts
          DO
@@ -543,48 +554,48 @@ CONTAINS
                      CALL print_mat_ao_ao(tddft_env%hmat_ao_ao, "hmat_ao_HF_tot", logger, ivec)
                   END IF
 
-                  !-----------------------------------------------
-                  ! XC Contribution: .. = ..
-                  !-----------------------------------------------
-                  ! Density set at initial step to work_rho_ao_ao_symm
-                  ! Rebuild response density grids with current trial vector
-                  CALL qs_rho_update_rho(rho_struct=tddft_env%rho_orb_struct_sub, &
-                                         qs_env=qs_env, &
-                                         pw_env_external=sub_env%pw_env, &
-                                         task_list_external=sub_env%task_list_orb, &
-                                         para_env_external=sub_env%para_env)
-                  DO i = 1, tddft_env%nSpins
-                     CALL pw_zero(tddft_env%A_ia_rspace_sub(i))
-                  END DO
-                  CALL tddfpt_apply_xc(A_ia_rspace=tddft_env%A_ia_rspace_sub, &
-                                       kernel_env=kernel_env%full_kernel, &
-                                       rho_ia_struct=tddft_env%rho_orb_struct_sub, &
-                                       is_rks_triplets=tddfpt_control%rks_triplets, &
-                                       pw_env=sub_env%pw_env, &
-                                       work_v_xc=tddft_env%work_v_xc, &
-                                       work_v_xc_tau=tddft_env%work_v_xc_tau, &
-                                       spinflip=tddfpt_control%spinflip) ! 1 collinear, 2=noncollinear
-                  CALL pw_scale(tddft_env%A_ia_rspace_sub(1), &
-                                tddft_env%A_ia_rspace_sub(1)%pw_grid%dvol)
-                  ! Integrate XC contribution into the TDDFT operator (add to hmat_ao_ao)
-                  CALL dbcsr_set(matrix=tddft_env%A_ia_munu_sub(1)%matrix, alpha=0.0_dp)
-                  CALL integrate_v_rspace(v_rspace=tddft_env%A_ia_rspace_sub(1), &
-                                          hmat=tddft_env%A_ia_munu_sub(1), &
-                                          qs_env=qs_env, &
-                                          calculate_forces=.FALSE., &
-                                          gapw=.FALSE., &
-                                          pw_env_external=sub_env%pw_env, &
-                                          task_list_external=sub_env%task_list_orb)
-                  CALL copy_dbcsr_to_fm(matrix=tddft_env%A_ia_munu_sub(1)%matrix, &
-                                        fm=tddft_env%work2_ao_ao)
-                  ! Print
-                  CALL print_mat_ao_ao(tddft_env%work2_ao_ao, 'Awork_xc', logger, ivec)
-                  CALL cp_fm_scale_and_add( &
-                           alpha=1.0_dp, matrix_a=tddft_env%hmat_ao_ao, &
-                           beta=1.0_dp,  matrix_b=tddft_env%work2_ao_ao)
-                  CALL cp_fm_set_all(matrix=tddft_env%work2_ao_ao, alpha=0.0_dp)
-                  ! Print
-                  CALL print_mat_ao_ao(tddft_env%hmat_ao_ao, "hmat_ao_HF_XC_tot", logger, ivec)
+!                 !-----------------------------------------------
+!                 ! XC Contribution: .. = ..
+!                 !-----------------------------------------------
+!                 ! Density set at initial step to work_rho_ao_ao_symm
+!                 ! Rebuild response density grids with current trial vector
+!                 CALL qs_rho_update_rho(rho_struct=tddft_env%rho_orb_struct_sub, &
+!                                        qs_env=qs_env, &
+!                                        pw_env_external=sub_env%pw_env, &
+!                                        task_list_external=sub_env%task_list_orb, &
+!                                        para_env_external=sub_env%para_env)
+!                 DO i = 1, tddft_env%nSpins
+!                    CALL pw_zero(tddft_env%A_ia_rspace_sub(i))
+!                 END DO
+!                 CALL tddfpt_apply_xc(A_ia_rspace=tddft_env%A_ia_rspace_sub, &
+!                                      kernel_env=kernel_env%full_kernel, &
+!                                      rho_ia_struct=tddft_env%rho_orb_struct_sub, &
+!                                      is_rks_triplets=tddfpt_control%rks_triplets, &
+!                                      pw_env=sub_env%pw_env, &
+!                                      work_v_xc=tddft_env%work_v_xc, &
+!                                      work_v_xc_tau=tddft_env%work_v_xc_tau, &
+!                                      spinflip=tddfpt_control%spinflip) ! 1 collinear, 2=noncollinear
+!                 CALL pw_scale(tddft_env%A_ia_rspace_sub(1), &
+!                               tddft_env%A_ia_rspace_sub(1)%pw_grid%dvol)
+!                 ! Integrate XC contribution into the TDDFT operator (add to hmat_ao_ao)
+!                 CALL dbcsr_set(matrix=tddft_env%A_ia_munu_sub(1)%matrix, alpha=0.0_dp)
+!                 CALL integrate_v_rspace(v_rspace=tddft_env%A_ia_rspace_sub(1), &
+!                                         hmat=tddft_env%A_ia_munu_sub(1), &
+!                                         qs_env=qs_env, &
+!                                         calculate_forces=.FALSE., &
+!                                         gapw=.FALSE., &
+!                                         pw_env_external=sub_env%pw_env, &
+!                                         task_list_external=sub_env%task_list_orb)
+!                 CALL copy_dbcsr_to_fm(matrix=tddft_env%A_ia_munu_sub(1)%matrix, &
+!                                       fm=tddft_env%work2_ao_ao)
+!                 ! Print
+!                 CALL print_mat_ao_ao(tddft_env%work2_ao_ao, 'Awork_xc', logger, ivec)
+!                 CALL cp_fm_scale_and_add( &
+!                          alpha=1.0_dp, matrix_a=tddft_env%hmat_ao_ao, &
+!                          beta=1.0_dp,  matrix_b=tddft_env%work2_ao_ao)
+!                 CALL cp_fm_set_all(matrix=tddft_env%work2_ao_ao, alpha=0.0_dp)
+!                 ! Print
+!                 CALL print_mat_ao_ao(tddft_env%hmat_ao_ao, "hmat_ao_HF_XC_tot", logger, ivec)
 
                   !-----------------------------------------------
                   ! Transform back to MO basis
@@ -662,13 +673,6 @@ CONTAINS
                                          - tddft_env%ritz_evals_prev(1:tddft_env%nstates)))
                tddft_env%ritz_evals_prev(1:tddft_env%nstates) = tddft_env%ritz_evals(1:tddft_env%nstates)
 
-               t2 = m_walltime()
-               IF (log_unit > 0) THEN
-                  WRITE (log_unit, '(T7,I8,T24,F7.1,T40,ES11.4,T66)') iter, t2 - t1, max_error
-                  CALL m_flush(log_unit)
-               END IF
-               t1 = t2
-
                ! ------------------------------------------------------------------------------
                !   Convergence, Stall, and Restart Logic for Davidson Iterations
                ! ------------------------------------------------------------------------------
@@ -679,7 +683,22 @@ CONTAINS
                print *, "is_converged=", is_converged, "max_error=", max_error
                print *, "is_converged=", is_converged, "max_delta_eval=", max_delta_eval
 
+               t2 = m_walltime()
+               IF (log_unit > 0) THEN
+                  WRITE (log_unit, '(T7,I8,T24,F7.1,T40,ES11.4,T66)') iter, t2 - t1, max_error
+                  CALL m_flush(log_unit)
+               END IF
+               t1 = t2
+
                IF (is_converged) THEN
+                  ! Update guess vectors to latest Ritz vectors and eigenvalues
+                  DO iv = 1, tddft_env%nstates
+                     CALL cp_fm_to_fm(source=tddft_env%ritz_vects(iv), &
+                                      destination=tddft_env%evects_mo(iv))
+
+                     tddft_env%evals(iv) = tddft_env%ritz_evals(iv)
+                  END DO
+
                   EXIT    ! Exit Davidson loop
                END IF
 
@@ -688,22 +707,33 @@ CONTAINS
                ierr = 0
 
                ! --- Stall detection: check if residual error stagnates ---
+               ! Compute relative changes for stall detection and logging
+               rel_error_change      = ABS(max_error_prev - max_error) / MAX(ABS(max_error_prev), 1.0E-12_dp)
+               rel_delta_eval_change = ABS(max_delta_eval_prev - max_delta_eval) / MAX(ABS(max_delta_eval_prev), 1.0E-12_dp)
+               ! Stall detection: both error and eigenvalue change must be small
                IF (iter > 1) THEN
-                  IF (ABS(max_error_prev - max_error) / MAX(ABS(max_error_prev), 1.0E-12_dp) < 5.0E-3) THEN
+                  IF (rel_error_change < 5.0E-2 .OR. rel_delta_eval_change < 5.0E-2) THEN
                      stall_count = stall_count + 1
                   ELSE
                      stall_count = 0
                   END IF
+                  ! Print for monitoring
+                  IF (log_unit > 0) THEN
+                     WRITE (log_unit, '(A,I5,A,I3,2(A,ES12.5))') ' Iter:', iter, 'stall_count:',stall_count, &
+                                                            '  rel_error_change=', rel_error_change, &
+                                                            '  rel_delta_eval_change=', rel_delta_eval_change
+                  END IF
                END IF
                max_error_prev = max_error
+               max_delta_eval_prev = max_delta_eval
 
-               ! --- Handle stall or exhausted Krylov space ---
-               IF (stall_count >= 5 .OR. tddft_env%nvec >= tddft_env%mxvec) THEN
+               ! --- Handle stall, exhausted Krylov space, or too many iterations ---
+               IF (stall_count >= 4 .OR. tddft_env%nvec >= tddft_env%mxvec) THEN
+                  ! Prepare to restart Davidson
                   ! Update guess vectors to latest Ritz vectors and eigenvalues
                   DO iv = 1, tddft_env%nstates
                      CALL cp_fm_to_fm(source=tddft_env%ritz_vects(iv), &
                                       destination=tddft_env%evects_mo(iv))
-
                      tddft_env%evals(iv) = tddft_env%ritz_evals(iv)
                   END DO
 
@@ -716,7 +746,7 @@ CONTAINS
                      CALL cp_fm_set_all(matrix=tddft_env%residual_vecs(iv), alpha=0.0_dp)
                   END DO
 
-                  EXIT    ! Exit Davidson loop for restart
+                  EXIT    ! Exit to restart Davidson iterations
                END IF
 
                ! --- Krylov Expansion (only if not exiting) ---
@@ -803,9 +833,395 @@ CONTAINS
          CALL cp_warn(__LOCATION__, &
                       "Skipping TDDFPT wavefunction optimization")
       END IF
+      ! *** print summary information ***
+      log_unit = cp_logger_get_default_io_unit(logger)
+      ALLOCATE (ostrength(tddft_env%nStates), source=0.0_dp)
+      CALL tddfpt_print_summary(tddft_env= tddft_env, &
+                                log_unit=log_unit, &
+                                evects=tddft_env%evects_mo, &
+                                evals=tddft_env%evals, &
+                                ostrength=ostrength, &
+                                mult=3, &
+                                dipole_op_mos_occ=tddft_env%dipole_op_mos_occ, &
+                                dipole_form=tddfpt_control%dipole_form)
+      matrix_s = matrix_s
 
       CALL timestop(handle)
    END SUBROUTINE tddft_run
+   SUBROUTINE tddfpt_print_excitation_analysis(tddft_env, &
+         log_unit, evects, evals, gs_mos, matrix_s, spinflip, min_amplitude)
+      TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
+      INTEGER, INTENT(in)                                :: log_unit
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(in)      :: evects
+      REAL(kind=dp), DIMENSION(:), INTENT(in)            :: evals
+      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+         INTENT(in)                                      :: gs_mos
+      TYPE(dbcsr_type), POINTER                          :: matrix_s
+      INTEGER                                            :: spinflip
+      REAL(kind=dp), INTENT(in)                          :: min_amplitude
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_print_excitation_analysis'
+
+      CHARACTER(len=5)                                   :: spin_label, spin_label2
+      INTEGER                                            :: handle, icol, iproc, irow, ispin, spin2, &
+                                                            istate, nao, ncols_local, nrows_local, &
+                                                            nspins, nstates, state_spin, state_spin2
+      INTEGER(kind=int_8)                                :: iexc, imo_occ, imo_virt, ind, nexcs, &
+                                                            nexcs_local, nexcs_max_local, &
+                                                            nmo_virt_occ, nmo_virt_occ_alpha
+      INTEGER(kind=int_8), ALLOCATABLE, DIMENSION(:)     :: inds_local, inds_recv, nexcs_recv
+      INTEGER(kind=int_8), DIMENSION(1)                  :: nexcs_send
+      INTEGER(kind=int_8), DIMENSION(maxspins)           :: nmo_occ8, nmo_virt8
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: inds
+      INTEGER, DIMENSION(:), POINTER                     :: col_indices, row_indices
+      INTEGER, DIMENSION(maxspins)                       :: nmo_occ, nmo_virt
+      LOGICAL                                            :: do_exc_analysis
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: weights_local, weights_neg_abs_recv, &
+                                                            weights_recv
+      REAL(kind=dp), CONTIGUOUS, DIMENSION(:, :), &
+         POINTER                                         :: local_data
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: S_mos_virt, weights_fm
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(mp_request_type)                              :: send_handler, send_handler2
+      TYPE(mp_request_type), ALLOCATABLE, DIMENSION(:)   :: recv_handlers, recv_handlers2
+
+      CALL timeset(routineN, handle)
+
+      nspins = tddft_env%nspins
+      nstates = tddft_env%nstates
+      do_exc_analysis = min_amplitude < 1.0_dp
+
+      CALL cp_fm_get_info(gs_mos(1)%mos_occ, context=blacs_env, para_env=para_env)
+      CALL dbcsr_get_info(matrix_s, nfullrows_total=nao)
+
+      DO ispin = 1, nspins
+         nmo_occ(ispin) = SIZE(gs_mos(ispin)%evals_occ)
+         nmo_virt(ispin) = SIZE(gs_mos(ispin)%evals_virt)
+         nmo_occ8(ispin) = SIZE(gs_mos(ispin)%evals_occ, kind=int_8)
+         nmo_virt8(ispin) = SIZE(gs_mos(ispin)%evals_virt, kind=int_8)
+      END DO
+
+      ! *** excitation analysis ***
+      IF (do_exc_analysis) THEN
+         CPASSERT(log_unit <= 0 .OR. para_env%is_source())
+         nmo_virt_occ_alpha = INT(nmo_virt(1), int_8)*INT(nmo_occ(1), int_8)
+
+         IF (log_unit > 0) THEN
+            WRITE (log_unit, "(1X,A)") "", &
+               "-------------------------------------------------------------------------------", &
+               "-                            Excitation analysis                              -", &
+               "-------------------------------------------------------------------------------"
+            WRITE (log_unit, '(8X,A,T27,A,T49,A,T69,A)') "State", "Occupied", "Virtual", "Excitation"
+            WRITE (log_unit, '(8X,A,T28,A,T49,A,T69,A)') "number", "orbital", "orbital", "amplitude"
+            WRITE (log_unit, '(1X,79("-"))')
+
+            IF (nspins == 1) THEN
+               state_spin = 1
+               state_spin2 = 2
+               spin_label = '     '
+               spin_label2 = '     '
+            ELSE IF (spinflip .NE. no_sf_tddfpt) THEN
+               state_spin = 1
+               state_spin2 = 2
+               spin_label = '(alp)'
+               spin_label2 = '(bet)'
+            END IF
+         END IF
+
+         ALLOCATE (S_mos_virt(1), weights_fm(1))
+         DO ispin = 1, 1
+            IF (spinflip == no_sf_tddfpt) THEN
+               spin2 = ispin
+            ELSE
+               spin2 = 2
+            END IF
+            CALL cp_fm_get_info(gs_mos(spin2)%mos_virt, matrix_struct=fm_struct)
+            CALL cp_fm_create(S_mos_virt(ispin), fm_struct)
+            CALL cp_dbcsr_sm_fm_multiply(matrix_s, &
+                                         gs_mos(spin2)%mos_virt, &
+                                         S_mos_virt(ispin), &
+                                         ncol=nmo_virt(spin2), alpha=1.0_dp, beta=0.0_dp)
+
+            NULLIFY (fm_struct)
+            CALL cp_fm_struct_create(fm_struct, nrow_global=nmo_virt(spin2), ncol_global=nmo_occ(ispin), &
+                                     context=blacs_env)
+            CALL cp_fm_create(weights_fm(ispin), fm_struct)
+            CALL cp_fm_struct_release(fm_struct)
+         END DO
+
+         nexcs_max_local = 0
+         DO ispin = 1, 1
+            CALL cp_fm_get_info(weights_fm(ispin), nrow_local=nrows_local, ncol_local=ncols_local)
+            nexcs_max_local = nexcs_max_local + INT(nrows_local, int_8)*INT(ncols_local, int_8)
+         END DO
+
+         ALLOCATE (weights_local(nexcs_max_local), inds_local(nexcs_max_local))
+
+         DO istate = 1, nstates
+            nexcs_local = 0
+            nmo_virt_occ = 0
+
+            ! analyse matrix elements locally and transfer only significant
+            ! excitations to the master node for subsequent ordering
+            DO ispin = 1, 1
+               IF (spinflip == no_sf_tddfpt) THEN
+                  spin2 = ispin
+               ELSE
+                  spin2 = 2
+               END IF
+               ! compute excitation amplitudes
+               CALL parallel_gemm('T', 'N', nmo_virt(spin2), nmo_occ(ispin), nao, 1.0_dp, S_mos_virt(ispin), &
+                                  evects(istate), 0.0_dp, weights_fm(ispin))
+
+               CALL cp_fm_get_info(weights_fm(ispin), nrow_local=nrows_local, ncol_local=ncols_local, &
+                                   row_indices=row_indices, col_indices=col_indices, local_data=local_data)
+
+               ! locate single excitations with significant amplitudes (>= min_amplitude)
+               DO icol = 1, ncols_local
+                  DO irow = 1, nrows_local
+                     IF (ABS(local_data(irow, icol)) >= min_amplitude) THEN
+                        ! number of non-negligible excitations
+                        nexcs_local = nexcs_local + 1
+                        ! excitation amplitude
+                        weights_local(nexcs_local) = local_data(irow, icol)
+                        ! index of single excitation (ivirt, iocc, ispin) in compressed form
+                        inds_local(nexcs_local) = nmo_virt_occ + INT(row_indices(irow), int_8) + &
+                                                  INT(col_indices(icol) - 1, int_8)*nmo_virt8(spin2)
+                     END IF
+                  END DO
+               END DO
+
+               nmo_virt_occ = nmo_virt_occ + nmo_virt8(spin2)*nmo_occ8(ispin)
+            END DO
+
+            IF (para_env%is_source()) THEN
+               ! master node
+               ALLOCATE (nexcs_recv(para_env%num_pe), recv_handlers(para_env%num_pe), recv_handlers2(para_env%num_pe))
+
+               ! collect number of non-negligible excitations from other nodes
+               DO iproc = 1, para_env%num_pe
+                  IF (iproc - 1 /= para_env%mepos) THEN
+                     CALL para_env%irecv(nexcs_recv(iproc:iproc), iproc - 1, recv_handlers(iproc), 0)
+                  ELSE
+                     nexcs_recv(iproc) = nexcs_local
+                  END IF
+               END DO
+
+               DO iproc = 1, para_env%num_pe
+                  IF (iproc - 1 /= para_env%mepos) &
+                     CALL recv_handlers(iproc)%wait()
+               END DO
+
+               ! compute total number of non-negligible excitations
+               nexcs = 0
+               DO iproc = 1, para_env%num_pe
+                  nexcs = nexcs + nexcs_recv(iproc)
+               END DO
+
+               ! receive indices and amplitudes of selected excitations
+               ALLOCATE (weights_recv(nexcs), weights_neg_abs_recv(nexcs))
+               ALLOCATE (inds_recv(nexcs), inds(nexcs))
+
+               nmo_virt_occ = 0
+               DO iproc = 1, para_env%num_pe
+                  IF (nexcs_recv(iproc) > 0) THEN
+                     IF (iproc - 1 /= para_env%mepos) THEN
+                        ! excitation amplitudes
+                        CALL para_env%irecv(weights_recv(nmo_virt_occ + 1:nmo_virt_occ + nexcs_recv(iproc)), &
+                                            iproc - 1, recv_handlers(iproc), 1)
+                        ! compressed indices
+                        CALL para_env%irecv(inds_recv(nmo_virt_occ + 1:nmo_virt_occ + nexcs_recv(iproc)), &
+                                            iproc - 1, recv_handlers2(iproc), 2)
+                     ELSE
+                        ! data on master node
+                        weights_recv(nmo_virt_occ + 1:nmo_virt_occ + nexcs_recv(iproc)) = weights_local(1:nexcs_recv(iproc))
+                        inds_recv(nmo_virt_occ + 1:nmo_virt_occ + nexcs_recv(iproc)) = inds_local(1:nexcs_recv(iproc))
+                     END IF
+
+                     nmo_virt_occ = nmo_virt_occ + nexcs_recv(iproc)
+                  END IF
+               END DO
+
+               DO iproc = 1, para_env%num_pe
+                  IF (iproc - 1 /= para_env%mepos .AND. nexcs_recv(iproc) > 0) THEN
+                     CALL recv_handlers(iproc)%wait()
+                     CALL recv_handlers2(iproc)%wait()
+                  END IF
+               END DO
+
+               DEALLOCATE (nexcs_recv, recv_handlers, recv_handlers2)
+            ELSE
+               ! working node: send the number of selected excited states to the master node
+               nexcs_send(1) = nexcs_local
+               CALL para_env%isend(nexcs_send, para_env%source, send_handler, 0)
+               CALL send_handler%wait()
+
+               IF (nexcs_local > 0) THEN
+                  ! send excitation amplitudes
+                  CALL para_env%isend(weights_local(1:nexcs_local), para_env%source, send_handler, 1)
+                  ! send compressed indices
+                  CALL para_env%isend(inds_local(1:nexcs_local), para_env%source, send_handler2, 2)
+
+                  CALL send_handler%wait()
+                  CALL send_handler2%wait()
+               END IF
+            END IF
+
+            ! sort non-negligible excitations on the master node according to their amplitudes,
+            ! uncompress indices and print summary information
+            IF (para_env%is_source() .AND. log_unit > 0) THEN
+               weights_neg_abs_recv(:) = -ABS(weights_recv)
+               CALL sort(weights_neg_abs_recv, INT(nexcs), inds)
+
+               WRITE (log_unit, '(T7,I8,F10.5,A)') istate, evals(istate)*evolt, " eV"
+
+               ! This reinitialization is needed to prevent the intel fortran compiler from introduce
+               ! a bug when using optimization level 3 flag
+               state_spin = 1
+               state_spin2 = 1
+               IF (spinflip .NE. no_sf_tddfpt) THEN
+                  state_spin = 1
+                  state_spin2 = 2
+               END IF
+               DO iexc = 1, nexcs
+                  ind = inds_recv(inds(iexc)) - 1
+                  IF ((nspins > 1) .AND. (spinflip == no_sf_tddfpt)) THEN
+                     IF (ind < nmo_virt_occ_alpha) THEN
+                        spin_label = '(alp)'
+                        spin_label2 = '(alp)'
+                     ELSE
+                        state_spin = 2
+                        state_spin2 = 2
+                        ind = ind - nmo_virt_occ_alpha
+                        spin_label = '(bet)'
+                        spin_label2 = '(bet)'
+                     END IF
+                  END IF
+                  imo_occ = ind/nmo_virt8(state_spin2) + 1
+                  imo_virt = MOD(ind, nmo_virt8(state_spin2)) + 1
+
+                  WRITE (log_unit, '(T27,I8,1X,A5,T48,I8,1X,A5,T70,F9.6)') imo_occ, spin_label, &
+                     nmo_occ8(state_spin2) + imo_virt, spin_label2, weights_recv(inds(iexc))
+               END DO
+            END IF
+
+            ! deallocate temporary arrays
+            IF (para_env%is_source()) &
+               DEALLOCATE (weights_recv, weights_neg_abs_recv, inds_recv, inds)
+         END DO
+
+         DEALLOCATE (weights_local, inds_local)
+         IF (log_unit > 0) THEN
+            WRITE (log_unit, "(1X,A)") &
+               "-------------------------------------------------------------------------------"
+         END IF
+      END IF
+
+      CALL cp_fm_release(weights_fm)
+      CALL cp_fm_release(S_mos_virt)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE tddfpt_print_excitation_analysis
+   SUBROUTINE tddfpt_print_summary(tddft_env, log_unit, evects, evals, ostrength, mult, &
+                                   dipole_op_mos_occ, dipole_form)
+      TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
+      INTEGER, INTENT(in)                                :: log_unit
+      TYPE(cp_fm_type), DIMENSION(:), INTENT(inout)      :: evects
+      REAL(kind=dp), DIMENSION(:), INTENT(in)            :: evals
+      REAL(kind=dp), DIMENSION(:), INTENT(inout)         :: ostrength
+      INTEGER, INTENT(in)                                :: mult
+      TYPE(cp_fm_type), DIMENSION(:, :), INTENT(inout)      :: dipole_op_mos_occ
+      INTEGER, INTENT(in)                                :: dipole_form
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_print_summary'
+
+      CHARACTER(len=1)                                   :: lsd_str
+      CHARACTER(len=20)                                  :: mult_str
+      INTEGER                                            :: handle, ideriv, ispin, istate, nspins, &
+                                                            nstates
+      REAL(kind=dp)                                      :: osc_strength
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: trans_dipoles
+
+      CALL timeset(routineN, handle)
+
+      ideriv = ideriv
+      ispin = ispin
+      dipole_op_mos_occ = dipole_op_mos_occ
+      nspins = tddft_env%nSpins
+      nstates =tddft_env%nStates
+      evects = evects
+
+      IF (nspins > 1) THEN
+         lsd_str = 'U'
+      ELSE
+         lsd_str = 'RO'
+      END IF
+
+      ! *** summary header ***
+      IF (log_unit > 0) THEN
+         CALL integer_to_string(mult, mult_str)
+         WRITE (log_unit, '(/,1X,A1,A,1X,A)') lsd_str, "-TDDFPT states of multiplicity", TRIM(mult_str)
+         SELECT CASE (dipole_form)
+         CASE (tddfpt_dipole_berry)
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using Berry operator formulation"
+         CASE (tddfpt_dipole_length)
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using length formulation"
+         CASE (tddfpt_dipole_velocity)
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using velocity formulation"
+         CASE DEFAULT
+            CPABORT("Unimplemented form of the dipole operator")
+         END SELECT
+
+         WRITE (log_unit, '(T10,A,T19,A,T37,A,T69,A)') "State", "Excitation", &
+            "Transition dipole (a.u.)", "Oscillator"
+         WRITE (log_unit, '(T10,A,T19,A,T37,A,T49,A,T61,A,T67,A)') "number", "energy (eV)", &
+            "x", "y", "z", "strength (a.u.)"
+         WRITE (log_unit, '(T10,72("-"))')
+      END IF
+
+      ! transition dipole moment
+      ALLOCATE (trans_dipoles(nstates, nderivs, nspins))
+      trans_dipoles(:, :, :) = 0.0_dp
+
+      ! nspins == 1 .AND. mult == 3 : spin-flip transitions are forbidden due to symmetry reasons
+!     IF (nspins > 1 .OR. mult == 1) THEN
+!        DO ispin = 1, nspins
+!           DO ideriv = 1, nderivs
+!              CALL cp_fm_trace(evects(:), dipole_op_mos_occ(ideriv, ispin), &
+!                               trans_dipoles(:, ideriv, ispin))
+!           END DO
+!        END DO
+!
+!        IF (nspins == 1) THEN
+!           trans_dipoles(:, :, 1) = SQRT(2.0_dp)*trans_dipoles(:, :, 1)
+!        ELSE
+!           trans_dipoles(:, :, 1) = SQRT(trans_dipoles(:, :, 1)**2 + trans_dipoles(:, :, 2)**2)
+!        END IF
+!     END IF
+
+      ! *** summary information ***
+      DO istate = 1, nstates
+         osc_strength = 2.0_dp/3.0_dp*evals(istate)* &
+                        accurate_dot_product(trans_dipoles(istate, :, 1), trans_dipoles(istate, :, 1))
+         ostrength(istate) = osc_strength
+         IF (log_unit > 0) THEN
+            WRITE (log_unit, '(1X,A,T9,I7,T19,F11.5,T31,3(1X,ES11.4E2),T69,ES12.5E2)') &
+               "TDDFT| ", istate, evals(istate)*evolt, trans_dipoles(istate, 1:nderivs, 1), osc_strength
+         END IF
+      END DO
+
+      ! punch a checksum for the regs
+      IF (log_unit > 0) THEN
+         WRITE (log_unit, '(/,T2,A,E14.6)') 'TDDFT : CheckSum  =', SQRT(SUM(evals**2))
+      END IF
+
+      DEALLOCATE (trans_dipoles)
+
+      CALL timestop(handle)
+   END SUBROUTINE tddfpt_print_summary
 
    SUBROUTINE converger_run(tddft_env, log_unit, sub_env, logger, iter)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
@@ -816,7 +1232,7 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'converger_run'
 
-      INTEGER                                            :: handle, ivec, i, j, a, ij, ierr, iv
+      INTEGER                                            :: handle, i, j, a, ij, ierr, iv
       REAL(KIND=DP)                                      :: val, sig, scal, val2
 
       CALL timeset(routineN, handle)
@@ -854,18 +1270,15 @@ CONTAINS
                               info=ierr)
       CALL deallocate_fm_matrix(tddft_env%subspace)
       ! Print
-      print *, "KKK| ================ Energy ============== at iter=", iter
-      DO ivec = 1, tddft_env%nstates
-         print *, "KKK| Energy (eV):", ivec, tddft_env%ritz_evals(ivec)*evolt
-      END DO
-      CALL print_mat_ao_ao(tddft_env%subspace_evecs, "subspace_evecs", logger, iter)
+!     print *, "KKK| ================ Energy ============== at iter=", iter
+!     DO iv = 1, tddft_env%nstates
+!        print *, "KKK| Energy (eV):", iv, tddft_env%ritz_evals(iv)*evolt
+!     END DO
+!     CALL print_mat_ao_ao(tddft_env%subspace_evecs, "subspace_evecs", logger, iter)
 
       ! Normalization
       CALL cp_fm_vectorsnorm(tddft_env%subspace_evecs, tddft_env%vector_norm(1:tddft_env%nvec))
       tddft_env%vector_scal(1:tddft_env%nvec) = 1.0_dp/tddft_env%vector_norm(1:tddft_env%nvec)
-      DO i = 1, tddft_env%nvec
-         PRINT *, "Norm of column ", i, ": ", tddft_env%vector_norm(i)
-      END DO
       CALL cp_fm_column_scale(tddft_env%subspace_evecs, tddft_env%vector_scal(1:tddft_env%nvec))
 
       ! Print
@@ -997,14 +1410,15 @@ CONTAINS
       CALL cp_fm_get_submatrix(mat, submatrix, &
                                start_row=1, start_col=1, &
                                n_rows=5, n_cols=5)
-
-      IF (unit_nr > 0) THEN
-         WRITE(unit_nr, '(A,A,A,I0,A)') "First 5x5 elements of ",TRIM(mat_name)," at iter ",iter,":"
-         DO i = 1, 5
-            WRITE(unit_nr, '(5F12.6)') (submatrix(i,j), j=1,5)
-         END DO
-         WRITE(unit_nr, '(A)') ""
-         CALL m_flush(unit_nr)
+      IF (.FALSE.) THEN
+         IF (unit_nr > 0) THEN
+            WRITE(unit_nr, '(A,A,A,I0,A)') "First 5x5 elements of ",TRIM(mat_name)," at iter ",iter,":"
+            DO i = 1, 5
+               WRITE(unit_nr, '(5F12.6)') (submatrix(i,j), j=1,5)
+            END DO
+            WRITE(unit_nr, '(A)') ""
+            CALL m_flush(unit_nr)
+         END IF
       END IF
 
       CALL timestop(handle)
