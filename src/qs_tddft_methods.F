@@ -94,7 +94,6 @@ MODULE qs_tddft_methods
                                               fm_pool_create_fm,&
                                               fm_pool_release, &
                                               fm_pool_give_back_fm
-   USE cp_fm_struct,                    ONLY: cp_fm_struct_type
    USE cp_fm_types,                     ONLY: cp_fm_create,&
                                               cp_fm_get_info,&
                                               cp_fm_release,&
@@ -332,11 +331,12 @@ CONTAINS
       REAL(kind=dp)                                      :: t1, t2
       CLASS(tddft_theory_type), ALLOCATABLE              :: theory_handler
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: ostrength
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
 
       CALL timeset(routineN, handle)
 
       ALLOCATE(tddft_sf_theory_type :: theory_handler)
+
+      CALL theory_handler%allocate_theory_data(qs_env, tddft_env, sub_env)
 
       t1 = m_walltime()
 
@@ -484,287 +484,13 @@ CONTAINS
                                 ostrength=ostrength, &
                                 mult=3, &
                                 dipole_form=tddfpt_control%dipole_form)
-      matrix_s = matrix_s
+
+      CALL theory_handler%print_theory_data(tddft_env)
+
+      CALL theory_handler%deallocate_theory_data(sub_env)
 
       CALL timestop(handle)
    END SUBROUTINE tddft_run
-   SUBROUTINE tddfpt_print_excitation_analysis(tddft_env, &
-         log_unit, evects, evals, gs_mos, matrix_s, spinflip, min_amplitude)
-      TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
-      INTEGER, INTENT(in)                                :: log_unit
-      TYPE(cp_fm_type), DIMENSION(:), INTENT(in)      :: evects
-      REAL(kind=dp), DIMENSION(:), INTENT(in)            :: evals
-      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
-         INTENT(in)                                      :: gs_mos
-      TYPE(dbcsr_type), POINTER                          :: matrix_s
-      INTEGER                                            :: spinflip
-      REAL(kind=dp), INTENT(in)                          :: min_amplitude
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_print_excitation_analysis'
-
-      CHARACTER(len=5)                                   :: spin_label, spin_label2
-      INTEGER                                            :: handle, icol, iproc, irow, ispin, spin2, &
-                                                            istate, nao, ncols_local, nrows_local, &
-                                                            nspins, nstates, state_spin, state_spin2
-      INTEGER(kind=int_8)                                :: iexc, imo_occ, imo_virt, ind, nexcs, &
-                                                            nexcs_local, nexcs_max_local, &
-                                                            nmo_virt_occ, nmo_virt_occ_alpha
-      INTEGER(kind=int_8), ALLOCATABLE, DIMENSION(:)     :: inds_local, inds_recv, nexcs_recv
-      INTEGER(kind=int_8), DIMENSION(1)                  :: nexcs_send
-      INTEGER(kind=int_8), DIMENSION(maxspins)           :: nmo_occ8, nmo_virt8
-      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: inds
-      INTEGER, DIMENSION(:), POINTER                     :: col_indices, row_indices
-      INTEGER, DIMENSION(maxspins)                       :: nmo_occ, nmo_virt
-      LOGICAL                                            :: do_exc_analysis
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: weights_local, weights_neg_abs_recv, &
-                                                            weights_recv
-      REAL(kind=dp), CONTIGUOUS, DIMENSION(:, :), &
-         POINTER                                         :: local_data
-      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
-      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: S_mos_virt, weights_fm
-      TYPE(mp_para_env_type), POINTER                    :: para_env
-      TYPE(mp_request_type)                              :: send_handler, send_handler2
-      TYPE(mp_request_type), ALLOCATABLE, DIMENSION(:)   :: recv_handlers, recv_handlers2
-
-      CALL timeset(routineN, handle)
-
-      nspins = tddft_env%nspins
-      nstates = tddft_env%nstates
-      do_exc_analysis = min_amplitude < 1.0_dp
-
-      CALL cp_fm_get_info(gs_mos(1)%mos_occ, context=blacs_env, para_env=para_env)
-      CALL dbcsr_get_info(matrix_s, nfullrows_total=nao)
-
-      DO ispin = 1, nspins
-         nmo_occ(ispin) = SIZE(gs_mos(ispin)%evals_occ)
-         nmo_virt(ispin) = SIZE(gs_mos(ispin)%evals_virt)
-         nmo_occ8(ispin) = SIZE(gs_mos(ispin)%evals_occ, kind=int_8)
-         nmo_virt8(ispin) = SIZE(gs_mos(ispin)%evals_virt, kind=int_8)
-      END DO
-
-      ! *** excitation analysis ***
-      IF (do_exc_analysis) THEN
-         CPASSERT(log_unit <= 0 .OR. para_env%is_source())
-         nmo_virt_occ_alpha = INT(nmo_virt(1), int_8)*INT(nmo_occ(1), int_8)
-
-         IF (log_unit > 0) THEN
-            WRITE (log_unit, "(1X,A)") "", &
-               "-------------------------------------------------------------------------------", &
-               "-                            Excitation analysis                              -", &
-               "-------------------------------------------------------------------------------"
-            WRITE (log_unit, '(8X,A,T27,A,T49,A,T69,A)') "State", "Occupied", "Virtual", "Excitation"
-            WRITE (log_unit, '(8X,A,T28,A,T49,A,T69,A)') "number", "orbital", "orbital", "amplitude"
-            WRITE (log_unit, '(1X,79("-"))')
-
-            IF (nspins == 1) THEN
-               state_spin = 1
-               state_spin2 = 2
-               spin_label = '     '
-               spin_label2 = '     '
-            ELSE IF (spinflip .NE. no_sf_tddfpt) THEN
-               state_spin = 1
-               state_spin2 = 2
-               spin_label = '(alp)'
-               spin_label2 = '(bet)'
-            END IF
-         END IF
-
-         ALLOCATE (S_mos_virt(1), weights_fm(1))
-         DO ispin = 1, 1
-            IF (spinflip == no_sf_tddfpt) THEN
-               spin2 = ispin
-            ELSE
-               spin2 = 2
-            END IF
-            CALL cp_fm_get_info(gs_mos(spin2)%mos_virt, matrix_struct=fm_struct)
-            CALL cp_fm_create(S_mos_virt(ispin), fm_struct)
-            CALL cp_dbcsr_sm_fm_multiply(matrix_s, &
-                                         gs_mos(spin2)%mos_virt, &
-                                         S_mos_virt(ispin), &
-                                         ncol=nmo_virt(spin2), alpha=1.0_dp, beta=0.0_dp)
-
-            NULLIFY (fm_struct)
-            CALL cp_fm_struct_create(fm_struct, nrow_global=nmo_virt(spin2), ncol_global=nmo_occ(ispin), &
-                                     context=blacs_env)
-            CALL cp_fm_create(weights_fm(ispin), fm_struct)
-            CALL cp_fm_struct_release(fm_struct)
-         END DO
-
-         nexcs_max_local = 0
-         DO ispin = 1, 1
-            CALL cp_fm_get_info(weights_fm(ispin), nrow_local=nrows_local, ncol_local=ncols_local)
-            nexcs_max_local = nexcs_max_local + INT(nrows_local, int_8)*INT(ncols_local, int_8)
-         END DO
-
-         ALLOCATE (weights_local(nexcs_max_local), inds_local(nexcs_max_local))
-
-         DO istate = 1, nstates
-            nexcs_local = 0
-            nmo_virt_occ = 0
-
-            ! analyse matrix elements locally and transfer only significant
-            ! excitations to the master node for subsequent ordering
-            DO ispin = 1, 1
-               IF (spinflip == no_sf_tddfpt) THEN
-                  spin2 = ispin
-               ELSE
-                  spin2 = 2
-               END IF
-               ! compute excitation amplitudes
-               CALL parallel_gemm('T', 'N', nmo_virt(spin2), nmo_occ(ispin), nao, 1.0_dp, S_mos_virt(ispin), &
-                                  evects(istate), 0.0_dp, weights_fm(ispin))
-
-               CALL cp_fm_get_info(weights_fm(ispin), nrow_local=nrows_local, ncol_local=ncols_local, &
-                                   row_indices=row_indices, col_indices=col_indices, local_data=local_data)
-
-               ! locate single excitations with significant amplitudes (>= min_amplitude)
-               DO icol = 1, ncols_local
-                  DO irow = 1, nrows_local
-                     IF (ABS(local_data(irow, icol)) >= min_amplitude) THEN
-                        ! number of non-negligible excitations
-                        nexcs_local = nexcs_local + 1
-                        ! excitation amplitude
-                        weights_local(nexcs_local) = local_data(irow, icol)
-                        ! index of single excitation (ivirt, iocc, ispin) in compressed form
-                        inds_local(nexcs_local) = nmo_virt_occ + INT(row_indices(irow), int_8) + &
-                                                  INT(col_indices(icol) - 1, int_8)*nmo_virt8(spin2)
-                     END IF
-                  END DO
-               END DO
-
-               nmo_virt_occ = nmo_virt_occ + nmo_virt8(spin2)*nmo_occ8(ispin)
-            END DO
-
-            IF (para_env%is_source()) THEN
-               ! master node
-               ALLOCATE (nexcs_recv(para_env%num_pe), recv_handlers(para_env%num_pe), recv_handlers2(para_env%num_pe))
-
-               ! collect number of non-negligible excitations from other nodes
-               DO iproc = 1, para_env%num_pe
-                  IF (iproc - 1 /= para_env%mepos) THEN
-                     CALL para_env%irecv(nexcs_recv(iproc:iproc), iproc - 1, recv_handlers(iproc), 0)
-                  ELSE
-                     nexcs_recv(iproc) = nexcs_local
-                  END IF
-               END DO
-
-               DO iproc = 1, para_env%num_pe
-                  IF (iproc - 1 /= para_env%mepos) &
-                     CALL recv_handlers(iproc)%wait()
-               END DO
-
-               ! compute total number of non-negligible excitations
-               nexcs = 0
-               DO iproc = 1, para_env%num_pe
-                  nexcs = nexcs + nexcs_recv(iproc)
-               END DO
-
-               ! receive indices and amplitudes of selected excitations
-               ALLOCATE (weights_recv(nexcs), weights_neg_abs_recv(nexcs))
-               ALLOCATE (inds_recv(nexcs), inds(nexcs))
-
-               nmo_virt_occ = 0
-               DO iproc = 1, para_env%num_pe
-                  IF (nexcs_recv(iproc) > 0) THEN
-                     IF (iproc - 1 /= para_env%mepos) THEN
-                        ! excitation amplitudes
-                        CALL para_env%irecv(weights_recv(nmo_virt_occ + 1:nmo_virt_occ + nexcs_recv(iproc)), &
-                                            iproc - 1, recv_handlers(iproc), 1)
-                        ! compressed indices
-                        CALL para_env%irecv(inds_recv(nmo_virt_occ + 1:nmo_virt_occ + nexcs_recv(iproc)), &
-                                            iproc - 1, recv_handlers2(iproc), 2)
-                     ELSE
-                        ! data on master node
-                        weights_recv(nmo_virt_occ + 1:nmo_virt_occ + nexcs_recv(iproc)) = weights_local(1:nexcs_recv(iproc))
-                        inds_recv(nmo_virt_occ + 1:nmo_virt_occ + nexcs_recv(iproc)) = inds_local(1:nexcs_recv(iproc))
-                     END IF
-
-                     nmo_virt_occ = nmo_virt_occ + nexcs_recv(iproc)
-                  END IF
-               END DO
-
-               DO iproc = 1, para_env%num_pe
-                  IF (iproc - 1 /= para_env%mepos .AND. nexcs_recv(iproc) > 0) THEN
-                     CALL recv_handlers(iproc)%wait()
-                     CALL recv_handlers2(iproc)%wait()
-                  END IF
-               END DO
-
-               DEALLOCATE (nexcs_recv, recv_handlers, recv_handlers2)
-            ELSE
-               ! working node: send the number of selected excited states to the master node
-               nexcs_send(1) = nexcs_local
-               CALL para_env%isend(nexcs_send, para_env%source, send_handler, 0)
-               CALL send_handler%wait()
-
-               IF (nexcs_local > 0) THEN
-                  ! send excitation amplitudes
-                  CALL para_env%isend(weights_local(1:nexcs_local), para_env%source, send_handler, 1)
-                  ! send compressed indices
-                  CALL para_env%isend(inds_local(1:nexcs_local), para_env%source, send_handler2, 2)
-
-                  CALL send_handler%wait()
-                  CALL send_handler2%wait()
-               END IF
-            END IF
-
-            ! sort non-negligible excitations on the master node according to their amplitudes,
-            ! uncompress indices and print summary information
-            IF (para_env%is_source() .AND. log_unit > 0) THEN
-               weights_neg_abs_recv(:) = -ABS(weights_recv)
-               CALL sort(weights_neg_abs_recv, INT(nexcs), inds)
-
-               WRITE (log_unit, '(T7,I8,F10.5,A)') istate, evals(istate)*evolt, " eV"
-
-               ! This reinitialization is needed to prevent the intel fortran compiler from introduce
-               ! a bug when using optimization level 3 flag
-               state_spin = 1
-               state_spin2 = 1
-               IF (spinflip .NE. no_sf_tddfpt) THEN
-                  state_spin = 1
-                  state_spin2 = 2
-               END IF
-               DO iexc = 1, nexcs
-                  ind = inds_recv(inds(iexc)) - 1
-                  IF ((nspins > 1) .AND. (spinflip == no_sf_tddfpt)) THEN
-                     IF (ind < nmo_virt_occ_alpha) THEN
-                        spin_label = '(alp)'
-                        spin_label2 = '(alp)'
-                     ELSE
-                        state_spin = 2
-                        state_spin2 = 2
-                        ind = ind - nmo_virt_occ_alpha
-                        spin_label = '(bet)'
-                        spin_label2 = '(bet)'
-                     END IF
-                  END IF
-                  imo_occ = ind/nmo_virt8(state_spin2) + 1
-                  imo_virt = MOD(ind, nmo_virt8(state_spin2)) + 1
-
-                  WRITE (log_unit, '(T27,I8,1X,A5,T48,I8,1X,A5,T70,F9.6)') imo_occ, spin_label, &
-                     nmo_occ8(state_spin2) + imo_virt, spin_label2, weights_recv(inds(iexc))
-               END DO
-            END IF
-
-            ! deallocate temporary arrays
-            IF (para_env%is_source()) &
-               DEALLOCATE (weights_recv, weights_neg_abs_recv, inds_recv, inds)
-         END DO
-
-         DEALLOCATE (weights_local, inds_local)
-         IF (log_unit > 0) THEN
-            WRITE (log_unit, "(1X,A)") &
-               "-------------------------------------------------------------------------------"
-         END IF
-      END IF
-
-      CALL cp_fm_release(weights_fm)
-      CALL cp_fm_release(S_mos_virt)
-
-      CALL timestop(handle)
-
-   END SUBROUTINE tddfpt_print_excitation_analysis
 
    FUNCTION run_converger(tddft_env, sub_env, tddfpt_control, log_unit, logger, iter) RESULT(status)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env

@@ -63,6 +63,10 @@ MODULE qs_tddft_theory
       INTEGER :: unused = 0
       ! Theory-specific data should be defined in child types (see SF, MRSF, etc.)
    CONTAINS
+      !> Allocate any additional theory-specific data
+      PROCEDURE(allocate_theory_iface), DEFERRED :: allocate_theory_data
+      !> Deallocate all theory-specific data/arrays
+      PROCEDURE(deallocate_theory_iface), DEFERRED :: deallocate_theory_data
       !> Set up initial guess excitation vectors (MO space)
       PROCEDURE(init_guess_iface), DEFERRED :: initialize_guess_vectors
       !> MO->AO transformation for trial vectors
@@ -71,10 +75,6 @@ MODULE qs_tddft_theory
       PROCEDURE(apply_op_iface), DEFERRED :: apply_operator
       !> AO->MO back transformation for resulting vectors
       PROCEDURE(ao_to_mo_iface), DEFERRED :: ao_to_mo_transform
-      !> Allocate any additional theory-specific data
-      PROCEDURE(allocate_theory_iface), DEFERRED :: allocate_theory_data
-      !> Deallocate all theory-specific data/arrays
-      PROCEDURE(deallocate_theory_iface), DEFERRED :: deallocate_theory_data
       !> Print theory-specific excitation analysis
       PROCEDURE(print_theory_iface), DEFERRED :: print_theory_data
    END TYPE tddft_theory_type
@@ -85,10 +85,13 @@ MODULE qs_tddft_theory
 ! **************************************************************************************************
    ABSTRACT INTERFACE
       !> Allocate any theory-specific working arrays, buffers, etc.
-      SUBROUTINE allocate_theory_iface(this, tddft_env)
-         IMPORT :: tddft_theory_type, tddft_info_type
+      SUBROUTINE allocate_theory_iface(this, qs_env, tddft_env, sub_env)
+         IMPORT :: tddft_theory_type, tddft_info_type, tddfpt_subgroup_env_type,&
+                   qs_environment_type
          CLASS(tddft_theory_type), INTENT(INOUT) :: this
-         TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env
+         TYPE(qs_environment_type), POINTER :: qs_env
+         TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
+         TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
       END SUBROUTINE
       !> Set up initial guess vectors (theory-specific, e.g. SF, MRSF, ...)
       SUBROUTINE init_guess_iface(this, tddft_env, gs_mos, tddfpt_control, log_unit)
@@ -156,10 +159,10 @@ MODULE qs_tddft_theory
          TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env
       END SUBROUTINE
       !> Deallocate/free any theory-specific resources
-      SUBROUTINE deallocate_theory_iface(this, tddft_env)
-         IMPORT :: tddft_theory_type, tddft_info_type
+      SUBROUTINE deallocate_theory_iface(this, sub_env)
+         IMPORT :: tddft_theory_type, tddfpt_subgroup_env_type
          CLASS(tddft_theory_type), INTENT(INOUT) :: this
-         TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env
+         TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
       END SUBROUTINE
    END INTERFACE
 
