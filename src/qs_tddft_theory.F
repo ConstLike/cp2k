@@ -94,13 +94,18 @@ MODULE qs_tddft_theory
          TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
       END SUBROUTINE
       !> Set up initial guess vectors (theory-specific, e.g. SF, MRSF, ...)
-      SUBROUTINE init_guess_iface(this, tddft_env, gs_mos, tddfpt_control, log_unit)
+      SUBROUTINE init_guess_iface(this, qs_env, sub_env, tddft_env, gs_mos, &
+                                  tddfpt_control, log_unit)
          IMPORT                                          :: tddft_theory_type, &
                                                             tddft_info_type, &
                                                             tddfpt_ground_state_mos, &
+                                                            qs_environment_type, &
                                                             cp_logger_type, &
-                                                            tddfpt2_control_type
+                                                            tddfpt2_control_type, & 
+                                                            tddfpt_subgroup_env_type
          CLASS(tddft_theory_type), INTENT(INOUT)         :: this
+         TYPE(qs_environment_type), POINTER :: qs_env
+         TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
          TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
          TYPE(tddfpt_ground_state_mos), &
             DIMENSION(:), POINTER                        :: gs_mos

@@ -267,13 +267,9 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      CALL tddfpt_construct_ground_state_orb_density( &
-               rho_orb_struct=tddft_env%rho_orb_struct_sub, &
-               rho_xc_struct=tddft_env%gs_rho_xc_struct, &
-               is_rks_triplets=tddfpt_control%rks_triplets, &
-               qs_env=qs_env, &
-               sub_env=sub_env, &
-               wfm_rho_orb=tddft_env%rho_ia_ao_fm)
+      qs_env = qs_env
+      sub_env = sub_env
+      tddfpt_control = tddfpt_control
 
       DO ispin = 1, tddft_env%nSpins
          CALL copy_dbcsr_to_fm(matrix_ks(ispin)%matrix, tddft_env%fock(ispin))
@@ -346,7 +342,8 @@ CONTAINS
          log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, &
                                          "GUESS_VECTORS", extension=".tddfptLog")
 
-         CALL theory_handler%initialize_guess_vectors(tddft_env, gs_mos, tddfpt_control, log_unit)
+         CALL theory_handler%initialize_guess_vectors(qs_env, sub_env, tddft_env, gs_mos, &
+                                                      tddfpt_control, log_unit)
 
          ! Close logger
          CALL cp_print_key_finished_output(log_unit, logger, &

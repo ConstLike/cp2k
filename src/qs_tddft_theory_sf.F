@@ -7,6 +7,8 @@
 !
 MODULE qs_tddft_theory_sf
 
+   USE qs_tddfpt2_densities,            ONLY: tddfpt_construct_aux_fit_density,&
+                                              tddfpt_construct_ground_state_orb_density
    USE qs_tddfpt2_subgroups,            ONLY: tddfpt_dbcsr_create_by_dist,&
                                               tddfpt_subgroup_env_type
    USE qs_environment_types,            ONLY: get_qs_env,&
@@ -112,6 +114,8 @@ MODULE qs_tddft_theory_sf
       !> Scratch matrices used in AO contraction (sym, asym)
       TYPE(cp_fm_type), POINTER :: work1_ao_ao => NULL()
       TYPE(cp_fm_type), POINTER :: work2_ao_ao => NULL()
+
+      TYPE(cp_fm_type), POINTER :: rho_ia_ao_fm => NULL()
 
       !-------------------------------
       ! KERNELs related
@@ -244,6 +248,16 @@ CONTAINS
       CALL cp_fm_struct_release(fm_struct)
       CALL cp_fm_set_all(this%work2_ao_ao, 0.0_dp)
       !=================================================
+      !=== rho_ia_ao_fm [nbf, nbf] =====================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nbf, &
+                               ncol_global=tddft_env%nbf, &
+                               context=sub_env%blacs_env)
+      ALLOCATE(this%rho_ia_ao_fm)
+      CALL cp_fm_create(this%rho_ia_ao_fm, fm_struct)
+      CALL cp_fm_struct_release(fm_struct)
+      CALL cp_fm_set_all(this%rho_ia_ao_fm, 0.0_dp)
+      !=================================================
 
       CALL get_qs_env(qs_env=qs_env, &
                       matrix_s=matrix_s, &
@@ -364,6 +378,10 @@ CONTAINS
          CALL cp_fm_release(this%work2_ao_ao)
          DEALLOCATE(this%work2_ao_ao)
       END IF
+      IF (ASSOCIATED(this%rho_ia_ao_fm)) THEN
+         CALL cp_fm_release(this%rho_ia_ao_fm)
+         DEALLOCATE(this%rho_ia_ao_fm)
+      END IF
       IF (ASSOCIATED(this%work_rho_ao_ao_symm)) THEN
          DO ivec = 1, SIZE(this%work_rho_ao_ao_symm)
             CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_symm(ivec)%matrix)
@@ -424,9 +442,11 @@ CONTAINS
 
    END SUBROUTINE sf_deallocate_theory_data
 
-   SUBROUTINE sf_initialize_guess_vectors(this, tddft_env, gs_mos, &
+   SUBROUTINE sf_initialize_guess_vectors(this, qs_env, sub_env, tddft_env, gs_mos, &
                                           tddfpt_control, log_unit)
       CLASS(tddft_sf_theory_type), INTENT(INOUT)         :: this
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(tddfpt_subgroup_env_type), INTENT(IN)         :: sub_env
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), POINTER                           :: gs_mos
@@ -442,6 +462,15 @@ CONTAINS
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: e_virt_m_occ
 
       CALL timeset(routineN, handle)
+
+      CALL tddfpt_construct_ground_state_orb_density( &
+               rho_orb_struct=tddft_env%rho_orb_struct_sub, &
+               rho_xc_struct=tddft_env%gs_rho_xc_struct, &
+               is_rks_triplets=tddfpt_control%rks_triplets, &
+               qs_env=qs_env, &
+               sub_env=sub_env, &
+               wfm_rho_orb=this%rho_ia_ao_fm)
+
 
       IF (.FALSE.) THEN
          print *, this%unused

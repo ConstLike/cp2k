@@ -243,7 +243,6 @@ MODULE qs_tddft_types
 
       !> Ground-state density matrix in AO basis (shared across subgroups)
       TYPE(qs_rho_type), POINTER :: gs_rho_xc_struct => NULL()
-      TYPE(cp_fm_type), POINTER :: rho_ia_ao_fm => NULL()
 
       !--------------------------------------------
       ! DAVIDSON NEEDS
@@ -427,11 +426,6 @@ CONTAINS
       CALL allocate_fm_matrix(matrix=tddft_env%fockb_vir_vir, &
                               nrow=tddft_env%nvirb, &
                               ncol=tddft_env%nvirb, &
-                              sub_env=sub_env)
-      !=== rho_ia_ao_fm [nbf, nbf]
-      CALL allocate_fm_matrix(matrix=tddft_env%rho_ia_ao_fm, &
-                              nrow=tddft_env%nbf, &
-                              ncol=tddft_env%nbf, &
                               sub_env=sub_env)
 
       !--------------------
