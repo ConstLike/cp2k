@@ -474,7 +474,7 @@ CONTAINS
       ! *** print summary information ***
       log_unit = cp_logger_get_default_io_unit(logger)
       ALLOCATE (ostrength(tddft_env%nstates), source=0.0_dp)
-      CALL tddfpt_print_summary(tddft_env= tddft_env, &
+      CALL tddft_print_summary(tddft_env= tddft_env, &
                                 log_unit=log_unit, &
                                 evects=tddft_env%evects_mo, &
                                 evals=tddft_env%evals, &
@@ -630,7 +630,7 @@ CONTAINS
 
 
 
-   SUBROUTINE tddfpt_print_summary(tddft_env, log_unit, evects, evals, ostrength, mult, &
+   SUBROUTINE tddft_print_summary(tddft_env, log_unit, evects, evals, ostrength, mult, &
                                    dipole_form)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       INTEGER, INTENT(in)                                :: log_unit
@@ -640,7 +640,7 @@ CONTAINS
       INTEGER, INTENT(in)                                :: mult
       INTEGER, INTENT(in)                                :: dipole_form
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_print_summary'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddft_print_summary'
 
       CHARACTER(len=1)                                   :: lsd_str
       CHARACTER(len=20)                                  :: mult_str
@@ -724,7 +724,7 @@ CONTAINS
       DEALLOCATE (trans_dipoles)
 
       CALL timestop(handle)
-   END SUBROUTINE tddfpt_print_summary
+   END SUBROUTINE tddft_print_summary
 
    SUBROUTINE converger_run(tddft_env, log_unit, sub_env, logger, iter)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
@@ -791,6 +791,11 @@ CONTAINS
       CALL print_mat_ao_ao(tddft_env%subspace_evecs, "normed subspace_evecs", logger, iter)
 
 !     transformation_matrix = subspace_evecs
+      CALL cp_fm_to_fm_submat(msource=tddft_env%subspace_evecs, &
+                              mtarget=tddft_env%subspace_evecs_tmp, &
+                              nrow=tddft_env%nvec, ncol=tddft_env%nvec, &
+                              s_firstrow=1, s_firstcol=1, t_firstrow=1, t_firstcol=1)
+
       DO iv = 1, tddft_env%nstates
          CALL cp_fm_set_all(matrix=tddft_env%ritz_vects(iv), alpha=0.0_dp)
          DO j = 1, tddft_env%nvec

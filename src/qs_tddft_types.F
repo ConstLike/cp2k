@@ -285,6 +285,8 @@ MODULE qs_tddft_types
       TYPE(cp_fm_type), POINTER :: subspace
       !> Subspace eigenvectors (coefficients for Ritz vectors)
       TYPE(cp_fm_type), POINTER :: subspace_evecs
+      !> Subspace eigenvectors to get right linear combinations of trial vectors
+      TYPE(cp_fm_type), POINTER :: subspace_evecs_tmp
 
       !> Other working buffers for orthogonalization, normalization, etc.
       REAL(dp), ALLOCATABLE, DIMENSION(:) :: vector_norm
@@ -410,6 +412,11 @@ CONTAINS
                               nrow=tddft_env%nvirb, &
                               ncol=tddft_env%nvirb, &
                               sub_env=sub_env)
+      !=== subspace_evecs_tmp [mxvec, mxvec]
+      CALL allocate_fm_matrix(matrix=tddft_env%subspace_evecs_tmp, &
+                              nrow=tddft_env%mxvec, &
+                              ncol=tddft_env%mxvec, &
+                              sub_env=sub_env)
 
       !--------------------
       ! ALLOCATE  FM POOL
@@ -525,6 +532,7 @@ CONTAINS
       IF (ALLOCATED(this%residual_norms)) THEN
          DEALLOCATE (this%residual_norms)
       END IF
+      CALL deallocate_fm_matrix(matrix=this%subspace_evecs_tmp)
       !--------------------
       ! DEALLOCATE  FM
       !--------------------
