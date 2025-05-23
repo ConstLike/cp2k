@@ -223,13 +223,17 @@ MODULE qs_tddft_types
       TYPE(cp_fm_pool_p_type), POINTER, DIMENSION(:) :: fm_pool_ao => NULL()
 
       !> Per-spin AO scratch matrices for Fock transformation [nbf, nbf]
-      TYPE(cp_fm_type), POINTER, DIMENSION(:) :: work_ao_ao => NULL()
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: work_ao_ao
 
       !> Per-spin AO Fock matrices (used in transformation to MO)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: fock
 
       !> Work fot properties: Dipoles
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :) :: dipole_op_mos_occ
+
+      !> Per-spin AO scratch matrices for Fock transformation [nbf, nbf]
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: dens_diff_ij
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: dens_diff_ab
 
       !--------------------------------------------
       ! DAVIDSON NEEDS
@@ -487,6 +491,16 @@ CONTAINS
                                 tddft_env%work_ao_ao(ispin))
       END DO
 
+      ALLOCATE (tddft_env%dens_diff_ij(tddft_env%nStates))
+      DO ivec = 1, tddft_env%nStates
+         CALL fm_pool_create_fm(tddft_env%fm_pool_ao(1)%pool, &
+                                tddft_env%dens_diff_ij(ivec))
+      END DO
+      ALLOCATE (tddft_env%dens_diff_ab(tddft_env%nStates))
+      DO ivec = 1, tddft_env%nStates
+         CALL fm_pool_create_fm(tddft_env%fm_pool_ao(1)%pool, &
+                                tddft_env%dens_diff_ab(ivec))
+      END DO
 
       !--------------------
       ! ALLOCATE  RHO
@@ -556,6 +570,27 @@ CONTAINS
                                       this%fock(ispin))
          END DO
          DEALLOCATE(this%fock)
+      END IF
+      IF (ALLOCATED(this%work_ao_ao)) THEN
+         DO ispin = 1, SIZE(this%work_ao_ao, 1)
+            CALL fm_pool_give_back_fm(this%fm_pool_ao(ispin)%pool, &
+                                      this%work_ao_ao(ispin))
+         END DO
+         DEALLOCATE(this%work_ao_ao)
+      END IF
+      IF (ALLOCATED(this%dens_diff_ab)) THEN
+         DO ivec = 1, SIZE(this%dens_diff_ab, 1)
+            CALL fm_pool_give_back_fm(this%fm_pool_ao(1)%pool, &
+                                      this%dens_diff_ab(ivec))
+         END DO
+         DEALLOCATE(this%dens_diff_ab)
+      END IF
+      IF (ALLOCATED(this%dens_diff_ij)) THEN
+         DO ivec = 1, SIZE(this%dens_diff_ij, 1)
+            CALL fm_pool_give_back_fm(this%fm_pool_ao(1)%pool, &
+                                      this%dens_diff_ij(ivec))
+         END DO
+         DEALLOCATE(this%dens_diff_ij)
       END IF
       IF (ALLOCATED(this%evects_mo)) THEN
          DO ivec = 1, SIZE(this%evects_mo, 1)

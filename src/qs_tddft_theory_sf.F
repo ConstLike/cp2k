@@ -126,6 +126,12 @@ MODULE qs_tddft_theory_sf
       TYPE(cp_fm_type), POINTER :: work_ao_vir => NULL()
       !> MO–AO transformation buffer [nocca, nbf]
       TYPE(cp_fm_type), POINTER :: work_noc_ao => NULL()
+      !> Work buffer [nocca, nocca]
+      TYPE(cp_fm_type), POINTER :: work_noc_noc => NULL()
+      !> Work buffer [nbf, nocca]
+      TYPE(cp_fm_type), POINTER :: work_ao_noc => NULL()
+      !> Work buffer [nbf, nocca]
+      TYPE(cp_fm_type), POINTER :: work_vir_vir => NULL()
       !> Scratch matrix [nocca, nvirb], used for Fock response, dipoles, etc.
       TYPE(cp_fm_type), POINTER :: work_noc_vir => NULL()
       !> Scratch matrices used in AO contraction (sym, asym)
@@ -142,6 +148,7 @@ MODULE qs_tddft_theory_sf
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: A_ia_rspace_sub => NULL()
       TYPE(qs_rho_type), POINTER :: rho_orb_struct_sub => NULL()
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: rho_ia_ao
+      TYPE(cp_fm_type), POINTER, DIMENSION(:) :: rho_fm_ao => NULL()
 
       !> [HFX kernel] Symmetric AO density matrices [nSpins]
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: work_rho_ao_ao_symm
@@ -241,6 +248,36 @@ CONTAINS
       CALL cp_fm_struct_release(fm_struct)
       CALL cp_fm_set_all(this%work_noc_ao, 0.0_dp)
       !=================================================
+      !=== work_noc_noc [nocca, nocca] =================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nocca, &
+                               ncol_global=tddft_env%nocca, &
+                               context=sub_env%blacs_env)
+      ALLOCATE(this%work_noc_noc)
+      CALL cp_fm_create(this%work_noc_noc, fm_struct)
+      CALL cp_fm_struct_release(fm_struct)
+      CALL cp_fm_set_all(this%work_noc_noc, 0.0_dp)
+      !=================================================
+      !=== work_ao_noc [nbf, nocca] ====================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nbf, &
+                               ncol_global=tddft_env%nocca, &
+                               context=sub_env%blacs_env)
+      ALLOCATE(this%work_ao_noc)
+      CALL cp_fm_create(this%work_ao_noc, fm_struct)
+      CALL cp_fm_struct_release(fm_struct)
+      CALL cp_fm_set_all(this%work_ao_noc, 0.0_dp)
+      !=================================================
+      !=== work_vir_vir [nvirb, nvirb] =================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nvirb, &
+                               ncol_global=tddft_env%nvirb, &
+                               context=sub_env%blacs_env)
+      ALLOCATE(this%work_vir_vir)
+      CALL cp_fm_create(this%work_vir_vir, fm_struct)
+      CALL cp_fm_struct_release(fm_struct)
+      CALL cp_fm_set_all(this%work_vir_vir, 0.0_dp)
+      !=================================================
       !=== work_noc_vir [nocca, nvirb] =================
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nocca, &
@@ -280,6 +317,17 @@ CONTAINS
       CALL cp_fm_create(this%rho_ia_ao_fm, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
       CALL cp_fm_set_all(this%rho_ia_ao_fm, 0.0_dp)
+      !=== rho_fm_ao [nbf, nbf] ========================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nbf, &
+                               ncol_global=tddft_env%nbf, &
+                               context=sub_env%blacs_env)
+      ALLOCATE(this%rho_fm_ao(tddft_env%nSpins))
+      DO ispin = 1, tddft_env%nSpins
+         CALL cp_fm_create(this%rho_fm_ao, fm_struct)
+         CALL cp_fm_set_all(this%rho_fm_ao, 0.0_dp)
+      END DO
+      CALL cp_fm_struct_release(fm_struct)
       !=================================================
       !=== dipoles_mo(3) [nocca, nvirb] ================
       CALL cp_fm_struct_create(fm_struct, &
@@ -436,6 +484,18 @@ CONTAINS
          CALL cp_fm_release(this%work_noc_ao)
          DEALLOCATE(this%work_noc_ao)
       END IF
+      IF (ASSOCIATED(this%work_noc_noc)) THEN
+         CALL cp_fm_release(this%work_noc_noc)
+         DEALLOCATE(this%work_noc_noc)
+      END IF
+      IF (ASSOCIATED(this%work_ao_noc)) THEN
+         CALL cp_fm_release(this%work_ao_noc)
+         DEALLOCATE(this%work_ao_noc)
+      END IF
+      IF (ASSOCIATED(this%work_vir_vir)) THEN
+         CALL cp_fm_release(this%work_vir_vir)
+         DEALLOCATE(this%work_vir_vir)
+      END IF
       IF (ASSOCIATED(this%work_noc_vir)) THEN
          CALL cp_fm_release(this%work_noc_vir)
          DEALLOCATE(this%work_noc_vir)
@@ -451,6 +511,12 @@ CONTAINS
       IF (ASSOCIATED(this%rho_ia_ao_fm)) THEN
          CALL cp_fm_release(this%rho_ia_ao_fm)
          DEALLOCATE(this%rho_ia_ao_fm)
+      END IF
+      IF (ASSOCIATED(this%rho_fm_ao)) THEN
+         DO ispin = 1, SIZE(this%rho_fm_ao)
+            CALL cp_fm_release(this%rho_fm_ao(ispin))
+         END DO
+         DEALLOCATE(this%rho_fm_ao)
       END IF
       IF (ALLOCATED(this%dipoles_mo)) THEN
          DO ivec = 1, SIZE(this%dipoles_mo)
@@ -914,6 +980,7 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_print_theory_data'
 
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER :: rho_ao
       CHARACTER(len=2)                                   :: lsd_str
       CHARACTER(len=1)                                   :: mult_str
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :)        :: trans_dipoles
@@ -950,6 +1017,12 @@ CONTAINS
          WRITE (log_unit, '(T10,72("-"))')
       END IF
 
+      ! Get ground state density matrices from rho_orb_struct_sub to 
+      CALL qs_rho_get(this%rho_orb_struct_sub, rho_ao=rho_ao)
+      DO ispin = 1, tddft_env%nSpins
+         CALL copy_dbcsr_to_fm(rho_ao(ispin)%matrix, this%rho_fm_ao(ispin))
+      END DO
+
       DO ideriv = 1, 3
          CALL parallel_gemm('T', 'N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nbf, &
                             1.0_dp,  tddft_env%dipole_op_mos_occ(ideriv, 1), &
@@ -962,13 +1035,56 @@ CONTAINS
       trans_dipoles(:, :) = 0.0_dp
 
       DO istate = 1, tddft_env%nStates
+         !--------------------------------------
+         ! Orthogonal transform: X vector to AO
+         !--------------------------------------
+         ! C[nbf,nvirb] = 1.0*A[nbf,nocca]*B[nocca,nvirb] + 0.0*C[nbf,nvirb]
+         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nvirb, tddft_env%nocca, &
+                            1.0_dp, gs_mos(1)%mos_occ, &
+                                    tddft_env%evects_mo(istate), &
+                            0.0_dp, this%work_ao_vir)
+         ! C[nbf,nbf] = 1.0*A[nbf,nvirb]*(B[nbf,nvirb])^T + 0.0*C[nbf,nbf]
+         CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nbf, tddft_env%nvirb, &
+                            1.0_dp, this%work_ao_vir, &
+                                    gs_mos(2)%mos_virt, &
+                            0.0_dp, this%evects_ao_ao(1))
+
+         ! Compute dens_diff_ij
+         CALL parallel_gemm('N', 'T', tddft_env%nocca, tddft_env%nocca, tddft_env%nvirb, &
+                           -1.0_dp, tddft_env%evects_mo(istate), &
+                                    tddft_env%evects_mo(istate), &
+                            0.0_dp, this%work_noc_noc)
+         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nocca, tddft_env%nocca, &
+                            1.0_dp, gs_mos(1)%mos_occ, &
+                                    this%work_noc_noc, &
+                            0.0_dp, this%work_ao_noc)
+         CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nbf, tddft_env%nocca, &
+                            1.0_dp, this%work_ao_noc, &
+                                    gs_mos(1)%mos_occ, &
+                            0.0_dp, tddft_env%dens_diff_ij(istate))
+
+         ! Compute dens_diff_ab
+         CALL parallel_gemm('T', 'N', tddft_env%nvirb, tddft_env%nvirb, tddft_env%nocca, &
+                            1.0_dp, tddft_env%evects_mo(istate), &
+                                    tddft_env%evects_mo(istate), &
+                            0.0_dp, this%work_vir_vir)
+         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nvirb, tddft_env%nvirb, &
+                            1.0_dp, gs_mos(2)%mos_virt, &
+                                    this%work_vir_vir, &
+                            0.0_dp, this%work_ao_vir)
+         CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nbf, tddft_env%nvirb, &
+                            1.0_dp, this%work_ao_vir, &
+                                    gs_mos(2)%mos_virt, &
+                            0.0_dp, tddft_env%dens_diff_ab(istate))
+
+         ! Compute transition dipoles
          DO ideriv = 1, 3
             CALL cp_fm_trace(tddft_env%evects_mo(istate), &
                              this%dipoles_mo(ideriv), &
                              trans_dipoles(istate, ideriv))
          END DO
       END DO
- 
+
       trans_dipoles(:, :) = SQRT(2.0_dp)*trans_dipoles(:, :)
 
       ! *** summary information ***
