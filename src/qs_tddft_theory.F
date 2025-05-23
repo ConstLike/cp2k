@@ -44,6 +44,7 @@ MODULE qs_tddft_theory
    USE qs_tddfpt2_subgroups,            ONLY: tddfpt_subgroup_env_type
    USE qs_tddfpt2_types,                ONLY: tddfpt_ground_state_mos
    USE qs_tddft_types,                  ONLY: tddft_info_type
+   USE cp_fm_types,                     ONLY: cp_fm_type
 
 #include "./base/base_uses.f90"
 
@@ -62,6 +63,10 @@ MODULE qs_tddft_theory
    TYPE, ABSTRACT :: tddft_theory_type
       INTEGER :: unused = 0
       ! Theory-specific data should be defined in child types (see SF, MRSF, etc.)
+      !
+      !> Dipoles (x,y,z) [nocca, nvirb]
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: dipoles_mo
+
    CONTAINS
       !> Allocate any additional theory-specific data
       PROCEDURE(allocate_theory_iface), DEFERRED :: allocate_theory_data
@@ -158,10 +163,15 @@ MODULE qs_tddft_theory
          TYPE(cp_logger_type), POINTER                   :: logger
       END SUBROUTINE
       !> Print theory-specific excitation analysis
-      SUBROUTINE print_theory_iface(this, tddft_env)
-         IMPORT :: tddft_theory_type, tddft_info_type
+      SUBROUTINE print_theory_iface(this, tddft_env, gs_mos, tddfpt_control, log_unit)
+         IMPORT :: tddft_theory_type, tddft_info_type, tddfpt2_control_type, &
+                   tddfpt_ground_state_mos
          CLASS(tddft_theory_type), INTENT(INOUT) :: this
          TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env
+         TYPE(tddfpt_ground_state_mos), &
+            DIMENSION(:), POINTER                        :: gs_mos
+         TYPE(tddfpt2_control_type), POINTER             :: tddfpt_control
+         INTEGER                                         :: log_unit
       END SUBROUTINE
       !> Deallocate/free any theory-specific resources
       SUBROUTINE deallocate_theory_iface(this, sub_env)

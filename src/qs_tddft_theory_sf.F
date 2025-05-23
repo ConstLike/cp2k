@@ -7,6 +7,17 @@
 !
 MODULE qs_tddft_theory_sf
 
+   USE string_utilities,                ONLY: integer_to_string
+   USE input_constants,                 ONLY: &
+        do_admm_aux_exch_func_none, do_admm_basis_projection, do_admm_exch_scaling_none, &
+        do_admm_purify_none, do_potential_truncated, tddfpt_dipole_velocity, tddfpt_kernel_full, &
+        tddfpt_kernel_none, tddfpt_kernel_stda,&
+                                              no_sf_tddfpt,&
+                                              tddfpt_sf_col,&
+                                              tddfpt_sf_noncol
+   USE input_constants,                 ONLY: tddfpt_dipole_berry,&
+                                              tddfpt_dipole_length
+   USE kahan_sum,                       ONLY: accurate_dot_product
    USE qs_rho_methods,                  ONLY: qs_rho_rebuild
    USE qs_rho_types,                    ONLY: qs_rho_create,&
                                               qs_rho_release,&
@@ -270,6 +281,18 @@ CONTAINS
       CALL cp_fm_struct_release(fm_struct)
       CALL cp_fm_set_all(this%rho_ia_ao_fm, 0.0_dp)
       !=================================================
+      !=== dipoles_mo(3) [nocca, nvirb] ================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nocca, &
+                               ncol_global=tddft_env%nvirb, &
+                               context=sub_env%blacs_env)
+      ALLOCATE(this%dipoles_mo(3))
+      DO ivec = 1, 3
+         CALL cp_fm_create(this%dipoles_mo(ivec), fm_struct)
+         CALL cp_fm_set_all(this%dipoles_mo(ivec), 0.0_dp)
+      END DO
+      CALL cp_fm_struct_release(fm_struct)
+      !=================================================
 
       !--------------------
       ! ALLOCATE  DBCSR
@@ -428,6 +451,12 @@ CONTAINS
       IF (ASSOCIATED(this%rho_ia_ao_fm)) THEN
          CALL cp_fm_release(this%rho_ia_ao_fm)
          DEALLOCATE(this%rho_ia_ao_fm)
+      END IF
+      IF (ALLOCATED(this%dipoles_mo)) THEN
+         DO ivec = 1, SIZE(this%dipoles_mo)
+            CALL cp_fm_release(this%dipoles_mo)
+         END DO
+!        DEALLOCATE(this%dipoles_mo)
       END IF
 
       IF (ASSOCIATED(this%A_ia_munu_sub)) THEN
@@ -874,13 +903,96 @@ CONTAINS
       ! Print
       CALL print_mat_ao_ao(tddft_env%sigma_vecs(ivec), 'sigma_mat', logger, ivec)
    END SUBROUTINE sf_ao_to_mo_transform
-   SUBROUTINE sf_print_theory_data(this, tddft_env)
+
+   SUBROUTINE sf_print_theory_data(this, tddft_env, gs_mos, tddfpt_control, log_unit)
       CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
-      TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env
-      IF (.FALSE.) THEN
-         print *, this%unused
-         tddft_env = tddft_env
+      TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
+      TYPE(tddfpt_ground_state_mos), &
+         DIMENSION(:), POINTER :: gs_mos
+      TYPE(tddfpt2_control_type), POINTER  :: tddfpt_control
+      INTEGER :: log_unit
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_print_theory_data'
+
+      CHARACTER(len=2)                                   :: lsd_str
+      CHARACTER(len=1)                                   :: mult_str
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :)        :: trans_dipoles
+      REAL(kind=dp)                                      :: osc_strength
+      INTEGER                                            :: handle, ideriv, istate
+
+      CALL timeset(routineN, handle)
+
+      IF (tddft_env%nspins > 1) THEN
+         lsd_str = ' U'
+      ELSE
+         lsd_str = 'RO'
       END IF
+
+      ! *** summary header ***
+      CALL integer_to_string(3, mult_str)
+      IF (log_unit > 0) THEN
+         WRITE (log_unit, '(/,1X,A2,A,1X,A)') lsd_str, "-TDDFT states of multiplicity", TRIM(mult_str)
+         SELECT CASE (tddfpt_control%dipole_form)
+         CASE (tddfpt_dipole_berry)
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using Berry operator formulation"
+         CASE (tddfpt_dipole_length)
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using length formulation"
+         CASE (tddfpt_dipole_velocity)
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using velocity formulation"
+         CASE DEFAULT
+            CPABORT("Unimplemented form of the dipole operator")
+         END SELECT
+
+         WRITE (log_unit, '(T10,A,T19,A,T37,A,T69,A)') "State", "Excitation", &
+            "Transition dipole (a.u.)", "Oscillator"
+         WRITE (log_unit, '(T10,A,T19,A,T37,A,T49,A,T61,A,T67,A)') "number", "energy (eV)", &
+            "x", "y", "z", "strength (a.u.)"
+         WRITE (log_unit, '(T10,72("-"))')
+      END IF
+
+      DO ideriv = 1, 3
+         CALL parallel_gemm('T', 'N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nbf, &
+                            1.0_dp,  tddft_env%dipole_op_mos_occ(ideriv, 1), &
+                                     gs_mos(2)%mos_virt, &
+                            0.0_dp, this%dipoles_mo(ideriv))
+      END DO
+
+      ! transition dipole moment
+      ALLOCATE (trans_dipoles(tddft_env%nstates, 3))
+      trans_dipoles(:, :) = 0.0_dp
+
+      DO istate = 1, tddft_env%nStates
+         DO ideriv = 1, 3
+            CALL cp_fm_trace(tddft_env%evects_mo(istate), &
+                             this%dipoles_mo(ideriv), &
+                             trans_dipoles(istate, ideriv))
+         END DO
+      END DO
+ 
+      trans_dipoles(:, :) = SQRT(2.0_dp)*trans_dipoles(:, :)
+
+      ! *** summary information ***
+      DO istate = 1, tddft_env%nstates
+         osc_strength = 2.0_dp/3.0_dp*tddft_env%evals(istate)* &
+                        accurate_dot_product(trans_dipoles(istate, 1:3), &
+                                             trans_dipoles(istate, 1:3))
+         IF (log_unit > 0) THEN
+            WRITE (log_unit, '(1X,A,T9,I7,T19,F11.5,T31,3(1X,ES11.4E2),T69,ES12.5E2)') &
+               "TDDFT| ", istate, tddft_env%evals(istate)*evolt, &
+               trans_dipoles(istate, 1:3), osc_strength
+         END IF
+      END DO
+
+      ! punch a checksum for the regs
+      IF (log_unit > 0) THEN
+         WRITE (log_unit, '(/,T2,A,E14.6)') 'TDDFT : CheckSum  =', &
+           SQRT(SUM(tddft_env%evals**2))
+      END IF
+
+      DEALLOCATE (trans_dipoles)
+
+      CALL timestop(handle)
+
    END SUBROUTINE sf_print_theory_data
 
    SUBROUTINE print_mat_ao_ao(mat, mat_name, logger, iter)

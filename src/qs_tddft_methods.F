@@ -420,9 +420,17 @@ CONTAINS
 
                   EXIT    ! Exit Davidson loop
                END IF
-
                ! Exit to restart Davidson iterations
-               IF (tddft_env%status(2)) EXIT
+               IF (tddft_env%status(2)) THEN
+                  ! Update guess vectors to latest Ritz vectors and eigenvalues
+                  DO iv = 1, tddft_env%nstates
+                     CALL cp_fm_to_fm(source=tddft_env%ritz_vects(iv), &
+                                      destination=tddft_env%evects_mo(iv))
+
+                     tddft_env%evals(iv) = tddft_env%ritz_evals(iv)
+                  END DO
+                  EXIT      ! Exit to restart Davidson iterations
+                END IF
 
                ist = tddft_env%novec+1
                iend = tddft_env%nvec
@@ -474,15 +482,13 @@ CONTAINS
       ! *** print summary information ***
       log_unit = cp_logger_get_default_io_unit(logger)
       ALLOCATE (ostrength(tddft_env%nstates), source=0.0_dp)
-      CALL tddft_print_summary(tddft_env= tddft_env, &
-                                log_unit=log_unit, &
-                                evects=tddft_env%evects_mo, &
-                                evals=tddft_env%evals, &
-                                ostrength=ostrength, &
-                                mult=3, &
-                                dipole_form=tddfpt_control%dipole_form)
 
-      CALL theory_handler%print_theory_data(tddft_env)
+      CALL tddfpt_dipole_operator(tddft_env%dipole_op_mos_occ, &
+                                  tddfpt_control, &
+                                  gs_mos, &
+                                  qs_env)
+
+      CALL theory_handler%print_theory_data(tddft_env, gs_mos, tddfpt_control, log_unit)
 
       CALL theory_handler%deallocate_theory_data(sub_env)
 
@@ -627,104 +633,6 @@ CONTAINS
       CALL timestop(handle)
 
    END FUNCTION run_converger
-
-
-
-   SUBROUTINE tddft_print_summary(tddft_env, log_unit, evects, evals, ostrength, mult, &
-                                   dipole_form)
-      TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
-      INTEGER, INTENT(in)                                :: log_unit
-      TYPE(cp_fm_type), DIMENSION(:), INTENT(inout)      :: evects
-      REAL(kind=dp), DIMENSION(:), INTENT(in)            :: evals
-      REAL(kind=dp), DIMENSION(:), INTENT(inout)         :: ostrength
-      INTEGER, INTENT(in)                                :: mult
-      INTEGER, INTENT(in)                                :: dipole_form
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddft_print_summary'
-
-      CHARACTER(len=1)                                   :: lsd_str
-      CHARACTER(len=20)                                  :: mult_str
-      INTEGER                                            :: handle, ideriv, ispin, istate, nspins, &
-                                                            nstates
-      REAL(kind=dp)                                      :: osc_strength
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: trans_dipoles
-
-      CALL timeset(routineN, handle)
-
-      ideriv = ideriv
-      ispin = ispin
-      nspins = tddft_env%nSpins
-      nstates =tddft_env%nstates
-      evects = evects
-
-      IF (nspins > 1) THEN
-         lsd_str = 'U'
-      ELSE
-         lsd_str = 'RO'
-      END IF
-
-      ! *** summary header ***
-      IF (log_unit > 0) THEN
-         CALL integer_to_string(mult, mult_str)
-         WRITE (log_unit, '(/,1X,A1,A,1X,A)') lsd_str, "-TDDFPT states of multiplicity", TRIM(mult_str)
-         SELECT CASE (dipole_form)
-         CASE (tddfpt_dipole_berry)
-            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using Berry operator formulation"
-         CASE (tddfpt_dipole_length)
-            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using length formulation"
-         CASE (tddfpt_dipole_velocity)
-            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using velocity formulation"
-         CASE DEFAULT
-            CPABORT("Unimplemented form of the dipole operator")
-         END SELECT
-
-         WRITE (log_unit, '(T10,A,T19,A,T37,A,T69,A)') "State", "Excitation", &
-            "Transition dipole (a.u.)", "Oscillator"
-         WRITE (log_unit, '(T10,A,T19,A,T37,A,T49,A,T61,A,T67,A)') "number", "energy (eV)", &
-            "x", "y", "z", "strength (a.u.)"
-         WRITE (log_unit, '(T10,72("-"))')
-      END IF
-
-      ! transition dipole moment
-      ALLOCATE (trans_dipoles(nstates, nderivs, nspins))
-      trans_dipoles(:, :, :) = 0.0_dp
-
-      ! nspins == 1 .AND. mult == 3 : spin-flip transitions are forbidden due to symmetry reasons
-!     IF (nspins > 1 .OR. mult == 1) THEN
-!        DO ispin = 1, nspins
-!           DO ideriv = 1, nderivs
-!              CALL cp_fm_trace(evects(:), dipole_op_mos_occ(ideriv, ispin), &
-!                               trans_dipoles(:, ideriv, ispin))
-!           END DO
-!        END DO
-!
-!        IF (nspins == 1) THEN
-!           trans_dipoles(:, :, 1) = SQRT(2.0_dp)*trans_dipoles(:, :, 1)
-!        ELSE
-!           trans_dipoles(:, :, 1) = SQRT(trans_dipoles(:, :, 1)**2 + trans_dipoles(:, :, 2)**2)
-!        END IF
-!     END IF
-
-      ! *** summary information ***
-      DO istate = 1, nstates
-         osc_strength = 2.0_dp/3.0_dp*evals(istate)* &
-                        accurate_dot_product(trans_dipoles(istate, :, 1), trans_dipoles(istate, :, 1))
-         ostrength(istate) = osc_strength
-         IF (log_unit > 0) THEN
-            WRITE (log_unit, '(1X,A,T9,I7,T19,F11.5,T31,3(1X,ES11.4E2),T69,ES12.5E2)') &
-               "TDDFT| ", istate, evals(istate)*evolt, trans_dipoles(istate, 1:nderivs, 1), osc_strength
-         END IF
-      END DO
-
-      ! punch a checksum for the regs
-      IF (log_unit > 0) THEN
-         WRITE (log_unit, '(/,T2,A,E14.6)') 'TDDFT : CheckSum  =', SQRT(SUM(evals**2))
-      END IF
-
-      DEALLOCATE (trans_dipoles)
-
-      CALL timestop(handle)
-   END SUBROUTINE tddft_print_summary
 
    SUBROUTINE converger_run(tddft_env, log_unit, sub_env, logger, iter)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env

@@ -228,6 +228,9 @@ MODULE qs_tddft_types
       !> Per-spin AO Fock matrices (used in transformation to MO)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: fock
 
+      !> Work fot properties: Dipoles
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :) :: dipole_op_mos_occ
+
       !--------------------------------------------
       ! DAVIDSON NEEDS
       !--------------------------------------------
@@ -595,6 +598,14 @@ CONTAINS
          DEALLOCATE(this%fm_pool_ao)
       END IF
 
+      IF (ALLOCATED(this%dipole_op_mos_occ)) THEN
+         DO ivec = 1, SIZE(this%dipole_op_mos_occ, 1)
+            DO ispin = 1, SIZE(this%dipole_op_mos_occ, 2)
+               CALL cp_fm_release(this%dipole_op_mos_occ(ivec, ispin))
+            END DO
+         END DO
+         DEALLOCATE(this%dipole_op_mos_occ)
+      END IF
 
 
 !     IF (ASSOCIATED(this%rho_orb_struct_sub)) THEN
