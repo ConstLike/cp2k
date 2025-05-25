@@ -207,6 +207,9 @@ MODULE qs_tddft_types
       !> Type of SCF reference: 1=ROKS/ROHF, 2=UKS/UHF
       INTEGER :: reference_type
 
+      !> Type of SCF reference: 1=SF, 2=MRSF-S, 3=MRSF-T, 4=MRSF-Q
+      INTEGER :: response_type
+
       !> Number of spin channels (1 = restricted, 2 = unrestricted)
       INTEGER :: nSpins
 
@@ -384,7 +387,7 @@ CONTAINS
       tddft_env%maxvec = dft_control%tddfpt2_control%nkvs
       tddft_env%mxvec = min(tddft_env%maxvec*tddft_env%nstates, tddft_env%nStates_max)
       tddft_env%nStates = min(tddft_env%nstates, tddft_env%mxvec)
-      tddft_env%nvec = min(max(2*tddft_env%nStates, 5), tddft_env%mxvec)
+      tddft_env%nvec = min(max(tddft_env%nStates, 4), tddft_env%mxvec)
       tddft_env%novec = tddft_env%nvec
 
       IF (tddft_env%nStates > tddft_env%nStates_max) THEN

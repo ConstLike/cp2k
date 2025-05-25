@@ -13,6 +13,7 @@ MODULE qs_tddft_methods
    USE input_constants,                 ONLY: tddfpt_dipole_berry,&
                                               tddfpt_dipole_length
    USE qs_tddft_theory_sf,              ONLY: tddft_sf_theory_type
+   USE qs_tddft_theory_mrsf,            ONLY: tddft_mrsf_theory_type
    USE qs_tddft_theory,                 ONLY: tddft_theory_type
    USE qs_tddft_types,                  ONLY: tddft_info_type,&
                                               tddft_initialization,&
@@ -322,15 +323,25 @@ CONTAINS
 
       CHARACTER(len=20)                                  :: nStates_str
       INTEGER                                            :: handle, log_unit, &
-         energy_unit, iter, niters, iend, ist, ivec, max_krylov_vects, &
-         mxvec, iv
+         iter, niters, iend, ist, ivec, &
+         iv
       REAL(kind=dp)                                      :: t1, t2
       CLASS(tddft_theory_type), ALLOCATABLE              :: theory_handler
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: ostrength
+      CHARACTER(LEN=4)                                   :: logo
 
       CALL timeset(routineN, handle)
 
-      ALLOCATE(tddft_sf_theory_type :: theory_handler)
+      logo = 'MRSF'
+
+      SELECT CASE (logo)
+         CASE('  SF')
+         tddft_env%response_type = 1
+         ALLOCATE(tddft_sf_theory_type :: theory_handler)
+         CASE('MRSF')
+         tddft_env%response_type = 2 ! MRSF-S
+         ALLOCATE(tddft_mrsf_theory_type :: theory_handler)
+       END SELECT
 
       CALL theory_handler%allocate_theory_data(qs_env, tddft_env, sub_env)
 
@@ -351,24 +362,16 @@ CONTAINS
 
          log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, &
                                          "ITERATION_INFO", extension=".tddfptLog")
-         energy_unit = cp_print_key_unit_nr(logger, &
-                                            tddfpt_print_section, &
-                                            "DETAILED_ENERGY", &
-                                            extension=".tddfptLog")
 
          IF (log_unit > 0) THEN
-            WRITE (log_unit, "(1X,A)") "", &
+            WRITE (log_unit, '(/,A,/,A,/,A,/,A,/)') &
                "-------------------------------------------------------------------------------", &
-               "-                     SF-TDDFT WAVEFUNCTION OPTIMIZATION                      -", &
-               "-------------------------------------------------------------------------------"
-
-            WRITE (log_unit, '(1X,79("-"))')
+               "-                   "//TRIM(logo)//"-TDDFT WAVEFUNCTION OPTIMIZATION                      -", &
+               "-------------------------------------------------------------------------------", &
+               REPEAT("-",79)
          END IF
 
          CALL cp_add_iter_level(logger%iter_info, "TDDFT_SCF")
-
-         mxvec = tddft_env%nocca * tddft_env%nvirb
-         max_krylov_vects = MIN(MAX(tddfpt_control%nkvs, tddft_env%nstates), INT(mxvec))
 
          tddft_env%max_error_prev = 10.0_dp
          tddft_env%max_delta_eval_prev = 10.0_dp
@@ -471,8 +474,6 @@ CONTAINS
             END IF
          END IF
 
-         CALL cp_print_key_finished_output(energy_unit, logger, &
-                                           tddfpt_print_section, "DETAILED_ENERGY")
          CALL cp_print_key_finished_output(log_unit, logger, &
                                            tddfpt_print_section, "ITERATION_INFO")
       ELSE

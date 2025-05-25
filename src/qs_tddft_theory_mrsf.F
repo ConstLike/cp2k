@@ -5,7 +5,7 @@
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
 !
-MODULE qs_tddft_theory_sf
+MODULE qs_tddft_theory_mrsf
 
    USE util,                            ONLY: sort
    USE string_utilities,                ONLY: integer_to_string
@@ -110,11 +110,11 @@ MODULE qs_tddft_theory_sf
 
    PRIVATE
 
-   CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_tddft_theory_sf'
+   CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_tddft_theory_mrsf'
 
-   PUBLIC :: tddft_sf_theory_type
+   PUBLIC :: tddft_mrsf_theory_type
 
-   TYPE, EXTENDS(tddft_theory_type) :: tddft_sf_theory_type
+   TYPE, EXTENDS(tddft_theory_type) :: tddft_mrsf_theory_type
 
       !> Hamiltonian matrix in AO basis
       TYPE(cp_fm_type), POINTER :: hmat_ao_ao => NULL()
@@ -178,24 +178,24 @@ MODULE qs_tddft_theory_sf
 
       ! -- theory-specific fields if needed --
    CONTAINS
-      PROCEDURE, PASS(this) :: allocate_theory_data     => sf_allocate_theory_data
-      PROCEDURE, PASS(this) :: deallocate_theory_data   => sf_deallocate_theory_data
-      PROCEDURE, PASS(this) :: initialize_guess_vectors => sf_initialize_guess_vectors
-      PROCEDURE, PASS(this) :: mo_to_ao_transform       => sf_mo_to_ao_transform
-      PROCEDURE, PASS(this) :: apply_operator           => sf_apply_operator
-      PROCEDURE, PASS(this) :: ao_to_mo_transform       => sf_ao_to_mo_transform
-      PROCEDURE, PASS(this) :: print_theory_data        => sf_print_theory_data
+      PROCEDURE, PASS(this) :: allocate_theory_data     => mrsf_allocate_theory_data
+      PROCEDURE, PASS(this) :: deallocate_theory_data   => mrsf_deallocate_theory_data
+      PROCEDURE, PASS(this) :: initialize_guess_vectors => mrsf_initialize_guess_vectors
+      PROCEDURE, PASS(this) :: mo_to_ao_transform       => mrsf_mo_to_ao_transform
+      PROCEDURE, PASS(this) :: apply_operator           => mrsf_apply_operator
+      PROCEDURE, PASS(this) :: ao_to_mo_transform       => mrsf_ao_to_mo_transform
+      PROCEDURE, PASS(this) :: print_theory_data        => mrsf_print_theory_data
    END TYPE
 
 CONTAINS
 
-   SUBROUTINE sf_allocate_theory_data(this, qs_env, tddft_env, sub_env)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
+   SUBROUTINE mrsf_allocate_theory_data(this, qs_env, tddft_env, sub_env)
+      CLASS(tddft_mrsf_theory_type), INTENT(INOUT) :: this
       TYPE(qs_environment_type), POINTER :: qs_env
       TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
       TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
 
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'sf_allocate_theory_data'
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'mrsf_allocate_theory_data'
 
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
          POINTER                                         :: sab_hfx
@@ -205,6 +205,17 @@ CONTAINS
       INTEGER                                            :: handle, ivec, ispin
 
       CALL timeset(routineN, handle)
+
+      SELECT CASE (tddft_env%response_type)
+      CASE(2) ! MRSF-S
+         tddft_env%nStates = min(tddft_env%nstates, tddft_env%nstates_max-1)
+         tddft_env%mxvec = min(tddft_env%maxvec*tddft_env%nstates, &
+                               tddft_env%nstates_max-1)
+      CASE(3) ! MRSF-T
+         tddft_env%nStates = min(tddft_env%nstates, tddft_env%nstates_max-3)
+         tddft_env%mxvec = min(tddft_env%maxvec*tddft_env%nstates, &
+                               tddft_env%nstates_max-3)
+      END SELECT
 
       !=== hmat_ao_ao [nbf, nbf] =======================
       CALL cp_fm_struct_create(fm_struct, &
@@ -457,10 +468,10 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE sf_allocate_theory_data
+   END SUBROUTINE mrsf_allocate_theory_data
 
-   SUBROUTINE sf_deallocate_theory_data(this, sub_env)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
+   SUBROUTINE mrsf_deallocate_theory_data(this, sub_env)
+      CLASS(tddft_mrsf_theory_type), INTENT(INOUT) :: this
       TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
 
       TYPE(pw_pool_type), POINTER :: auxbas_pw_pool
@@ -602,11 +613,11 @@ CONTAINS
          DEALLOCATE(this%rho_ia_ao)
       END IF
 
-   END SUBROUTINE sf_deallocate_theory_data
+   END SUBROUTINE mrsf_deallocate_theory_data
 
-   SUBROUTINE sf_initialize_guess_vectors(this, qs_env, sub_env, tddft_env, gs_mos, &
+   SUBROUTINE mrsf_initialize_guess_vectors(this, qs_env, sub_env, tddft_env, gs_mos, &
                                           tddfpt_control, log_unit)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT)         :: this
+      CLASS(tddft_mrsf_theory_type), INTENT(INOUT)         :: this
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddfpt_subgroup_env_type), INTENT(IN)         :: sub_env
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
@@ -615,12 +626,13 @@ CONTAINS
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       INTEGER                                            :: log_unit
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_initialize_guess_vectors'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'mrsf_initialize_guess_vectors'
 
       INTEGER                                            :: handle, imo_occ, imo_virt, &
-                                                            istate, &
+                                                            istate, lr1, lr2, &
                                                             nStates_selected, istate_orig
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: inds
+      LOGICAL                                             :: do_triplets
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: e_virt_m_occ
 
       CALL timeset(routineN, handle)
@@ -644,11 +656,28 @@ CONTAINS
       ALLOCATE (inds(nStates_selected))
       ALLOCATE (e_virt_m_occ(nStates_selected))
 
+      lr1 = tddft_env%noccb+1
+      lr2 = tddft_env%nocca
+      do_triplets = tddft_env%response_type == 3
       istate = 0
       DO imo_virt = gs_mos(2)%homo+1, SIZE(gs_mos(2)%evals_full)
          DO imo_occ = 1, gs_mos(1)%homo
             istate = (imo_virt-gs_mos(2)%homo-1)*gs_mos(1)%homo+imo_occ
-            tddft_env%e_virt_minus_occ(istate) = gs_mos(2)%evals_full(imo_virt)-gs_mos(1)%evals_full(imo_occ)
+            IF (imo_occ==lr1 .AND. imo_virt==lr1) THEN
+               tddft_env%e_virt_minus_occ(istate) = (gs_mos(2)%evals_full(lr1)-gs_mos(1)%evals_full(lr1) &
+                                                   + gs_mos(2)%evals_full(lr2)-gs_mos(1)%evals_full(lr2))*0.5_dp
+               CYCLE
+             END IF
+
+             tddft_env%e_virt_minus_occ(istate) = gs_mos(2)%evals_full(imo_virt)-gs_mos(1)%evals_full(imo_occ)
+
+             if (imo_occ==lr2 .and. imo_virt==lr2) THEN
+               tddft_env%e_virt_minus_occ(istate) = huge(1.0_dp)
+             ELSE IF (do_triplets .and. imo_occ==lr2 .and. imo_virt==lr1) THEN
+               tddft_env%e_virt_minus_occ(istate) = huge(1.0_dp)
+             ELSE IF (do_triplets .and. imo_occ==lr1 .and. imo_virt==lr2) THEN
+               tddft_env%e_virt_minus_occ(istate) = huge(1.0_dp)
+             END IF
          END DO
       END DO
 
@@ -659,7 +688,7 @@ CONTAINS
       IF (log_unit > 0) THEN
          WRITE (log_unit, "(1X,A)") "", &
             "-------------------------------------------------------------------------------", &
-            "-                           SF-TDDFT Initial Guess                             -", &
+            "-                         MRSF-TDDFT Initial Guess                            -", &
             "-------------------------------------------------------------------------------"
          WRITE (log_unit, '(T11,A)') "State         Occupied      ->      Virtual          Excitation"
          WRITE (log_unit, '(T11,A)') "number         orbital              orbital          energy (eV)"
@@ -675,7 +704,7 @@ CONTAINS
          IF (istate > tddft_env%nStates) CYCLE
          IF (log_unit > 0) &
             WRITE (log_unit, '(T7,I8,T24,I8,T37,A5,T45,I8,T54,A5,T60,2F14.5)') &
-            istate, imo_occ, '(alp)', gs_mos(2)%homo + imo_virt, '(bet)', e_virt_m_occ(istate)*evolt, &
+            istate, imo_occ, '(adp)', gs_mos(2)%homo + imo_virt, '(adp)', e_virt_m_occ(istate)*evolt, &
             tddft_env%evects_mo(istate)%local_data(imo_occ, imo_virt)
       end do
 
@@ -690,10 +719,10 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE sf_initialize_guess_vectors
+   END SUBROUTINE mrsf_initialize_guess_vectors
 
-   SUBROUTINE sf_mo_to_ao_transform(this, tddft_env, gs_mos, ivec, logger)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT)      :: this
+   SUBROUTINE mrsf_mo_to_ao_transform(this, tddft_env, gs_mos, ivec, logger)
+      CLASS(tddft_mrsf_theory_type), INTENT(INOUT)      :: this
       TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), POINTER                        :: gs_mos
@@ -782,11 +811,11 @@ CONTAINS
       CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
                             matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
                             keep_sparsity=.TRUE.)
-   END SUBROUTINE sf_mo_to_ao_transform
+   END SUBROUTINE mrsf_mo_to_ao_transform
 
-   SUBROUTINE sf_apply_operator(this, qs_env, tddft_env, kernel_env, sub_env, &
+   SUBROUTINE mrsf_apply_operator(this, qs_env, tddft_env, kernel_env, sub_env, &
                                 tddfpt_control, ivec, logger)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT)      :: this
+      CLASS(tddft_mrsf_theory_type), INTENT(INOUT)      :: this
       TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
       TYPE(qs_environment_type), POINTER              :: qs_env
       TYPE(kernel_env_type)                           :: kernel_env
@@ -885,10 +914,10 @@ CONTAINS
 !     CALL cp_fm_set_all(matrix=this%work2_ao_ao, alpha=0.0_dp)
 !     ! Print
 !     CALL print_mat_ao_ao(this%hmat_ao_ao, "hmat_ao_HF_XC_tot", logger, ivec)
-   END SUBROUTINE sf_apply_operator
+   END SUBROUTINE mrsf_apply_operator
 
-   SUBROUTINE sf_ao_to_mo_transform(this, tddft_env, gs_mos, ivec, logger)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT)      :: this
+   SUBROUTINE mrsf_ao_to_mo_transform(this, tddft_env, gs_mos, ivec, logger)
+      CLASS(tddft_mrsf_theory_type), INTENT(INOUT)    :: this
       TYPE(tddft_info_type),    INTENT(INOUT)         :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), POINTER                        :: gs_mos
@@ -968,10 +997,10 @@ CONTAINS
       END SELECT
       ! Print
       CALL print_mat_ao_ao(tddft_env%sigma_vecs(ivec), 'sigma_mat', logger, ivec)
-   END SUBROUTINE sf_ao_to_mo_transform
+   END SUBROUTINE mrsf_ao_to_mo_transform
 
-   SUBROUTINE sf_print_theory_data(this, qs_env, tddft_env, gs_mos, tddfpt_control, log_unit)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
+   SUBROUTINE mrsf_print_theory_data(this, qs_env, tddft_env, gs_mos, tddfpt_control, log_unit)
+      CLASS(tddft_mrsf_theory_type), INTENT(INOUT) :: this
       TYPE(qs_environment_type), POINTER :: qs_env
       TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
@@ -979,7 +1008,7 @@ CONTAINS
       TYPE(tddfpt2_control_type), POINTER  :: tddfpt_control
       INTEGER :: log_unit
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_print_theory_data'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'mrsf_print_theory_data'
 
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
@@ -1250,7 +1279,7 @@ CONTAINS
             "-                  Transition Dipoles Between Excited States                  -", &
             "-------------------------------------------------------------------------------"
          WRITE (log_unit, '(12X,A,6X,A,13X,A)') "Excitation", "Transition dipole, a.u.", "Oscillator"
-         WRITE (log_unit, '(1X,A,5X,A,12X,A,11X,A,11X,A,7X,A)') "Transition", "eV", "x", "y", "z", "strength (a.u.)"
+         WRITE (log_unit, '(1X,A,5X,A,12X,A,11X,A,11X,A,10X,A)') "Transition", "eV", "x", "y", "z", "strength"
          WRITE (log_unit, '(1X,79("-"))')
 
          DO istate = 1, tddft_env%nstates
@@ -1269,7 +1298,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE sf_print_theory_data
+   END SUBROUTINE mrsf_print_theory_data
 
    SUBROUTINE print_mat_ao_ao(mat, mat_name, logger, iter)
       TYPE(cp_fm_type), INTENT(IN) :: mat
@@ -1302,4 +1331,4 @@ CONTAINS
       CALL timestop(handle)
    END SUBROUTINE print_mat_ao_ao
 
-END MODULE qs_tddft_theory_sf
+END MODULE qs_tddft_theory_mrsf
