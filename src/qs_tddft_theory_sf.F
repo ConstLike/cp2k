@@ -986,13 +986,14 @@ CONTAINS
       CHARACTER(len=2)                                   :: lsd_str
       CHARACTER(len=1)                                   :: mult_str
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :)        :: trans_dipoles
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: trans_dipoles_exc_exc
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: s2_mat
-      REAL(kind=dp)                                      :: osc_strength, val
+      REAL(kind=dp)                                      :: osc_strength, val, f, energ
       REAL(KIND=dp) :: n_spin_imbalance, s2_spin, s2_beta_occ, s2_cross, s2_anti, s2_offdiag
       INTEGER                                            :: handle, ideriv, istate, ispin
       INTEGER, ALLOCATABLE :: indices(:), i_indices(:), a_indices(:)
       REAL(KIND=dp), ALLOCATABLE :: amplitudes(:)
-      INTEGER :: n_amplitudes, max_amplitudes, i, a, idx
+      INTEGER :: n_amplitudes, max_amplitudes, i, a, idx, jstate
 
       CALL timeset(routineN, handle)
 
@@ -1224,6 +1225,47 @@ CONTAINS
       END IF
 
       DEALLOCATE(amplitudes, i_indices, a_indices, indices)
+
+      ALLOCATE(trans_dipoles_exc_exc(tddft_env%nstates, tddft_env%nstates, 3), source=0.0_dp)
+
+      DO istate = 1, tddft_env%nstates
+         DO jstate = istate + 1, tddft_env%nstates
+            ! Calculate difference of excitation vectors: X_I - X_J
+            CALL cp_fm_scale_and_add(0.0_dp, this%work_noc_vir, &
+                                     1.0_dp, tddft_env%evects_mo(istate))
+            CALL cp_fm_scale_and_add(1.0_dp, this%work_noc_vir, &
+                                     -1.0_dp, tddft_env%evects_mo(jstate))
+            ! Calculating transition dipole moments
+            DO ideriv = 1, 3
+               CALL cp_fm_trace(this%work_noc_vir, &
+                                this%dipoles_mo(ideriv), &
+                                trans_dipoles_exc_exc(istate, jstate, ideriv))
+            END DO
+         END DO
+      END DO
+
+      IF (log_unit > 0) THEN
+         WRITE (log_unit, "(1X,A)") "", &
+            "-------------------------------------------------------------------------------", &
+            "-                  Transition Dipoles Between Excited States                  -", &
+            "-------------------------------------------------------------------------------"
+         WRITE (log_unit, '(12X,A,6X,A,13X,A)') "Excitation", "Transition dipole, a.u.", "Oscillator"
+         WRITE (log_unit, '(1X,A,5X,A,12X,A,11X,A,11X,A,10X,A)') "Transition", "eV", "x", "y", "z", "strength"
+         WRITE (log_unit, '(1X,79("-"))')
+
+         DO istate = 1, tddft_env%nstates
+            DO jstate = istate + 1, tddft_env%nstates
+               energ = tddft_env%evals(jstate) - tddft_env%evals(istate)
+               f = 2.0_dp / 3.0_dp * energ * SUM(trans_dipoles_exc_exc(istate, jstate, :)**2)
+               WRITE (log_unit, '(3X,I0,1X,"->",1X,I0,T11,F11.5,3X,3(1X,ES11.4E2),2X,ES12.4E2)') &
+                  istate, jstate, energ * evolt, trans_dipoles_exc_exc(istate, jstate, 1:3), f
+            END DO
+         END DO
+         WRITE (log_unit, "(1X,A)") &
+            "-------------------------------------------------------------------------------"
+      END IF
+
+      DEALLOCATE(trans_dipoles_exc_exc)
 
       CALL timestop(handle)
 
