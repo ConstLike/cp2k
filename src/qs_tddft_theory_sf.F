@@ -7,6 +7,7 @@
 !
 MODULE qs_tddft_theory_sf
 
+   USE util,                            ONLY: sort
    USE string_utilities,                ONLY: integer_to_string
    USE input_constants,                 ONLY: &
         do_admm_aux_exch_func_none, do_admm_basis_projection, do_admm_exch_scaling_none, &
@@ -51,7 +52,6 @@ MODULE qs_tddft_theory_sf
    USE qs_kernel_types,                 ONLY: kernel_env_type
    USE kinds,                           ONLY: dp
    USE physcon,                         ONLY: evolt
-   USE util,                            ONLY: sort
    USE parallel_gemm_api,               ONLY: parallel_gemm
    USE hfx_admm_utils,                  ONLY: tddft_hfx_matrix
    USE cp_fm_basic_linalg,              ONLY: cp_fm_scale_and_add,&
@@ -134,7 +134,7 @@ MODULE qs_tddft_theory_sf
       TYPE(cp_fm_type), POINTER :: work_vir_vir => NULL()
       !> Scratch matrix [nocca, nvirb], used for Fock response, dipoles, etc.
       TYPE(cp_fm_type), POINTER :: work_noc_vir => NULL()
-      !> Scratch matrices used in AO contraction (sym, asym)
+      !> Scratch matrices used in AO contraction [nbf, nbf] (sym, asym)
       TYPE(cp_fm_type), POINTER :: work1_ao_ao => NULL()
       TYPE(cp_fm_type), POINTER :: work2_ao_ao => NULL()
 
@@ -324,8 +324,8 @@ CONTAINS
                                context=sub_env%blacs_env)
       ALLOCATE(this%rho_fm_ao(tddft_env%nSpins))
       DO ispin = 1, tddft_env%nSpins
-         CALL cp_fm_create(this%rho_fm_ao, fm_struct)
-         CALL cp_fm_set_all(this%rho_fm_ao, 0.0_dp)
+         CALL cp_fm_create(this%rho_fm_ao(ispin), fm_struct)
+         CALL cp_fm_set_all(this%rho_fm_ao(ispin), 0.0_dp)
       END DO
       CALL cp_fm_struct_release(fm_struct)
       !=================================================
@@ -970,8 +970,9 @@ CONTAINS
       CALL print_mat_ao_ao(tddft_env%sigma_vecs(ivec), 'sigma_mat', logger, ivec)
    END SUBROUTINE sf_ao_to_mo_transform
 
-   SUBROUTINE sf_print_theory_data(this, tddft_env, gs_mos, tddfpt_control, log_unit)
+   SUBROUTINE sf_print_theory_data(this, qs_env, tddft_env, gs_mos, tddfpt_control, log_unit)
       CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
+      TYPE(qs_environment_type), POINTER :: qs_env
       TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), POINTER :: gs_mos
@@ -980,20 +981,27 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_print_theory_data'
 
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER :: rho_ao
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       CHARACTER(len=2)                                   :: lsd_str
       CHARACTER(len=1)                                   :: mult_str
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :)        :: trans_dipoles
-      REAL(kind=dp)                                      :: osc_strength
-      INTEGER                                            :: handle, ideriv, istate
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: s2_mat
+      REAL(kind=dp)                                      :: osc_strength, val
+      REAL(KIND=dp) :: n_spin_imbalance, s2_spin, s2_beta_occ, s2_cross, s2_anti, s2_offdiag
+      INTEGER                                            :: handle, ideriv, istate, ispin
+      INTEGER, ALLOCATABLE :: indices(:), i_indices(:), a_indices(:)
+      REAL(KIND=dp), ALLOCATABLE :: amplitudes(:)
+      INTEGER :: n_amplitudes, max_amplitudes, i, a, idx
 
       CALL timeset(routineN, handle)
 
-      IF (tddft_env%nspins > 1) THEN
-         lsd_str = ' U'
-      ELSE
+      SELECT CASE (tddft_env%reference_type)
+      CASE (1)
          lsd_str = 'RO'
-      END IF
+      CASE (2)
+         lsd_str = ' U'
+      END SELECT
 
       ! *** summary header ***
       CALL integer_to_string(3, mult_str)
@@ -1010,18 +1018,24 @@ CONTAINS
             CPABORT("Unimplemented form of the dipole operator")
          END SELECT
 
-         WRITE (log_unit, '(T10,A,T19,A,T37,A,T69,A)') "State", "Excitation", &
+         WRITE (log_unit, '(T10,A,T19,A,T37,A,T69,A)') "State", "Excitation  S^2", &
             "Transition dipole (a.u.)", "Oscillator"
          WRITE (log_unit, '(T10,A,T19,A,T37,A,T49,A,T61,A,T67,A)') "number", "energy (eV)", &
             "x", "y", "z", "strength (a.u.)"
          WRITE (log_unit, '(T10,72("-"))')
       END IF
 
-      ! Get ground state density matrices from rho_orb_struct_sub to 
+      CALL get_qs_env(qs_env=qs_env, &
+                      matrix_s=matrix_s)
+      ! Get ground state density matrices from rho_orb_struct_sub to
       CALL qs_rho_get(this%rho_orb_struct_sub, rho_ao=rho_ao)
       DO ispin = 1, tddft_env%nSpins
          CALL copy_dbcsr_to_fm(rho_ao(ispin)%matrix, this%rho_fm_ao(ispin))
       END DO
+
+      ! matrix_s to cp_fm uging tmp matrix hmat_ao_ao
+      CALL cp_fm_set_all(matrix=this%hmat_ao_ao, alpha=0.0_dp)
+      CALL copy_dbcsr_to_fm(matrix_s(1)%matrix, this%hmat_ao_ao)
 
       DO ideriv = 1, 3
          CALL parallel_gemm('T', 'N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nbf, &
@@ -1031,8 +1045,9 @@ CONTAINS
       END DO
 
       ! transition dipole moment
-      ALLOCATE (trans_dipoles(tddft_env%nstates, 3))
-      trans_dipoles(:, :) = 0.0_dp
+      ALLOCATE (trans_dipoles(tddft_env%nstates, 3), source=0.0_dp)
+      ! s2_mat
+      ALLOCATE (s2_mat(tddft_env%nstates), source=0.0_dp)
 
       DO istate = 1, tddft_env%nStates
          !--------------------------------------
@@ -1083,6 +1098,55 @@ CONTAINS
                              this%dipoles_mo(ideriv), &
                              trans_dipoles(istate, ideriv))
          END DO
+
+         n_spin_imbalance = REAL(tddft_env%nocca - tddft_env%noccb, dp)
+         s2_spin = 0.25_dp * n_spin_imbalance * (n_spin_imbalance - 2.0_dp)
+         s2_beta_occ = REAL(tddft_env%noccb, dp) + 1.0_dp
+
+         ! work1_ao_ao = dmat_a + ta
+         CALL cp_fm_scale_and_add(0.0_dp, this%work1_ao_ao, 1.0_dp, this%rho_fm_ao(1))
+         CALL cp_fm_scale_and_add(1.0_dp, this%work1_ao_ao, 1.0_dp, tddft_env%dens_diff_ij(istate))
+
+         ! scr1 = Smat * dmat_alpha * Smat
+         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
+                            1.0_dp, this%hmat_ao_ao, &
+                                    this%work1_ao_ao, &
+                            0.0_dp, this%work2_ao_ao)
+         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
+                            1.0_dp, this%work2_ao_ao, &
+                                    this%hmat_ao_ao, &
+                            0.0_dp, this%work1_ao_ao)
+
+         ! s2_cross = -tr[(dmat_b + tb) * scr1]
+         CALL cp_fm_scale_and_add(0.0_dp, this%work2_ao_ao, 1.0_dp, this%rho_fm_ao(2))
+         CALL cp_fm_scale_and_add(1.0_dp, this%work2_ao_ao, 1.0_dp, tddft_env%dens_diff_ab(istate))
+         CALL cp_fm_trace(this%work2_ao_ao, this%work1_ao_ao, s2_cross)
+         s2_cross = -s2_cross
+
+         ! scr1 = Smat * ta * Smat
+         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
+                            1.0_dp, this%hmat_ao_ao, &
+                                    tddft_env%dens_diff_ij(istate), &
+                            0.0_dp, this%work1_ao_ao)
+         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
+                            1.0_dp, this%work1_ao_ao, &
+                                    this%hmat_ao_ao, &
+                            0.0_dp, this%work2_ao_ao)
+
+         ! s2_anti = -tr[tb * scr1]
+         CALL cp_fm_trace(tddft_env%dens_diff_ab(istate), this%work2_ao_ao, s2_anti)
+         s2_anti = -s2_anti
+
+         ! s2_offdiag = tr[symmetrized(evects_ao_ao) * Smat] / 2
+         CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
+         CALL cp_fm_transpose(matrix=this%evects_ao_ao(1), matrixt=this%work1_ao_ao)
+         CALL cp_fm_scale_and_add(0.0_dp, this%work2_ao_ao, 0.5_dp, this%evects_ao_ao(1))
+         CALL cp_fm_scale_and_add(1.0_dp, this%work2_ao_ao, 0.5_dp, this%work1_ao_ao)
+         CALL cp_fm_trace(this%work2_ao_ao, this%hmat_ao_ao, s2_offdiag)
+         s2_offdiag = s2_offdiag / 2.0_dp
+
+         ! s^2 = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag^2
+         s2_mat(istate) = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag * s2_offdiag
       END DO
 
       trans_dipoles(:, :) = SQRT(2.0_dp)*trans_dipoles(:, :)
@@ -1093,11 +1157,12 @@ CONTAINS
                         accurate_dot_product(trans_dipoles(istate, 1:3), &
                                              trans_dipoles(istate, 1:3))
          IF (log_unit > 0) THEN
-            WRITE (log_unit, '(1X,A,T9,I7,T19,F11.5,T31,3(1X,ES11.4E2),T69,ES12.5E2)') &
-               "TDDFT| ", istate, tddft_env%evals(istate)*evolt, &
-               trans_dipoles(istate, 1:3), osc_strength
+            WRITE (log_unit, '(1X,A,T9,I5,T15,F11.5,T30,F4.2,T34,3(1X,ES11.4E2),T70,ES12.4E2)') &
+              "TDDFT| ", istate, tddft_env%evals(istate)*evolt, s2_mat(istate), &
+              trans_dipoles(istate, 1:3), osc_strength
          END IF
       END DO
+      DEALLOCATE (trans_dipoles, s2_mat)
 
       ! punch a checksum for the regs
       IF (log_unit > 0) THEN
@@ -1105,7 +1170,60 @@ CONTAINS
            SQRT(SUM(tddft_env%evals**2))
       END IF
 
-      DEALLOCATE (trans_dipoles)
+      max_amplitudes = tddft_env%nocca * tddft_env%nvirb
+      ALLOCATE(amplitudes(max_amplitudes))
+      ALLOCATE(i_indices(max_amplitudes))
+      ALLOCATE(a_indices(max_amplitudes))
+      ALLOCATE(indices(max_amplitudes))
+
+      IF (log_unit > 0) THEN
+         WRITE (log_unit, "(1X,A)") "", &
+            "-------------------------------------------------------------------------------", &
+            "-                            Excitation analysis                              -", &
+            "-------------------------------------------------------------------------------"
+         WRITE (log_unit, '(8X,A,T27,A,T49,A,T69,A)') "State", "Occupied", "Virtual", "Excitation"
+         WRITE (log_unit, '(8X,A,T28,A,T49,A,T69,A)') "number", "orbital", "orbital", "amplitude"
+         WRITE (log_unit, '(1X,79("-"))')
+      END IF
+
+      DO istate = 1, tddft_env%nstates
+         WRITE (log_unit, '(T7,I8,F10.5,A)') istate, tddft_env%evals(istate)*evolt, " eV"
+         n_amplitudes = 0
+         DO a = 1, tddft_env%nvirb
+            DO i = 1, tddft_env%nocca
+               CALL cp_fm_get_element(matrix=tddft_env%evects_mo(istate), &
+                                      irow_global=i, &
+                                      icol_global=a, &
+                                      alpha=val)
+               IF (ABS(val) > tddfpt_control%min_excitation_amplitude) THEN
+                  n_amplitudes = n_amplitudes + 1
+                  amplitudes(n_amplitudes) = -ABS(val)
+                  i_indices(n_amplitudes) = i
+                  a_indices(n_amplitudes) = a
+               END IF
+            END DO
+         END DO
+         IF (n_amplitudes > 0) THEN
+            CALL sort(amplitudes(1:n_amplitudes), n_amplitudes, indices)
+
+            DO idx = 1, n_amplitudes
+               i = i_indices(indices(idx))
+               a = a_indices(indices(idx))
+               CALL cp_fm_get_element(matrix=tddft_env%evects_mo(istate), &
+                                      irow_global=i, &
+                                      icol_global=a, &
+                                      alpha=val)
+               WRITE (log_unit, '(T27,I8,1X,A5,T48,I8,1X,A5,T70,F9.6)') &
+                  i, '(alp)', tddft_env%noccb + a, '(bet)', val
+            END DO
+         END IF
+      END DO
+      IF (log_unit > 0) THEN
+         WRITE (log_unit, "(1X,A)") &
+            "-------------------------------------------------------------------------------"
+      END IF
+
+      DEALLOCATE(amplitudes, i_indices, a_indices, indices)
 
       CALL timestop(handle)
 

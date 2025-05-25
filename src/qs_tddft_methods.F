@@ -488,7 +488,7 @@ CONTAINS
                                   gs_mos, &
                                   qs_env)
 
-      CALL theory_handler%print_theory_data(tddft_env, gs_mos, tddfpt_control, log_unit)
+      CALL theory_handler%print_theory_data(qs_env, tddft_env, gs_mos, tddfpt_control, log_unit)
 
       CALL theory_handler%deallocate_theory_data(sub_env)
 
@@ -697,12 +697,6 @@ CONTAINS
 
       ! Print
       CALL print_mat_ao_ao(tddft_env%subspace_evecs, "normed subspace_evecs", logger, iter)
-
-!     transformation_matrix = subspace_evecs
-      CALL cp_fm_to_fm_submat(msource=tddft_env%subspace_evecs, &
-                              mtarget=tddft_env%subspace_evecs_tmp, &
-                              nrow=tddft_env%nvec, ncol=tddft_env%nvec, &
-                              s_firstrow=1, s_firstcol=1, t_firstrow=1, t_firstcol=1)
 
       DO iv = 1, tddft_env%nstates
          CALL cp_fm_set_all(matrix=tddft_env%ritz_vects(iv), alpha=0.0_dp)
