@@ -693,7 +693,7 @@ CONTAINS
    END SUBROUTINE sf_initialize_guess_vectors
 
    SUBROUTINE sf_mo_to_ao_transform(this, tddft_env, gs_mos, ivec, logger)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT)      :: this
+      CLASS(tddft_sf_theory_type), TARGET, INTENT(INOUT)      :: this
       TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), POINTER                        :: gs_mos
@@ -888,7 +888,7 @@ CONTAINS
    END SUBROUTINE sf_apply_operator
 
    SUBROUTINE sf_ao_to_mo_transform(this, tddft_env, gs_mos, ivec, logger)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT)      :: this
+      CLASS(tddft_sf_theory_type), TARGET, INTENT(INOUT)      :: this
       TYPE(tddft_info_type),    INTENT(INOUT)         :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), POINTER                        :: gs_mos
@@ -1065,7 +1065,14 @@ CONTAINS
                                     gs_mos(2)%mos_virt, &
                             0.0_dp, this%evects_ao_ao(1))
 
-         ! Compute dens_diff_ij
+         !--------------------------------------------------------------
+         ! Compute AO-basis difference density matrices:
+         !   dens_diff_ij = AO transform of -X X^T (occupied block)
+         !   dens_diff_ab = AO transform of  X^T X (virtual block)
+         !   Delta_rho = dens_diff_ab + dens_diff_ij
+         !   where X = tddft_env%evects_mo(istate)
+         !--------------------------------------------------------------
+         ! Compute dens_diff_ij: (hole contribution, occupied block)
          CALL parallel_gemm('N', 'T', tddft_env%nocca, tddft_env%nocca, tddft_env%nvirb, &
                            -1.0_dp, tddft_env%evects_mo(istate), &
                                     tddft_env%evects_mo(istate), &
@@ -1079,7 +1086,7 @@ CONTAINS
                                     gs_mos(1)%mos_occ, &
                             0.0_dp, tddft_env%dens_diff_ij(istate))
 
-         ! Compute dens_diff_ab
+         ! Compute dens_diff_ab: (particle contribution, virtual block)
          CALL parallel_gemm('T', 'N', tddft_env%nvirb, tddft_env%nvirb, tddft_env%nocca, &
                             1.0_dp, tddft_env%evects_mo(istate), &
                                     tddft_env%evects_mo(istate), &
@@ -1093,7 +1100,9 @@ CONTAINS
                                     gs_mos(2)%mos_virt, &
                             0.0_dp, tddft_env%dens_diff_ab(istate))
 
-         ! Compute transition dipoles
+         !--------------------------------------------------------------
+         ! Compute transition dipoles for state istate
+         !--------------------------------------------------------------
          DO ideriv = 1, 3
             CALL cp_fm_trace(tddft_env%evects_mo(istate), &
                              this%dipoles_mo(ideriv), &
@@ -1104,11 +1113,29 @@ CONTAINS
          s2_spin = 0.25_dp * n_spin_imbalance * (n_spin_imbalance - 2.0_dp)
          s2_beta_occ = REAL(tddft_env%noccb, dp) + 1.0_dp
 
-         ! work1_ao_ao = dmat_a + ta
+         !--------------------------------------------------------------
+         ! Compute S^2 expectation value for excited state:
+         ! Components:
+         ! - s2_cross, s2_anti, s2_offdiag (see formulas below)
+         !   (using the relaxed density for the alpha/beta blocks)
+         !--------------------------------------------------------------
+         ! Step 1
+!        !--------------------------------------------------------------
+!        ! Compute fully relaxed AO-basis density matrix for the excited state:
+!        !
+!        !   rho_excited = rho_ground + delta_rho
+!        !               = [rho_fm_ao(1) + dens_diff_ij] (alpha)
+!        !               = [rho_fm_ao(2) + dens_diff_ab] (beta)
+!        !
+!        ! If orbital relaxation is included, delta_rho should incorporate those corrections.
+!        ! In this context, we compute the "unrelaxed" density as ground + linear response.
+!        !--------------------------------------------------------------
+!        ! Construct alpha excited state density: work1_ao_ao = rho_fm_ao(1) + dens_diff_ij
          CALL cp_fm_scale_and_add(0.0_dp, this%work1_ao_ao, 1.0_dp, this%rho_fm_ao(1))
          CALL cp_fm_scale_and_add(1.0_dp, this%work1_ao_ao, 1.0_dp, tddft_env%dens_diff_ij(istate))
+!        ! <--- this%work1_ao_ao now contains AO density for alpha (excited state candidate)
 
-         ! scr1 = Smat * dmat_alpha * Smat
+         ! scr1 = S * (rho_alpha_excited) * S
          CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
                             1.0_dp, this%hmat_ao_ao, &
                                     this%work1_ao_ao, &
@@ -1118,13 +1145,16 @@ CONTAINS
                                     this%hmat_ao_ao, &
                             0.0_dp, this%work1_ao_ao)
 
-         ! s2_cross = -tr[(dmat_b + tb) * scr1]
+!        ! Construct beta excited state density: work2_ao_ao = rho_fm_ao(2) + dens_diff_ab
          CALL cp_fm_scale_and_add(0.0_dp, this%work2_ao_ao, 1.0_dp, this%rho_fm_ao(2))
          CALL cp_fm_scale_and_add(1.0_dp, this%work2_ao_ao, 1.0_dp, tddft_env%dens_diff_ab(istate))
+!        ! <--- this%work2_ao_ao now contains AO density for beta (excited state candidate)
+
+         ! s2_cross = -tr[(rho_beta_excited) * scr1]
          CALL cp_fm_trace(this%work2_ao_ao, this%work1_ao_ao, s2_cross)
          s2_cross = -s2_cross
 
-         ! scr1 = Smat * ta * Smat
+         ! scr1 = S * dens_diff_ij * S [ta stands for dens_diff_ij, that is, the excited-state difference (alpha block)]
          CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
                             1.0_dp, this%hmat_ao_ao, &
                                     tddft_env%dens_diff_ij(istate), &
@@ -1134,11 +1164,11 @@ CONTAINS
                                     this%hmat_ao_ao, &
                             0.0_dp, this%work2_ao_ao)
 
-         ! s2_anti = -tr[tb * scr1]
+         ! s2_anti = -tr[dens_diff_ab * scr1]
          CALL cp_fm_trace(tddft_env%dens_diff_ab(istate), this%work2_ao_ao, s2_anti)
          s2_anti = -s2_anti
 
-         ! s2_offdiag = tr[symmetrized(evects_ao_ao) * Smat] / 2
+         ! s2_offdiag = (1/2) * tr[symmetrized(evects_ao_ao) * Smat]
          CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
          CALL cp_fm_transpose(matrix=this%evects_ao_ao(1), matrixt=this%work1_ao_ao)
          CALL cp_fm_scale_and_add(0.0_dp, this%work2_ao_ao, 0.5_dp, this%evects_ao_ao(1))
@@ -1147,7 +1177,7 @@ CONTAINS
          s2_offdiag = s2_offdiag / 2.0_dp
 
          ! s^2 = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag^2
-         s2_mat(istate) = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag * s2_offdiag
+         s2_mat(istate) = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag**2
       END DO
 
       trans_dipoles(:, :) = SQRT(2.0_dp)*trans_dipoles(:, :)
@@ -1188,7 +1218,8 @@ CONTAINS
       END IF
 
       DO istate = 1, tddft_env%nstates
-         WRITE (log_unit, '(T7,I8,F10.5,A)') istate, tddft_env%evals(istate)*evolt, " eV"
+         IF (log_unit > 0) &
+            WRITE (log_unit, '(T7,I8,F10.5,A)') istate, tddft_env%evals(istate)*evolt, " eV"
          n_amplitudes = 0
          DO a = 1, tddft_env%nvirb
             DO i = 1, tddft_env%nocca
@@ -1214,7 +1245,8 @@ CONTAINS
                                       irow_global=i, &
                                       icol_global=a, &
                                       alpha=val)
-               WRITE (log_unit, '(T27,I8,1X,A5,T48,I8,1X,A5,T70,F9.6)') &
+               IF (log_unit > 0) &
+                  WRITE (log_unit, '(T27,I8,1X,A5,T48,I8,1X,A5,T70,F9.6)') &
                   i, '(alp)', tddft_env%noccb + a, '(bet)', val
             END DO
          END IF

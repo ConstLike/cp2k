@@ -123,7 +123,7 @@ MODULE qs_tddft_theory
                                                             tddft_info_type, &
                                                             cp_logger_type, &
                                                             tddfpt_ground_state_mos
-         CLASS(tddft_theory_type), INTENT(INOUT)         :: this
+         CLASS(tddft_theory_type), TARGET, INTENT(INOUT)         :: this
          TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
          TYPE(tddfpt_ground_state_mos), &
             DIMENSION(:), POINTER                        :: gs_mos
@@ -155,7 +155,7 @@ MODULE qs_tddft_theory
                                                             cp_logger_type, &
                                                             tddft_info_type, &
                                                             tddfpt_ground_state_mos
-         CLASS(tddft_theory_type), INTENT(INOUT)         :: this
+         CLASS(tddft_theory_type), TARGET, INTENT(INOUT)         :: this
          TYPE(tddft_info_type),    INTENT(INOUT)         :: tddft_env
          TYPE(tddfpt_ground_state_mos), &
             DIMENSION(:), POINTER                        :: gs_mos

@@ -332,15 +332,15 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      logo = 'MRSF'
+      logo = '  SF'
 
       SELECT CASE (logo)
          CASE('  SF')
-         tddft_env%response_type = 1
-         ALLOCATE(tddft_sf_theory_type :: theory_handler)
+            tddft_env%response_type = 1 ! SF
+            ALLOCATE(tddft_sf_theory_type :: theory_handler)
          CASE('MRSF')
-         tddft_env%response_type = 2 ! MRSF-S
-         ALLOCATE(tddft_mrsf_theory_type :: theory_handler)
+            tddft_env%response_type = 2 ! MRSF-S
+            ALLOCATE(tddft_mrsf_theory_type :: theory_handler)
        END SELECT
 
       CALL theory_handler%allocate_theory_data(qs_env, tddft_env, sub_env)
