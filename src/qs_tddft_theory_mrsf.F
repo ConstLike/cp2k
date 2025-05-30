@@ -818,10 +818,9 @@ CONTAINS
       va => gs_mos(1)%mos_full           ! [nbf, nbf]
       vb => gs_mos(2)%mos_full           ! [nbf, nbf]
 
-    !----------------------------------------------------------------------------
-    ! C[1:nbf, 1] = 1.0*A[1:nbf, nocca+1:nbf]*B[nocca:nocca, 1:nvira] + 0.0*C[1:nbf, 1]
-
       ! transform needed row to coulumn, not a transpose.
+      ! nocca = noccb + 2
+      ! nvira = nvirb - 2
       ! work[1:nvira, 1] => X(1:nocca, 1:nvirb) [nocca, 1+shift:nvira]
       CALL cp_fm_set_all(this%work_vir_1, 0.0_dp)
       DO i = 1, nvira
@@ -829,17 +828,24 @@ CONTAINS
          CALL cp_fm_set_element(this%work_vir_1, i, 1, val)
       END DO
 
+      ! tmp (1:nvira, 1) = vb(:,nocca+1:nbf)*bvec(lr2, nocca+1:nbf)
       CALL parallel_gemm('N', 'N', nbf, 1, nvirb, &
                          1.0_dp, gs_mos(2)%mos_full, &
                                  this%work_vir_1, &
                          0.0_dp, this%work2_ao_1, &
                          a_first_col=nocca+1)
-
+      ! 1: bo2v += va(:,lr2) * tmp^T
       CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
                          1.0_dp, gs_mos(1)%mos_full, &
                                  this%work2_ao_1, &
-                         1.0_dp, this%evects_ao_ao(ivec, 1), &
+                         1.0_dp, this%evects_ao_ao(ivec, 1), & !
                          a_first_col=lr2)
+      ! 5: o21v += tmp * va(:,lr1)^T
+      CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
+                         1.0_dp, this%work2_ao_1, &
+                                 gs_mos(1)%mos_full, &
+                         1.0_dp, this%evects_ao_ao(ivec, 5), &
+                         a_first_col=lr1)
 
       ! work[1:nvira, 1] => X(1:nocca, 1:nvirb) [nocca-1, 1+shift:nvira]
       CALL cp_fm_set_all(this%work_vir_1, 0.0_dp)
@@ -848,17 +854,25 @@ CONTAINS
          CALL cp_fm_set_element(this%work_vir_1, i, 1, val)
       END DO
 
+      ! tmp (1:nvira, 1) = vb(:,nocca+1:nbf)*bvec(lr1, nocca+1:nbf)
       CALL parallel_gemm('N', 'N', nbf, 1, nvirb, &
                          1.0_dp, gs_mos(2)%mos_full, &
                                  this%work_vir_1, &
                          0.0_dp, this%work2_ao_1, &
                          a_first_col=nocca+1)
-
+      ! 2: bo1v += va(:,lr1) * tmp^T
       CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
                          1.0_dp, gs_mos(1)%mos_full, &
                                  this%work2_ao_1, &
                          1.0_dp, this%evects_ao_ao(ivec, 2), &
                          a_first_col=lr1)
+      ! 5: o21v -= tmp * va(:,lr2)^T
+      CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
+                         1.0_dp, this%work2_ao_1, &
+                                 gs_mos(1)%mos_full, &
+                        -1.0_dp, this%evects_ao_ao(ivec, 5), &
+                         a_first_col=lr2)
+
 
       CALL timestop(handle)
    END SUBROUTINE mrsf_mo_to_ao_transform
