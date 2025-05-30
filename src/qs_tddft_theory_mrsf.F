@@ -142,6 +142,7 @@ MODULE qs_tddft_theory_mrsf
       TYPE(cp_fm_type), POINTER :: work1_ao_1 => NULL()
       TYPE(cp_fm_type), POINTER :: work2_ao_1 => NULL()
       TYPE(cp_fm_type), POINTER :: work_vir_1 => NULL()
+      TYPE(cp_fm_type), POINTER :: work_noc_1 => NULL()
 
       !-------------------------------
       ! KERNELs related
@@ -356,6 +357,16 @@ CONTAINS
       CALL cp_fm_struct_release(fm_struct)
       CALL cp_fm_set_all(this%work_vir_1, 0.0_dp)
       !=================================================
+      !=== work_noc_1 [noccb, 1] =========================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%noccb, &
+                               ncol_global=1, &
+                               context=sub_env%blacs_env)
+      ALLOCATE(this%work_noc_1)
+      CALL cp_fm_create(this%work_noc_1, fm_struct)
+      CALL cp_fm_struct_release(fm_struct)
+      CALL cp_fm_set_all(this%work_noc_1, 0.0_dp)
+      !=================================================
       !=== rho_ia_ao_fm [nbf, nbf] =====================
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
@@ -569,6 +580,10 @@ CONTAINS
       IF (ASSOCIATED(this%work_vir_1)) THEN
          CALL cp_fm_release(this%work_vir_1)
          DEALLOCATE(this%work_vir_1)
+      END IF
+      IF (ASSOCIATED(this%work_noc_1)) THEN
+         CALL cp_fm_release(this%work_noc_1)
+         DEALLOCATE(this%work_noc_1)
       END IF
       IF (ASSOCIATED(this%rho_ia_ao_fm)) THEN
          CALL cp_fm_release(this%rho_ia_ao_fm)
@@ -821,7 +836,7 @@ CONTAINS
       ! transform needed row to coulumn, not a transpose.
       ! nocca = noccb + 2
       ! nvira = nvirb - 2
-      ! work[1:nvira, 1] => X(1:nocca, 1:nvirb) [nocca, 1+shift:nvira]
+      ! work[1:nvira, 1] => X(1:nocca, 1:nvirb) [nocca, 1+shift:nvirb]
       CALL cp_fm_set_all(this%work_vir_1, 0.0_dp)
       DO i = 1, nvira
          CALL cp_fm_get_element(tddft_env%evects_mo(ivec), lr2, i+shift, val)
@@ -829,7 +844,7 @@ CONTAINS
       END DO
 
       ! tmp (1:nvira, 1) = vb(:,nocca+1:nbf)*bvec(lr2, nocca+1:nbf)
-      CALL parallel_gemm('N', 'N', nbf, 1, nvirb, &
+      CALL parallel_gemm('N', 'N', nbf, 1, nvira, &
                          1.0_dp, gs_mos(2)%mos_full, &
                                  this%work_vir_1, &
                          0.0_dp, this%work2_ao_1, &
@@ -845,9 +860,9 @@ CONTAINS
                          1.0_dp, this%work2_ao_1, &
                                  gs_mos(1)%mos_full, &
                          1.0_dp, this%evects_ao_ao(ivec, 5), &
-                         a_first_col=lr1)
+                         b_first_col=lr1)
 
-      ! work[1:nvira, 1] => X(1:nocca, 1:nvirb) [nocca-1, 1+shift:nvira]
+      ! work[1:nvira, 1] => X(1:nocca, 1:nvirb) [nocca-1, 1+shift:nvirb]
       CALL cp_fm_set_all(this%work_vir_1, 0.0_dp)
       DO i = 1, nvira
          CALL cp_fm_get_element(tddft_env%evects_mo(ivec), lr1, i+shift, val)
@@ -855,7 +870,7 @@ CONTAINS
       END DO
 
       ! tmp (1:nvira, 1) = vb(:,nocca+1:nbf)*bvec(lr1, nocca+1:nbf)
-      CALL parallel_gemm('N', 'N', nbf, 1, nvirb, &
+      CALL parallel_gemm('N', 'N', nbf, 1, nvira, &
                          1.0_dp, gs_mos(2)%mos_full, &
                                  this%work_vir_1, &
                          0.0_dp, this%work2_ao_1, &
@@ -868,11 +883,54 @@ CONTAINS
                          a_first_col=lr1)
       ! 5: o21v -= tmp * va(:,lr2)^T
       CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
-                         1.0_dp, this%work2_ao_1, &
+                        -1.0_dp, this%work2_ao_1, &
                                  gs_mos(1)%mos_full, &
-                        -1.0_dp, this%evects_ao_ao(ivec, 5), &
+                         1.0_dp, this%evects_ao_ao(ivec, 5), &
+                         b_first_col=lr2)
+
+      ! work[1:noccb, 1] => X(1:nocca, 1:nvirb) [1:noccb, lr1]
+      CALL cp_fm_set_all(this%work_noc_1, 0.0_dp)
+      DO i = 1, noccb
+         CALL cp_fm_get_element(tddft_env%evects_mo(ivec), i, lr1, val)
+         CALL cp_fm_set_element(this%work_noc_1, i, 1, val)
+      END DO
+
+      ! tmp (1:nvira, 1) = va(:,1:noccb)*bvec(1:noccb, lr1)
+      CALL parallel_gemm('N', 'N', nbf, 1, noccb, &
+                         1.0_dp, gs_mos(1)%mos_full, &
+                                 this%work_noc_1, &
+                         0.0_dp, this%work2_ao_1)
+      ! 3: bco1 += tmp * vb(:,lr1)
+      CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
+                         1.0_dp, this%work2_ao_1, &
+                                 gs_mos(2)%mos_full, &
+                         1.0_dp, this%evects_ao_ao(ivec, 3), &
+                         b_first_col=lr1)
+      ! 5: co12 += vb(:,lr2) * tmp1^T
+      CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
+                         1.0_dp, gs_mos(2)%mos_full, &
+                                 this%work2_ao_1, &
+                         1.0_dp, this%evects_ao_ao(ivec, 6), &
                          a_first_col=lr2)
 
+!     ! tmp (1:nvira, 1) = va(:,1:noccb)*bvec(1:noccb, lr2)
+!     CALL parallel_gemm('N', 'N', nbf, 1, noccb, &
+!                        1.0_dp, gs_mos(1)%mos_full, &
+!                                tddft_env%evects_mo(ivec), &
+!                        0.0_dp, this%work2_ao_1, &
+!                        b_first_col=lr2)
+!     ! 4: bco2 += tmp * vb(:,lr2)
+!     CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
+!                        1.0_dp, this%work2_ao_1, &
+!                                gs_mos(2)%mos_full, &
+!                        1.0_dp, this%evects_ao_ao(ivec, 4), &
+!                        a_first_col=lr2)
+!     ! 5: co12 -= vb(:,lr1) * tmp1^T
+!     CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
+!                       -1.0_dp, gs_mos(2)%mos_full, &
+!                                this%work2_ao_1, &
+!                        1.0_dp, this%evects_ao_ao(ivec, 6), &
+!                        a_first_col=lr1)
 
       CALL timestop(handle)
    END SUBROUTINE mrsf_mo_to_ao_transform
