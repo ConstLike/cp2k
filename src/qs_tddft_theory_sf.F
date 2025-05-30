@@ -216,15 +216,15 @@ CONTAINS
       CALL cp_fm_struct_release(fm_struct)
       CALL cp_fm_set_all(this%hmat_ao_ao, 0.0_dp)
       !=================================================
-      !=== evects_ao_ao (mxvec) [nbf, nbf] =============
+      !=== evects_ao_ao (1) [nbf, nbf] =============
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
                                ncol_global=tddft_env%nbf, &
                                context=sub_env%blacs_env)
-      ALLOCATE(this%evects_ao_ao(tddft_env%mxvec))
-      DO ivec = 1, tddft_env%mxvec
-         CALL cp_fm_create(this%evects_ao_ao(ivec), fm_struct)
-         CALL cp_fm_set_all(this%evects_ao_ao(ivec), 0.0_dp)
+      ALLOCATE(this%evects_ao_ao(1))
+      DO ivec = 1, 1
+         CALL cp_fm_create(this%evects_ao_ao(1), fm_struct)
+         CALL cp_fm_set_all(this%evects_ao_ao(1), 0.0_dp)
       END DO
       CALL cp_fm_struct_release(fm_struct)
       !=================================================
