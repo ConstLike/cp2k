@@ -906,31 +906,44 @@ CONTAINS
                                  gs_mos(2)%mos_full, &
                          1.0_dp, this%evects_ao_ao(ivec, 3), &
                          b_first_col=lr1)
-      ! 5: co12 += vb(:,lr2) * tmp1^T
+      ! 6: co12 += vb(:,lr2) * tmp1^T
       CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
                          1.0_dp, gs_mos(2)%mos_full, &
                                  this%work2_ao_1, &
                          1.0_dp, this%evects_ao_ao(ivec, 6), &
                          a_first_col=lr2)
 
-!     ! tmp (1:nvira, 1) = va(:,1:noccb)*bvec(1:noccb, lr2)
-!     CALL parallel_gemm('N', 'N', nbf, 1, noccb, &
-!                        1.0_dp, gs_mos(1)%mos_full, &
-!                                tddft_env%evects_mo(ivec), &
-!                        0.0_dp, this%work2_ao_1, &
-!                        b_first_col=lr2)
-!     ! 4: bco2 += tmp * vb(:,lr2)
-!     CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
-!                        1.0_dp, this%work2_ao_1, &
-!                                gs_mos(2)%mos_full, &
-!                        1.0_dp, this%evects_ao_ao(ivec, 4), &
-!                        a_first_col=lr2)
-!     ! 5: co12 -= vb(:,lr1) * tmp1^T
-!     CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
-!                       -1.0_dp, gs_mos(2)%mos_full, &
-!                                this%work2_ao_1, &
-!                        1.0_dp, this%evects_ao_ao(ivec, 6), &
-!                        a_first_col=lr1)
+      ! work[1:noccb, 1] => X(1:nocca, 1:nvirb) [1:noccb, lr1]
+      CALL cp_fm_set_all(this%work_noc_1, 0.0_dp)
+      DO i = 1, noccb
+         CALL cp_fm_get_element(tddft_env%evects_mo(ivec), i, lr2, val)
+         CALL cp_fm_set_element(this%work_noc_1, i, 1, val)
+      END DO
+
+      ! tmp (1:nvira, 1) = va(:,1:noccb)*bvec(1:noccb, lr2)
+      CALL parallel_gemm('N', 'N', nbf, 1, noccb, &
+                         1.0_dp, gs_mos(1)%mos_full, &
+                                 this%work_noc_1, &
+                         0.0_dp, this%work2_ao_1)
+      ! 4: bco2 += tmp * vb(:,lr2)
+      CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
+                         1.0_dp, this%work2_ao_1, &
+                                 gs_mos(2)%mos_full, &
+                         1.0_dp, this%evects_ao_ao(ivec, 4), &
+                         b_first_col=lr2)
+      ! 6: co12 -= vb(:,lr1) * tmp1^T
+      CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
+                        -1.0_dp, gs_mos(2)%mos_full, &
+                                 this%work2_ao_1, &
+                         1.0_dp, this%evects_ao_ao(ivec, 6), &
+                         a_first_col=lr1)
+
+      ! Sum
+      DO i = 1, 4
+         CALL cp_fm_scale_and_add( &
+               alpha=1.0_dp, matrix_a=this%evects_ao_ao(ivec,7), &
+               beta=1.0_dp,  matrix_b=this%evects_ao_ao(ivec,i))
+      END DO
 
       CALL timestop(handle)
    END SUBROUTINE mrsf_mo_to_ao_transform
