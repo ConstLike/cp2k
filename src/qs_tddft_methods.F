@@ -332,7 +332,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      logo = '  SF'
+      logo = 'MRSF'
 
       SELECT CASE (logo)
          CASE('  SF')

@@ -50,13 +50,13 @@ MODULE qs_tddft_theory_mrsf
    USE cp_control_types,                ONLY: tddfpt2_control_type
    USE qs_tddfpt2_types,                ONLY: tddfpt_ground_state_mos
    USE qs_kernel_types,                 ONLY: kernel_env_type
-   USE kinds,                           ONLY: dp
+   USE kinds,                           ONLY: dp, sp
    USE physcon,                         ONLY: evolt
    USE parallel_gemm_api,               ONLY: parallel_gemm
    USE hfx_admm_utils,                  ONLY: tddft_hfx_matrix
    USE cp_fm_basic_linalg,              ONLY: cp_fm_scale_and_add,&
-                                              cp_fm_trace,&
                                               cp_fm_gemm,&
+                                              cp_fm_trace,&
                                               cp_fm_frobenius_norm,&
                                               cp_fm_transpose,&
                                               cp_fm_column_scale,&
@@ -141,7 +141,7 @@ MODULE qs_tddft_theory_mrsf
 
       TYPE(cp_fm_type), POINTER :: work1_ao_1 => NULL()
       TYPE(cp_fm_type), POINTER :: work2_ao_1 => NULL()
-      TYPE(cp_fm_type), POINTER :: work_1_vir => NULL()
+      TYPE(cp_fm_type), POINTER :: work_vir_1 => NULL()
 
       !-------------------------------
       ! KERNELs related
@@ -346,24 +346,15 @@ CONTAINS
       CALL cp_fm_struct_release(fm_struct)
       CALL cp_fm_set_all(this%work2_ao_1, 0.0_dp)
       !=================================================
-      !=== work_1_vir [nvira, 1] =========================
+      !=== work_vir_1 [nvira, 1] =========================
       CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=1, &
-                               ncol_global=tddft_env%nvira, &
+                               nrow_global=tddft_env%nvira, &
+                               ncol_global=1, &
                                context=sub_env%blacs_env)
-      ALLOCATE(this%work_1_vir)
-      CALL cp_fm_create(this%work_1_vir, fm_struct)
+      ALLOCATE(this%work_vir_1)
+      CALL cp_fm_create(this%work_vir_1, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work_1_vir, 0.0_dp)
-      !=================================================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nbf, &
-                               ncol_global=tddft_env%nbf, &
-                               context=sub_env%blacs_env)
-      ALLOCATE(this%work1_ao_ao)
-      CALL cp_fm_create(this%work1_ao_ao, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work1_ao_ao, 0.0_dp)
+      CALL cp_fm_set_all(this%work_vir_1, 0.0_dp)
       !=================================================
       !=== rho_ia_ao_fm [nbf, nbf] =====================
       CALL cp_fm_struct_create(fm_struct, &
@@ -575,9 +566,9 @@ CONTAINS
          CALL cp_fm_release(this%work2_ao_1)
          DEALLOCATE(this%work2_ao_1)
       END IF
-      IF (ASSOCIATED(this%work_1_vir)) THEN
-         CALL cp_fm_release(this%work_1_vir)
-         DEALLOCATE(this%work_1_vir)
+      IF (ASSOCIATED(this%work_vir_1)) THEN
+         CALL cp_fm_release(this%work_vir_1)
+         DEALLOCATE(this%work_vir_1)
       END IF
       IF (ASSOCIATED(this%rho_ia_ao_fm)) THEN
          CALL cp_fm_release(this%rho_ia_ao_fm)
@@ -790,9 +781,11 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'mrsf_mo_to_ao_transform'
 
-      INTEGER :: handle, i, j, m, lr1, lr2, nbf, nocca, noccb, nvirb
+      INTEGER :: handle, i, j, m, lr1, lr2, nbf, nocca, noccb, nvira, nvirb
       TYPE(cp_fm_type), POINTER :: ball, bo2v, bo1v, bco1, bco2, o21v, co12
       TYPE(cp_fm_type), POINTER :: va, vb
+      REAL(KIND=dp) :: val
+      INTEGER :: shift
 
       CALL timeset(routineN, handle)
 
@@ -805,59 +798,67 @@ CONTAINS
       nbf = tddft_env%nbf
       nocca = tddft_env%nocca
       noccb = tddft_env%noccb
+      nvira = tddft_env%nvira  ! nvira = nbf - nocca
       nvirb = tddft_env%nvirb  ! nvirb = nbf - noccb
 
       ! Define indices
       lr1 = nocca - 1
       lr2 = nocca
+      shift = nocca - noccb
 
       ! Assign pointers from tddft_env%evects_ao_ao [nbf, nbf]
-      ball => this%evects_ao_ao(ivec, 7)
       bo2v => this%evects_ao_ao(ivec, 1)
       bo1v => this%evects_ao_ao(ivec, 2)
       bco1 => this%evects_ao_ao(ivec, 3)
       bco2 => this%evects_ao_ao(ivec, 4)
       o21v => this%evects_ao_ao(ivec, 5)
       co12 => this%evects_ao_ao(ivec, 6)
+      ball => this%evects_ao_ao(ivec, 7)
+
       va => gs_mos(1)%mos_full           ! [nbf, nbf]
       vb => gs_mos(2)%mos_full           ! [nbf, nbf]
 
     !----------------------------------------------------------------------------
-!   !==== get block gs_mos(2)%mos_virt[1:nbf, 1] this%work1_ao_1 [1:nbf, 1] ====
-!   CALL cp_fm_get_submatrix(fm=gs_mos(2)%mos_virt, &
-!                            target_m=this%work1_ao_1, &
-!                            start_row=1, start_col=1, &
-!                            n_rows=tddft_env%nbf, n_cols=1)
-!   !==== get block evects_mo[nocca, 1:nvira]  this%work_1_vir [1, 1:nvira] ====
-!   CALL cp_fm_get_submatrix(fm=tddft_env%evects_mo(ivec), &
-!                            target_m=this%work_1_vir, &
-!                            start_row=tddft_env%nocca, start_col=1, &
-!                            n_rows=1, n_cols=tddft_env%nvira)
-!
-!   ! C[nbf, 1] = 1.0*A[nbf, 1]*B[1, nvira] + 0.0*C[nbf, 1]
-!   call cp_fm_gemm('N', 'N', nbf, 1, tddft_env%nvira, &
-!                   1.0_dp, this%work1_ao_1, &
-!                           this%work_1_vir, &
-!                   0.0_dp, this%work2_ao_1, &
-!                   a_first_row=1, a_first_col=1, &
-!                   b_first_row=1, b_first_col=1, &
-!                   c_first_row=1, c_first_col=1)
-!
-!   !==== get block gs_mos(1)%mos_occ[1:nbf, 1] this%work1_ao_1 [1:nbf, 1] ====
-!   CALL cp_fm_get_submatrix(fm=gs_mos(1)%mos_occ, &
-!                            target_m=this%work1_ao_1, &
-!                            start_row=1, n_rows=tddft_env%nbf, &
-!                            start_col=tddft_env%nocca, n_cols=1)
-!
-!   ! C[nbf, 1] = 1.0*A[nbf, 1]*B[nbf, 1] + 1.0*C[nbf, nbf]
-!   call cp_fm_gemm('N', 'N', nbf, nbf, 1, &
-!                   1.0_dp, this%work1_ao_1, &
-!                           this%work2_ao_1, &
-!                   1.0_dp, bo2v, &
-!                   a_first_row=1, a_first_col=1, &
-!                   b_first_row=1, b_first_col=1, &
-!                   c_first_row=1, c_first_col=1)
-!
+    ! C[1:nbf, 1] = 1.0*A[1:nbf, nocca+1:nbf]*B[nocca:nocca, 1:nvira] + 0.0*C[1:nbf, 1]
+
+      ! transform needed row to coulumn, not a transpose.
+      ! work[1:nvira, 1] => X(1:nocca, 1:nvirb) [nocca, 1+shift:nvira]
+      CALL cp_fm_set_all(this%work_vir_1, 0.0_dp)
+      DO i = 1, nvira
+         CALL cp_fm_get_element(tddft_env%evects_mo(ivec), lr2, i+shift, val)
+         CALL cp_fm_set_element(this%work_vir_1, i, 1, val)
+      END DO
+
+      CALL parallel_gemm('N', 'N', nbf, 1, nvirb, &
+                         1.0_dp, gs_mos(2)%mos_full, &
+                                 this%work_vir_1, &
+                         0.0_dp, this%work2_ao_1, &
+                         a_first_col=nocca+1)
+
+      CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
+                         1.0_dp, gs_mos(1)%mos_full, &
+                                 this%work2_ao_1, &
+                         1.0_dp, this%evects_ao_ao(ivec, 1), &
+                         a_first_col=lr2)
+
+      ! work[1:nvira, 1] => X(1:nocca, 1:nvirb) [nocca-1, 1+shift:nvira]
+      CALL cp_fm_set_all(this%work_vir_1, 0.0_dp)
+      DO i = 1, nvira
+         CALL cp_fm_get_element(tddft_env%evects_mo(ivec), lr1, i+shift, val)
+         CALL cp_fm_set_element(this%work_vir_1, i, 1, val)
+      END DO
+
+      CALL parallel_gemm('N', 'N', nbf, 1, nvirb, &
+                         1.0_dp, gs_mos(2)%mos_full, &
+                                 this%work_vir_1, &
+                         0.0_dp, this%work2_ao_1, &
+                         a_first_col=nocca+1)
+
+      CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
+                         1.0_dp, gs_mos(1)%mos_full, &
+                                 this%work2_ao_1, &
+                         1.0_dp, this%evects_ao_ao(ivec, 2), &
+                         a_first_col=lr1)
 
       CALL timestop(handle)
    END SUBROUTINE mrsf_mo_to_ao_transform
