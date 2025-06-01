@@ -1178,6 +1178,7 @@ CONTAINS
       TYPE(cp_logger_type), POINTER                   :: logger
       TYPE(cp_fm_type), POINTER :: agdlr, ado2v, ado1v, adco1, adco2, ao21v, aco12
       INTEGER :: i, j, lr1, lr2, nbf, nocca, noccb, nvira, nvirb, shift
+      REAL(KIND=dp) :: scalar, val
 
       IF (.FALSE. .AND. ivec == 1) THEN
          print *, this%unused
@@ -1214,27 +1215,63 @@ CONTAINS
       ! Transform back to MO basis
       !-----------------------------------------------
       ! C[nocca,nbf] = 1.0*(A[nbf,nocca])^T * B[nbf,nbf] + 0.0*C[nocca,nbf]
-      CALL parallel_gemm('T', 'N', tddft_env%nocca, tddft_env%nbf, tddft_env%nbf, &
+      CALL parallel_gemm('T', 'N', nocca, nbf, nbf, &
                          1.0_dp, gs_mos(1)%mos_occ, &
                                  this%hmat_ao_ao(7), &
                          0.0_dp, this%work_noc_ao)
 
       ! C[nocca,nvirb] = 1.0*A[noc,nbf] * B[nbf,nvirb] + 0.0*C[nocca,nvirb]
-      CALL parallel_gemm('N', 'N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nbf, &
+      CALL parallel_gemm('N', 'N', nocca, nvirb, nbf, &
                          1.0_dp, this%work_noc_ao, &
                                  gs_mos(2)%mos_virt, &
                          0.0_dp, tddft_env%sigma_vecs(ivec))
       ! Print
       CALL print_mat_ao_ao(tddft_env%sigma_vecs(ivec), "sigma_vecs", logger, ivec)
 
-      CALL cp_fm_to_fm(source=tddft_env%sigma_vecs(ivec), &
-                       destination=this%work_noc_vir)
+!     CALL cp_fm_to_fm(source=tddft_env%sigma_vecs(ivec), &
+!                      destination=this%work_noc_vir)
 
-      CALL parallel_gemm('N', 'N', tddft_env%nbf, 1, tddft_env%nbf, &
-                   1.0_dp, this%hmat_ao_ao(2), &
-                           gs_mos(2)%mos_full, &
-                   0.0_dp, this%work1_ao_1, &
-                   b_first_col=lr2)
+      CALL parallel_gemm('N', 'N', nbf, 1, nbf, &
+                         1.0_dp, this%hmat_ao_ao(2), &  ! ado1v
+                                 gs_mos(2)%mos_full, &
+                         0.0_dp, this%work1_ao_1, &     ! tmp
+                         b_first_col=lr2)
+      CALL parallel_gemm('N', 'N', nbf, 1, nbf, &
+                         1.0_dp, this%hmat_ao_ao(6), &  ! aco12
+                                 gs_mos(2)%mos_full, &
+                         1.0_dp, this%work1_ao_1, &     ! tmp
+                         b_first_col=lr1)
+      CALL parallel_gemm('T', 'N', noccb, 1, nbf, &
+                         1.0_dp, gs_mos(2)%mos_occ, &
+                                 this%work1_ao_1, &     ! tmp
+                         0.0_dp, this%work_noc_1)      ! tmp2[1:noccb, 1]
+      DO i = 1, noccb
+         CALL cp_fm_get_element(this%work_noc_1, i, 1, scalar)
+         CALL cp_fm_get_element(tddft_env%sigma_vecs(ivec), i, lr2-noccb, val)
+         val = val + scalar
+         CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), i, lr2-noccb, val)
+      END DO
+
+      CALL parallel_gemm('N', 'N', nbf, 1, nbf, &
+                         1.0_dp, this%hmat_ao_ao(1), &  ! ado2v
+                                 gs_mos(2)%mos_full, &
+                         0.0_dp, this%work1_ao_1, &     ! tmp
+                         b_first_col=lr1)
+      CALL parallel_gemm('N', 'N', nbf, 1, nbf, &
+                        -1.0_dp, this%hmat_ao_ao(6), &  ! aco12
+                                 gs_mos(2)%mos_full, &
+                         1.0_dp, this%work1_ao_1, &     ! tmp
+                         b_first_col=lr2)
+      CALL parallel_gemm('T', 'N', noccb, 1, nbf, &
+                         1.0_dp, gs_mos(2)%mos_occ, &
+                                 this%work1_ao_1, &     ! tmp
+                         0.0_dp, this%work_noc_1)      ! tmp2[1:noccb, 1]
+      DO i = 1, noccb
+         CALL cp_fm_get_element(this%work_noc_1, i, 1, scalar)
+         CALL cp_fm_get_element(tddft_env%sigma_vecs(ivec), i, lr1-noccb, val)
+         val = val + scalar
+         CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), i, lr1-noccb, val)
+      END DO
 
    END SUBROUTINE mrsf_ao_to_mo_transform
 
