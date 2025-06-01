@@ -1273,6 +1273,31 @@ CONTAINS
          CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), i, lr1-noccb, val)
       END DO
 
+      CALL parallel_gemm('T', 'N', nbf, 1, nbf, &
+                         1.0_dp, this%hmat_ao_ao(4), &  ! adco2^T
+                                 gs_mos(1)%mos_full, &  ! va
+                         0.0_dp, this%work1_ao_1, &     ! tmp
+                         b_first_col=lr1)
+
+      CALL parallel_gemm('T', 'N', nbf, 1, nbf, &
+                         1.0_dp, this%hmat_ao_ao(5), &  ! ao21v^T
+                                 gs_mos(1)%mos_full, &  ! va
+                         1.0_dp, this%work1_ao_1, &     ! tmp
+                         b_first_col=lr2)
+
+      CALL parallel_gemm('T', 'N', nvira, 1, nbf, &
+                         1.0_dp, gs_mos(1)%mos_virt, &  ! va_virt [nbf, nvira]
+                                 this%work1_ao_1, &     ! tmp [nbf, 1]
+                         0.0_dp, this%work_vir_1)       ! tmp2 [nvira, 1]
+
+      shift = nvirb - nvira  ! Adjust based on context ( 2 for ROHF)
+      DO i = 1, nvira
+         CALL cp_fm_get_element(this%work_vir_1, i, 1, scalar)
+         CALL cp_fm_get_element(tddft_env%sigma_vecs(ivec), lr1, shift + i, val)
+         val = val + scalar
+         CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), lr1, shift + i, val)
+      END DO
+
    END SUBROUTINE mrsf_ao_to_mo_transform
 
    SUBROUTINE mrsf_print_theory_data(this, qs_env, tddft_env, gs_mos, tddfpt_control, log_unit)
