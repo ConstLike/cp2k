@@ -1075,7 +1075,7 @@ CONTAINS
       ! ERI contraction: Sigma = ERI * X [DBCSR type]
       !-----------------------------------------------
       IF (tddfpt_control%do_hfx) THEN
-         DO imat = 1, 7
+         DO imat = 7, 7
             !--------------------------------------
             ! Get Symmetric part of X vector
             !--------------------------------------
@@ -1228,8 +1228,15 @@ CONTAINS
       ! Print
       CALL print_mat_ao_ao(tddft_env%sigma_vecs(ivec), "sigma_vecs", logger, ivec)
 
-!     CALL cp_fm_to_fm(source=tddft_env%sigma_vecs(ivec), &
-!                      destination=this%work_noc_vir)
+      CALL cp_fm_get_element(tddft_env%sigma_vecs(ivec), lr1, shift-1, scalar)
+      CALL cp_fm_get_element(tddft_env%sigma_vecs(ivec), lr2, shift, val)
+      SELECT CASE (tddft_env%response_type)
+      CASE(2) ! MRSF-S
+         scalar = (scalar - val)/sqrt(2.0_dp)
+      CASE(3) ! MRSF-T
+         scalar = (scalar + val)/sqrt(2.0_dp)
+      END SELECT
+      CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), lr1, shift-1, scalar)
 
       CALL parallel_gemm('N', 'N', nbf, 1, nbf, &
                          1.0_dp, this%hmat_ao_ao(2), &  ! ado1v
@@ -1290,13 +1297,45 @@ CONTAINS
                                  this%work1_ao_1, &     ! tmp [nbf, 1]
                          0.0_dp, this%work_vir_1)       ! tmp2 [nvira, 1]
 
-      shift = nvirb - nvira  ! Adjust based on context ( 2 for ROHF)
       DO i = 1, nvira
          CALL cp_fm_get_element(this%work_vir_1, i, 1, scalar)
-         CALL cp_fm_get_element(tddft_env%sigma_vecs(ivec), lr1, shift + i, val)
+         CALL cp_fm_get_element(tddft_env%sigma_vecs(ivec), lr1, i, val)
          val = val + scalar
-         CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), lr1, shift + i, val)
+         CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), lr1, i, val)
       END DO
+
+      CALL parallel_gemm('T', 'N', nbf, 1, nbf, &
+                         1.0_dp, this%hmat_ao_ao(3), &  ! adco2^T
+                                 gs_mos(1)%mos_full, &  ! va
+                         0.0_dp, this%work1_ao_1, &     ! tmp
+                         b_first_col=lr2)
+
+      CALL parallel_gemm('T', 'N', nbf, 1, nbf, &
+                        -1.0_dp, this%hmat_ao_ao(5), &  ! ao21v^T
+                                 gs_mos(1)%mos_full, &  ! va
+                         1.0_dp, this%work1_ao_1, &     ! tmp
+                         b_first_col=lr1)
+
+      CALL parallel_gemm('T', 'N', nvira, 1, nbf, &
+                         1.0_dp, gs_mos(1)%mos_virt, &  ! va_virt [nbf, nvira]
+                                 this%work1_ao_1, &     ! tmp [nbf, 1]
+                         0.0_dp, this%work_vir_1)       ! tmp2 [nvira, 1]
+
+      DO i = 1, nvira
+         CALL cp_fm_get_element(this%work_vir_1, i, 1, scalar)
+         CALL cp_fm_get_element(tddft_env%sigma_vecs(ivec), lr2, i, val)
+         val = val + scalar
+         CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), lr2, i, val)
+      END DO
+
+      SELECT CASE (tddft_env%response_type)
+      CASE(2) ! MRSF-S
+         CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), lr2, shift, 0.0_dp)
+      CASE(3) ! MRSF-T
+         CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), lr1, shift, 0.0_dp)
+         CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), lr2, shift-1, 0.0_dp)
+         CALL cp_fm_set_element(tddft_env%sigma_vecs(ivec), lr2, shift, 0.0_dp)
+      END SELECT
 
    END SUBROUTINE mrsf_ao_to_mo_transform
 
