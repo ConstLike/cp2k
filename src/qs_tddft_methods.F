@@ -207,7 +207,6 @@ MODULE qs_tddft_methods
 
    PUBLIC :: tddft_energies
 
-
 CONTAINS
 
    SUBROUTINE tddft_energies(qs_env, sub_env, kernel_env, full_kernel_env, &
@@ -322,7 +321,7 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_run'
 
       CHARACTER(len=20)                                  :: nStates_str
-      INTEGER                                            :: handle, log_unit, &
+      INTEGER                                            :: handle, handle2, log_unit, &
          iter, niters, iend, ist, ivec, &
          iv
       REAL(kind=dp)                                      :: t1, t2
@@ -370,6 +369,7 @@ CONTAINS
                "-------------------------------------------------------------------------------", &
                REPEAT("-",79)
          END IF
+         IF (log_unit > 0) CALL m_flush(log_unit)
 
          CALL cp_add_iter_level(logger%iter_info, "TDDFT_SCF")
 
@@ -377,14 +377,17 @@ CONTAINS
          tddft_env%max_delta_eval_prev = 10.0_dp
 
          ! Outer loop for managing restarts
-         DO
+         davidson_outer_loop: DO
             ist = 1
             iend = tddft_env%nvec
             tddft_env%status(1:2) = .FALSE.
             tddft_env%stall_count = 0
 
             ! Davidson iterations
-            DO
+            davidson_loop: DO
+
+               CALL timeset(routineN//"_inner_loop", handle2)
+
                CALL cp_iterate(logger%iter_info, iter_nr_out=iter)
 
                DO ivec = ist, iend
@@ -410,6 +413,8 @@ CONTAINS
                   CALL m_flush(log_unit)
                END IF
                t1 = t2
+
+               CALL timestop(handle2)
 
                ! Check convergence status
                IF (tddft_env%status(1)) THEN
@@ -437,7 +442,7 @@ CONTAINS
 
                ist = tddft_env%novec+1
                iend = tddft_env%nvec
-            END DO ! Davidson iterations
+            END DO davidson_loop ! Davidson iterations
 
             ! Check conditions for exiting or restarting
             ! at this point at least one of the following conditions are met:
@@ -454,7 +459,7 @@ CONTAINS
                WRITE (log_unit, '(1X,25("-"),1X,A,1X,25("-"))') "Restart Davidson iterations"
                CALL m_flush(log_unit)
             END IF
-         END DO ! Outer loop for managing restarts
+         END DO davidson_outer_loop ! Outer loop for managing restarts
 
          CALL cp_rm_iter_level(logger%iter_info, "TDDFT_SCF")
 

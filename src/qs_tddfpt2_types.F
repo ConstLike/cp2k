@@ -421,7 +421,6 @@ CONTAINS
          CALL tddfpt_dbcsr_create_by_dist(rho_ia_ao(ispin)%matrix, template=matrix_s(1)%matrix, &
                                           dbcsr_dist=sub_env%dbcsr_dist, sab=sub_env%sab_orb)
       END DO
-      PRINT *, "KKK| Checks siae rho_ia_ao", SIZE(rho_ia_ao)
 
       NULLIFY (work_matrices%rho_orb_struct_sub)
       ALLOCATE (work_matrices%rho_orb_struct_sub)

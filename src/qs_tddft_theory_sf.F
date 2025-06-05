@@ -7,6 +7,8 @@
 !
 MODULE qs_tddft_theory_sf
 
+   USE machine,                         ONLY: m_flush,&
+                                              m_walltime
    USE util,                            ONLY: sort
    USE string_utilities,                ONLY: integer_to_string
    USE input_constants,                 ONLY: &

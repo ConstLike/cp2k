@@ -197,7 +197,7 @@ MODULE qs_tddft_types
 
 ! **************************************************************************************************
 !> \brief General TDDFT buffers and configuration
-!>        Holds only what is needed for a specific TDDFT theory (SF, MRSF, ...)
+!>        Holds only what is needed for a Davdiosn iterations,
 !>        All data here is private for theory_handler%fields.
 !> \author  Konstantin Komarov (constlike@gmail.com)
 !> \date    2025-05-18

@@ -504,12 +504,12 @@ CONTAINS
                END DO
             END IF ! for full kernel using lri
          END DO
-         DO ispin = 1, nSpins
-            CALL cp_fm_set_all(matrix=work_matrices%check_xc, alpha=0.0_dp)
-            CALL copy_dbcsr_to_fm(matrix=work_matrices%A_ia_munu_sub(ispin)%matrix, &
-                                 fm=work_matrices%check_xc)
+!        DO ispin = 1, nSpins
+!           CALL cp_fm_set_all(matrix=work_matrices%check_xc, alpha=0.0_dp)
+!           CALL copy_dbcsr_to_fm(matrix=work_matrices%A_ia_munu_sub(ispin)%matrix, &
+!                                fm=work_matrices%check_xc)
 !           CALL print_mat_ao_ao(work_matrices%check_xc, 'work_xc', logger, ivect)
-         END DO
+!        END DO
 
 
          ! local atom contributions
