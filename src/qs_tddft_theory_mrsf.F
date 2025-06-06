@@ -7,6 +7,8 @@
 !
 MODULE qs_tddft_theory_mrsf
 
+
+   USE hfx_types,                       ONLY: hfx_type
    USE machine,                         ONLY: m_flush,&
                                               m_walltime
    USE qs_integrate_potential,          ONLY: integrate_v_rspace
@@ -129,6 +131,8 @@ MODULE qs_tddft_theory_mrsf
    TYPE, EXTENDS(tddft_theory_type) :: tddft_mrsf_theory_type
       REAL(KIND=dp) :: C_hf
 
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:) :: spin_pair_coupling
+
       !> Hamiltonian matrix in AO basis
       TYPE(cp_fm_type), POINTER, DIMENSION(:) :: hmat_ao_ao => NULL()
 
@@ -227,25 +231,35 @@ CONTAINS
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(section_vals_type), POINTER :: hfx_section, xc_section
+      TYPE(section_vals_type), POINTER :: hfx_section
       INTEGER                                            :: handle, ivec, ispin, imat
 
       CALL timeset(routineN, handle)
+
+      hfx_section => section_vals_get_subs_vals(qs_env%input, "DFT%XC%HF")
+      CALL section_vals_val_get(hfx_section, "FRACTION", r_val=this%C_hf)
+      print *, "KKK C_hf=", this%C_hf
+
+      ALLOCATE(this%spin_pair_coupling(7), source=0.0_dp)
+
+      this%spin_pair_coupling(1:4) = this%C_hf
+      this%spin_pair_coupling(5) = this%C_hf
+      this%spin_pair_coupling(6) = this%C_hf
+      this%spin_pair_coupling(7) = this%C_hf
 
       SELECT CASE (tddft_env%response_type)
       CASE(2) ! MRSF-S
          tddft_env%nStates = min(tddft_env%nstates, tddft_env%nstates_max-1)
          tddft_env%mxvec = min(tddft_env%maxvec*tddft_env%nstates, &
                                tddft_env%nstates_max-1)
+
       CASE(3) ! MRSF-T
          tddft_env%nStates = min(tddft_env%nstates, tddft_env%nstates_max-3)
          tddft_env%mxvec = min(tddft_env%maxvec*tddft_env%nstates, &
                                tddft_env%nstates_max-3)
+         this%spin_pair_coupling(1:6) =-this%spin_pair_coupling(1:6)
       END SELECT
-
-      xc_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT%XC")
-      hfx_section => section_vals_get_subs_vals(xc_section, "HF")
-      CALL section_vals_val_get(hfx_section, "FRACTION", r_val=this%C_hf)
+      print *, "KKK C_hf=", this%spin_pair_coupling
 
       !=== hmat_ao_ao [nbf, nbf] =======================
       CALL cp_fm_struct_create(fm_struct, &
@@ -590,6 +604,9 @@ CONTAINS
       TYPE(pw_pool_type), POINTER :: auxbas_pw_pool
       INTEGER :: ivec, ispin, imat
 
+      IF (ALLOCATED(this%spin_pair_coupling)) THEN
+         DEALLOCATE(this%spin_pair_coupling)
+      END IF
       IF (ASSOCIATED(this%hmat_ao_ao)) THEN
          DO imat = 1, SIZE(this%hmat_ao_ao)
             CALL cp_fm_release(this%hmat_ao_ao(imat))
@@ -1134,6 +1151,7 @@ CONTAINS
       INTEGER, INTENT(IN)                             :: ivec
       TYPE(cp_logger_type), POINTER                   :: logger
       TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER     :: rho_ia_g
+      TYPE(hfx_type), DIMENSION(:, :), POINTER        :: hfx_data
       INTEGER :: imat, ispin
       LOGICAL :: skip_sym, skip_asym
       TYPE(pw_poisson_type), POINTER :: poisson_env
@@ -1146,12 +1164,23 @@ CONTAINS
          sub_env = sub_env
          NULLIFY(tddfpt_control)
       END IF
+      CALL get_qs_env(qs_env=qs_env, &
+                      x_data=hfx_data)
 
       !-----------------------------------------------
       ! ERI contraction: Sigma = ERI * X [DBCSR type]
       !-----------------------------------------------
       IF (tddfpt_control%do_hfx) THEN
          DO imat = 1, 7
+
+            IF (abs(this%spin_pair_coupling(imat))<1.0e-10_dp) CYCLE
+
+            IF (sub_env%para_env%is_source()) THEN
+               hfx_data%general_parameter%fraction = this%spin_pair_coupling(imat)
+            END IF
+            CALL sub_env%para_env%bcast(hfx_data%general_parameter%fraction, source=0)
+
+            print *, "KKK| imat = ", imat, hfx_data%general_parameter%fraction
             !--------------------------------------
             ! Get Symmetric part of X vector
             !--------------------------------------
@@ -1171,7 +1200,7 @@ CONTAINS
             skip_sym = is_zero_matrix_fm(matrix=this%work1_ao_ao)
 
             ! Print
-            CALL print_mat_ao_ao(this%work1_ao_ao, 'work_sym', logger, ivec)
+!           CALL print_mat_ao_ao(this%work1_ao_ao, 'work_sym', logger, ivec)
 
             ! Set density-like to 0.0
             CALL dbcsr_set(matrix=this%work_rho_ao_ao_symm(1)%matrix, &
@@ -1198,7 +1227,7 @@ CONTAINS
 
             skip_asym = is_zero_matrix_fm(matrix=this%work1_ao_ao)
             ! Print
-            CALL print_mat_ao_ao(this%work1_ao_ao, 'work_asym', logger, ivec)
+!           CALL print_mat_ao_ao(this%work1_ao_ao, 'work_asym', logger, ivec)
 
             ! Set density-like to 0.0
             CALL dbcsr_set(matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
@@ -1233,8 +1262,8 @@ CONTAINS
             CALL copy_dbcsr_to_fm(matrix=this%work_hmat_asymm(1)%matrix, &
                                   fm=this%work2_ao_ao)
             ! Print
-            CALL print_mat_ao_ao(this%work1_ao_ao, 'Awork_sym', logger, ivec)
-            CALL print_mat_ao_ao(this%work2_ao_ao, 'Awork_asym', logger, ivec)
+!           CALL print_mat_ao_ao(this%work1_ao_ao, 'Awork_sym', logger, ivec)
+!           CALL print_mat_ao_ao(this%work2_ao_ao, 'Awork_asym', logger, ivec)
 
             CALL cp_fm_set_all(matrix=this%hmat_ao_ao(imat), alpha=0.0_dp)
             ! A = 0.0*A + 1.0*B
@@ -1247,6 +1276,7 @@ CONTAINS
                      beta=1.0_dp,  matrix_b=this%work2_ao_ao)
             CALL cp_fm_set_all(matrix=this%work2_ao_ao, alpha=0.0_dp)
             ! Print
+            print *, "KKK| imat = ", imat
             CALL print_mat_ao_ao(this%hmat_ao_ao(imat), "hmat_ao_HF_tot", logger, ivec)
 
             IF (imat>4 .or. skip_sym) CYCLE
@@ -1280,7 +1310,7 @@ CONTAINS
             CALL pw_transfer(this%work_v_gspace, this%work_v_rspace)
 
             ! Scale by Hartree-Fock exchange
-            CALL pw_scale(this%work_v_rspace, this%C_hf)
+            CALL pw_scale(this%work_v_rspace, this%spin_pair_coupling(imat))
 
             ! Scale by grid volume element
             CALL pw_scale(this%work_v_rspace, this%work_v_rspace%pw_grid%dvol)
@@ -1303,8 +1333,13 @@ CONTAINS
                                      beta=1.0_dp, &
                                      matrix_b=this%work2_ao_ao)
             ! Print
-            CALL print_mat_ao_ao(this%work2_ao_ao, "hmat_ao_coulomb", logger, imat)
+            print *, "KKK| imat = ", imat
+            CALL print_mat_ao_ao(this%work2_ao_ao, "hmat_ao_coulomb", logger, ivec)
          END DO
+      IF (sub_env%para_env%is_source()) THEN
+         hfx_data%general_parameter%fraction = this%C_hf
+      END IF
+      CALL sub_env%para_env%bcast(hfx_data%general_parameter%fraction, source=0)
       END IF
 
    END SUBROUTINE mrsf_apply_operator
@@ -1376,7 +1411,7 @@ CONTAINS
                                  gs_mos(2)%mos_virt, &
                          0.0_dp, tddft_env%sigma_vecs(ivec))
       ! Print
-      CALL print_mat_ao_ao(tddft_env%sigma_vecs(ivec), "sigma_vecs", logger, ivec)
+!     CALL print_mat_ao_ao(tddft_env%sigma_vecs(ivec), "sigma_vecs", logger, ivec)
 
       ! scalar = X(1:nbf,1:nbf)[lr1, lr1] or
       ! scalar = X(1:nocca,1:nvirb)[lr1, 1(lr1)]
