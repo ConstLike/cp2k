@@ -1152,7 +1152,7 @@ CONTAINS
       TYPE(cp_logger_type), POINTER                   :: logger
       TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER     :: rho_ia_g
       TYPE(hfx_type), DIMENSION(:, :), POINTER        :: hfx_data
-      INTEGER :: imat, ispin
+      INTEGER :: imat
       LOGICAL :: skip_sym, skip_asym
       TYPE(pw_poisson_type), POINTER :: poisson_env
       REAL(KIND=dp) :: pair_energy
@@ -1180,7 +1180,8 @@ CONTAINS
             END IF
             CALL sub_env%para_env%bcast(hfx_data%general_parameter%fraction, source=0)
 
-            print *, "KKK| imat = ", imat, hfx_data%general_parameter%fraction
+            logger = logger
+!           print *, "KKK| imat = ", imat, hfx_data%general_parameter%fraction
             !--------------------------------------
             ! Get Symmetric part of X vector
             !--------------------------------------
@@ -1276,8 +1277,8 @@ CONTAINS
                      beta=1.0_dp,  matrix_b=this%work2_ao_ao)
             CALL cp_fm_set_all(matrix=this%work2_ao_ao, alpha=0.0_dp)
             ! Print
-            print *, "KKK| imat = ", imat
-            CALL print_mat_ao_ao(this%hmat_ao_ao(imat), "hmat_ao_HF_tot", logger, ivec)
+!           print *, "KKK| imat = ", imat
+!           CALL print_mat_ao_ao(this%hmat_ao_ao(imat), "hmat_ao_HF_tot", logger, ivec)
 
             IF (imat>4 .or. skip_sym) CYCLE
 
@@ -1296,7 +1297,6 @@ CONTAINS
             CALL qs_rho_get(this%rho_orb_struct_sub, &
                             rho_g=rho_ia_g)
 
-            ispin = ispin
             ! Get Poisson environment
             CALL pw_env_get(sub_env%pw_env, &
                             poisson_env=poisson_env)
@@ -1333,8 +1333,8 @@ CONTAINS
                                      beta=1.0_dp, &
                                      matrix_b=this%work2_ao_ao)
             ! Print
-            print *, "KKK| imat = ", imat
-            CALL print_mat_ao_ao(this%work2_ao_ao, "hmat_ao_coulomb", logger, ivec)
+!           print *, "KKK| imat = ", imat
+!           CALL print_mat_ao_ao(this%work2_ao_ao, "hmat_ao_coulomb", logger, ivec)
          END DO
       IF (sub_env%para_env%is_source()) THEN
          hfx_data%general_parameter%fraction = this%C_hf

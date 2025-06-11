@@ -227,8 +227,10 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_energies'
 
       TYPE(tddft_info_type)                              :: tddft_env
-
-      INTEGER                                            :: handle
+      CLASS(tddft_theory_type), ALLOCATABLE              :: theory_handler
+      CHARACTER(LEN=6), DIMENSION(3)                     :: theory_to_run
+      CHARACTER(LEN=6)                                   :: logo
+      INTEGER                                            :: handle, i
 
       CALL timeset(routineN, handle)
 
@@ -236,16 +238,36 @@ CONTAINS
       xc_section = xc_section
       kernel_env = kernel_env
 
-      CALL tddft_initialization(tddft_env, qs_env, gs_mos, sub_env)
+      theory_to_run = ["    SF", "MRSF-S", "MRSF-T"]
 
-      CALL tddft_setup_data(tddft_env, qs_env, gs_mos, &
-                            matrix_ks, tddfpt_control, sub_env)
+      DO i = 1, SIZE(theory_to_run)
 
-      CALL tddft_run(tddft_env, qs_env, tddfpt_control, logger, &
-                     tddfpt_print_section, gs_mos, kernel_env, &
-                     sub_env)
+         CALL tddft_initialization(tddft_env, qs_env, gs_mos, sub_env)
 
-      CALL tddft_finalization(tddft_env, sub_env, kernel_env)
+         CALL tddft_setup_data(tddft_env, qs_env, gs_mos, &
+                               matrix_ks, tddfpt_control, sub_env)
+
+         logo = theory_to_run(i)
+         SELECT CASE (logo)
+            CASE('    SF')
+               tddft_env%response_type = 1 ! SF
+               ALLOCATE(tddft_sf_theory_type :: theory_handler)
+            CASE('MRSF-S')
+               tddft_env%response_type = 2 ! MRSF-S
+               ALLOCATE(tddft_mrsf_theory_type :: theory_handler)
+            CASE('MRSF-T')
+               tddft_env%response_type = 3 ! MRSF-T
+               ALLOCATE(tddft_mrsf_theory_type :: theory_handler)
+          END SELECT
+
+         CALL tddft_run(tddft_env, theory_handler, qs_env, tddfpt_control, logger, &
+                        tddfpt_print_section, gs_mos, kernel_env, &
+                        sub_env, logo)
+
+         DEALLOCATE(theory_handler)
+
+         CALL tddft_finalization(tddft_env, sub_env, kernel_env)
+      END DO
 
       CALL timestop(handle)
 
@@ -306,9 +328,10 @@ CONTAINS
 
    END SUBROUTINE tddft_setup_data
 
-   SUBROUTINE tddft_run(tddft_env, qs_env, tddfpt_control, logger, tddfpt_print_section, &
-                        gs_mos, kernel_env, sub_env)
+   SUBROUTINE tddft_run(tddft_env, theory_handler, qs_env, tddfpt_control, logger, tddfpt_print_section, &
+                        gs_mos, kernel_env, sub_env, logo)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
+      CLASS(tddft_theory_type)                           :: theory_handler
       TYPE(kernel_env_type)                              :: kernel_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
@@ -317,6 +340,7 @@ CONTAINS
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          POINTER                                         :: gs_mos
       TYPE(tddfpt_subgroup_env_type)                     :: sub_env
+      CHARACTER(LEN=6)                                   :: logo
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_run'
 
@@ -325,26 +349,13 @@ CONTAINS
          iter, niters, iend, ist, ivec, &
          iv
       REAL(kind=dp)                                      :: t1, t2
-      CLASS(tddft_theory_type), ALLOCATABLE              :: theory_handler
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: ostrength
-      CHARACTER(LEN=4)                                   :: logo
 
       CALL timeset(routineN, handle)
 
-      logo = 'MRSF'
-
-      SELECT CASE (logo)
-         CASE('  SF')
-            tddft_env%response_type = 1 ! SF
-            ALLOCATE(tddft_sf_theory_type :: theory_handler)
-         CASE('MRSF')
-            tddft_env%response_type = 2 ! MRSF-S
-            ALLOCATE(tddft_mrsf_theory_type :: theory_handler)
-       END SELECT
+      t1 = m_walltime()
 
       CALL theory_handler%allocate_theory_data(qs_env, tddft_env, sub_env)
-
-      t1 = m_walltime()
 
       niters = tddfpt_control%niters
       IF (niters > 0) THEN
@@ -365,7 +376,7 @@ CONTAINS
          IF (log_unit > 0) THEN
             WRITE (log_unit, '(/,A,/,A,/,A,/,A,/)') &
                "-------------------------------------------------------------------------------", &
-               "-                   "//TRIM(logo)//"-TDDFT WAVEFUNCTION OPTIMIZATION                      -", &
+               "-                 "//TRIM(logo)//"-TDDFT WAVEFUNCTION OPTIMIZATION                      -", &
                "-------------------------------------------------------------------------------", &
                REPEAT("-",79)
          END IF
@@ -469,12 +480,12 @@ CONTAINS
             IF (tddft_env%status(1)) THEN
                WRITE (log_unit, "(1X,A)") "", &
                   "-------------------------------------------------------------------------------", &
-                  "-   TDDFT run converged in "//TRIM(nStates_str)//" iteration(s) ", &
+                  "- "//TRIM(logo)//"-TDDFT run converged in "//TRIM(nStates_str)//" iteration(s)", &
                   "-------------------------------------------------------------------------------"
             ELSE
                WRITE (log_unit, "(1X,A)") "", &
                   "-------------------------------------------------------------------------------", &
-                  "-   TDDFT run did NOT converge after "//TRIM(nStates_str)//" iteration(s) ", &
+                  "- "//TRIM(logo)//"-TDDFT run did NOT converge after "//TRIM(nStates_str)//" iteration(s)", &
                   "-------------------------------------------------------------------------------"
             END IF
          END IF
@@ -654,7 +665,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      ! alloc A[nvec,nvec]
+      ! Dynamic allocation based on current value of nvec: A[nvec,nvec]
       CALL allocate_fm_matrix(tddft_env%subspace, tddft_env%nvec, tddft_env%nvec, sub_env)
       CALL allocate_fm_matrix(tddft_env%subspace_evecs, tddft_env%nvec, tddft_env%nvec, sub_env)
 
