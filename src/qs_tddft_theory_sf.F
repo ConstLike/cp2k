@@ -725,65 +725,6 @@ CONTAINS
       ! Print
       CALL print_mat_ao_ao(this%evects_ao_ao(1), 'evects', logger, ivec)
 
-      !--------------------------------------
-      ! Get Symmetric part of X vector
-      !--------------------------------------
-      CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
-      ! work1 = 0.5*X
-      CALL cp_fm_scale_and_add( &
-                alpha=0.0_dp, matrix_a=this%work1_ao_ao, &
-                beta=0.5_dp,  matrix_b=this%evects_ao_ao(1))
-      ! work2 = X^T
-      CALL cp_fm_transpose(this%evects_ao_ao(1), this%work2_ao_ao)
-
-      ! work1 += 0.5*work2
-      CALL cp_fm_scale_and_add( &
-                alpha=1.0_dp, matrix_a=this%work1_ao_ao, &
-                beta=0.5_dp,  matrix_b=this%work2_ao_ao)
-
-      ! Print
-      CALL print_mat_ao_ao(this%work1_ao_ao, 'work_sym', logger, ivec)
-
-      ! Set density-like to 0.0
-      CALL dbcsr_set(matrix=this%work_rho_ao_ao_symm(1)%matrix, &
-                     alpha=0.0_dp)
-!     ! XC part
-!     CALL dbcsr_set(matrix=this%rho_ia_ao(1)%matrix, &
-!                    alpha=0.0_dp)
-
-      ! FM to DBCSR
-      CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
-                            matrix=this%work_rho_ao_ao_symm(1)%matrix, &
-                            keep_sparsity=.TRUE.)
-!     ! XC part
-!     CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
-!                           matrix=this%rho_ia_ao(1)%matrix, &
-!                           keep_sparsity=.TRUE.)
-      !--------------------------------------
-      ! Get Antisymmetric part of X vector
-      !--------------------------------------
-      CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
-
-      ! work1 = 0.5*X
-      CALL cp_fm_scale_and_add( &
-                alpha=0.0_dp, matrix_a=this%work1_ao_ao, &
-                beta=0.5_dp,  matrix_b=this%evects_ao_ao(1))
-      ! work1 -= 0.5*work2
-      CALL cp_fm_scale_and_add( &
-                alpha=1.0_dp, matrix_a=this%work1_ao_ao, &
-                beta=-0.5_dp, matrix_b=this%work2_ao_ao)
-
-      ! Print
-      CALL print_mat_ao_ao(this%work1_ao_ao, 'work_asym', logger, ivec)
-
-      ! Set density-like to 0.0
-      CALL dbcsr_set(matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
-                     alpha=0.0_dp)
-
-      ! FM to DBCSR
-      CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
-                            matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
-                            keep_sparsity=.TRUE.)
    END SUBROUTINE sf_mo_to_ao_transform
 
    SUBROUTINE sf_apply_operator(this, qs_env, tddft_env, kernel_env, sub_env, &
@@ -808,17 +749,107 @@ CONTAINS
       ! ERI contraction: Sigma = ERI * X [DBCSR type]
       !-----------------------------------------------
       IF (tddfpt_control%do_hfx) THEN
-         ! Symmetric
-         CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
-         CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
-                               rho_ao=this%work_rho_ao_ao_symm, &
-                               qs_env=qs_env)
+         !--------------------------------------
+         ! Get Symmetric part of X vector
+         !--------------------------------------
+         CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
+         ! work1 = 0.5*X
+         CALL cp_fm_scale_and_add( &
+                   alpha=0.0_dp, matrix_a=this%work1_ao_ao, &
+                   beta=0.5_dp,  matrix_b=this%evects_ao_ao(1))
+         ! work2 = X^T
+         CALL cp_fm_transpose(this%evects_ao_ao(1), this%work2_ao_ao)
 
-         ! Antisymmetric
-         CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
-         CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
-                               rho_ao=this%work_rho_ao_ao_asymm, &
-                               qs_env=qs_env)
+         ! work1 += 0.5*work2
+         CALL cp_fm_scale_and_add( &
+                   alpha=1.0_dp, matrix_a=this%work1_ao_ao, &
+                   beta=0.5_dp,  matrix_b=this%work2_ao_ao)
+
+         ! Print
+         CALL print_mat_ao_ao(this%work1_ao_ao, 'work_sym', logger, ivec)
+
+         ! Set density-like to 0.0
+         CALL dbcsr_set(matrix=this%work_rho_ao_ao_symm(1)%matrix, &
+                        alpha=0.0_dp)
+!        ! XC part
+!        CALL dbcsr_set(matrix=this%rho_ia_ao(1)%matrix, &
+!                       alpha=0.0_dp)
+
+         ! FM to DBCSR
+         CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
+                               matrix=this%work_rho_ao_ao_symm(1)%matrix, &
+                               keep_sparsity=.TRUE.)
+!        ! XC part
+!        CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
+!                              matrix=this%rho_ia_ao(1)%matrix, &
+!                                 keep_sparsity=.TRUE.)
+         !--------------------------------------
+         ! Get Antisymmetric part of X vector
+         !--------------------------------------
+         CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
+
+         ! work1 = 0.5*X
+         CALL cp_fm_scale_and_add( &
+                   alpha=0.0_dp, matrix_a=this%work1_ao_ao, &
+                   beta=0.5_dp,  matrix_b=this%evects_ao_ao(1))
+         ! work1 -= 0.5*work2
+         CALL cp_fm_scale_and_add( &
+                   alpha=1.0_dp, matrix_a=this%work1_ao_ao, &
+                   beta=-0.5_dp, matrix_b=this%work2_ao_ao)
+
+         ! Print
+         CALL print_mat_ao_ao(this%work1_ao_ao, 'work_asym', logger, ivec)
+
+         ! Set density-like to 0.0
+         CALL dbcsr_set(matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
+                        alpha=0.0_dp)
+
+         ! FM to DBCSR
+         CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
+                               matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
+                               keep_sparsity=.TRUE.)
+
+         IF (tddft_env%is_range_separated) THEN
+            ! --- Range-separated HFX: Compute LR and SR separately ---
+            ! Symmetric part
+            CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
+            ! Long-range contribution
+            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
+                                  rho_ao=this%work_rho_ao_ao_symm, &
+                                  qs_env=qs_env, &
+                                  external_x_data=tddft_env%kernel_x_data_lr)
+            ! Add short-range contribution
+            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
+                                  rho_ao=this%work_rho_ao_ao_symm, &
+                                  qs_env=qs_env, &
+                                  external_x_data=tddft_env%kernel_x_data_sr)
+
+            ! Antisymmetric part
+            CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
+            ! Long-range contribution
+            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
+                                  rho_ao=this%work_rho_ao_ao_asymm, &
+                                  qs_env=qs_env, &
+                                  external_x_data=tddft_env%kernel_x_data_lr)
+            ! Add short-range contribution
+            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
+                                  rho_ao=this%work_rho_ao_ao_asymm, &
+                                  qs_env=qs_env, &
+                                  external_x_data=tddft_env%kernel_x_data_sr)
+         ELSE
+            ! Symmetric
+            CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
+            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
+                                  rho_ao=this%work_rho_ao_ao_symm, &
+                                  qs_env=qs_env)
+
+            ! Antisymmetric
+            CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
+            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
+                                  rho_ao=this%work_rho_ao_ao_asymm, &
+                                  qs_env=qs_env)
+         END IF
+
          ! BDCSR to FM
          CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
          CALL cp_fm_set_all(matrix=this%work2_ao_ao, alpha=0.0_dp)

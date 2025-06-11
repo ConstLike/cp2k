@@ -6,6 +6,7 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddft_types
+   USE hfx_types,                       ONLY: hfx_type
    USE qs_integrate_potential,          ONLY: integrate_v_rspace,&
                                               integrate_v_rspace_one_center
    USE qs_tddfpt2_operators,            ONLY: tddfpt_apply_coulomb,&
@@ -303,6 +304,17 @@ MODULE qs_tddft_types
       !> Energy difference E_virt - E_occ
       REAL(dp), ALLOCATABLE, DIMENSION(:) :: e_virt_minus_occ
 
+      !> Flag indicating if the functional is range-separated
+      LOGICAL :: is_range_separated
+      !> Index for long-range HFX setup in qs_env%x_data
+      INTEGER :: irep_long_range
+      !> Index for short-range HFX setup in qs_env%x_data
+      INTEGER :: irep_short_range
+      !> Long-range HFX kernel data (1, n_threads)
+      TYPE(hfx_type), ALLOCATABLE, DIMENSION(:,:) :: kernel_x_data_lr
+      !> Short-range HFX kernel data (1, n_threads)
+      TYPE(hfx_type), ALLOCATABLE, DIMENSION(:,:) :: kernel_x_data_sr
+
    END TYPE tddft_info_type
 
 CONTAINS
@@ -362,13 +374,15 @@ CONTAINS
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
-      INTEGER                                            :: ivec, ispin, handle
+      TYPE(hfx_type), DIMENSION(:,:), POINTER            :: hfx_data
+      INTEGER                                            :: ivec, ispin, handle, i_thread, n_threads
 
       CALL timeset(routineN, handle)
 
       CALL get_qs_env(qs_env=qs_env, &
                       dft_control=dft_control, &
-                      matrix_s=matrix_s)
+                      matrix_s=matrix_s, &
+                      x_data=hfx_data)
 
       CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=tddft_env%nocca)
       CALL cp_fm_get_info(gs_mos(2)%mos_occ, ncol_global=tddft_env%noccb)
@@ -504,6 +518,41 @@ CONTAINS
 
       ! Allocate and set up qs_rho_type
 
+      ! --- Initialize range-separated HFX data ---
+      IF (ASSOCIATED(hfx_data)) THEN
+         ! Check if the functional is range-separated (more than one HFX section)
+         IF (SIZE(hfx_data, 1) > 1) THEN
+            tddft_env%is_range_separated = .TRUE.
+            ! Assume first index is SR, second is LR
+            tddft_env%irep_short_range = 1
+            tddft_env%irep_long_range = 2
+         ELSE
+            tddft_env%is_range_separated = .FALSE.
+            tddft_env%irep_short_range = 0
+            tddft_env%irep_long_range = 0
+         END IF
+         ! Number of threads corresponds to second dimension of hfx_data
+         n_threads = SIZE(hfx_data, 2)
+      ELSE
+         tddft_env%is_range_separated = .FALSE.
+         tddft_env%irep_short_range = 0
+         tddft_env%irep_long_range = 0
+         n_threads = 0
+      END IF
+
+      ! Allocate and populate kernel_x_data_lr and kernel_x_data_sr if range-separated
+      IF (tddft_env%is_range_separated) THEN
+         IF (n_threads > 0) THEN
+            ALLOCATE(tddft_env%kernel_x_data_lr(1, n_threads))
+            ALLOCATE(tddft_env%kernel_x_data_sr(1, n_threads))
+            DO i_thread = 1, n_threads
+               tddft_env%kernel_x_data_lr(1, i_thread) = hfx_data(tddft_env%irep_long_range, i_thread)
+               tddft_env%kernel_x_data_sr(1, i_thread) = hfx_data(tddft_env%irep_short_range, i_thread)
+            END DO
+         ELSE
+            CPABORT("HFX data not found for range-separated functional")
+         END IF
+      END IF
 
       CALL timestop(handle)
 
@@ -642,6 +691,10 @@ CONTAINS
 !        CALL qs_rho_release(this%rho_orb_struct_sub)
 !        DEALLOCATE(this%rho_orb_struct_sub)
 !     END IF
+
+      ! --- Deallocate range-separated HFX data ---
+      IF (ALLOCATED(this%kernel_x_data_lr)) DEALLOCATE(this%kernel_x_data_lr)
+      IF (ALLOCATED(this%kernel_x_data_sr)) DEALLOCATE(this%kernel_x_data_sr)
 
       CALL release_kernel_env(kernel_env%full_kernel)
       NULLIFY (kernel_env%full_kernel)
