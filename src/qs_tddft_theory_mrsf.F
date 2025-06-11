@@ -129,9 +129,8 @@ MODULE qs_tddft_theory_mrsf
    PUBLIC :: tddft_mrsf_theory_type
 
    TYPE, EXTENDS(tddft_theory_type) :: tddft_mrsf_theory_type
-      REAL(KIND=dp) :: C_hf
 
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:) :: spin_pair_coupling
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:,:) :: spin_pair_coupling
 
       !> Hamiltonian matrix in AO basis
       TYPE(cp_fm_type), POINTER, DIMENSION(:) :: hmat_ao_ao => NULL()
@@ -231,22 +230,31 @@ CONTAINS
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(section_vals_type), POINTER :: hfx_section
       INTEGER                                            :: handle, ivec, ispin, imat
 
       CALL timeset(routineN, handle)
 
-      hfx_section => section_vals_get_subs_vals(qs_env%input, "DFT%XC%HF")
-      CALL section_vals_val_get(hfx_section, "FRACTION", r_val=this%C_hf)
-      print *, "KKK C_hf=", this%C_hf
 
-      ALLOCATE(this%spin_pair_coupling(7), source=0.0_dp)
+      ALLOCATE(this%spin_pair_coupling(7, 2), source=0.0_dp)
 
-      this%spin_pair_coupling(1:4) = this%C_hf
-      this%spin_pair_coupling(5) = this%C_hf
-      this%spin_pair_coupling(6) = this%C_hf
-      this%spin_pair_coupling(7) = this%C_hf
-
+      IF (tddft_env%do_hfx_cam) THEN
+         ! For Short-Range (SR), Coulomb, Alpha term
+         this%spin_pair_coupling(1:4,1) = tddft_env%C_hf_alpha
+         this%spin_pair_coupling(5,1) = tddft_env%C_hf_alpha
+         this%spin_pair_coupling(6,1) = tddft_env%C_hf_alpha
+         this%spin_pair_coupling(7,1) = tddft_env%C_hf_alpha
+         ! Store Long-term (LR) scaling in second column
+         this%spin_pair_coupling(1:4,2) = tddft_env%C_hf_beta
+         this%spin_pair_coupling(5,2) = tddft_env%C_hf_beta
+         this%spin_pair_coupling(6,2) = tddft_env%C_hf_beta
+         this%spin_pair_coupling(7,2) = tddft_env%C_hf_beta
+      ELSE
+         ! Non-range-separated: use total HF fraction as in original code
+         this%spin_pair_coupling(1:4,1) = tddft_env%C_hf_alpha
+         this%spin_pair_coupling(5,1) = tddft_env%C_hf_alpha
+         this%spin_pair_coupling(6,1) = tddft_env%C_hf_alpha
+         this%spin_pair_coupling(7,1) = tddft_env%C_hf_alpha
+      END IF
       SELECT CASE (tddft_env%response_type)
       CASE(2) ! MRSF-S
          tddft_env%nStates = min(tddft_env%nstates, tddft_env%nstates_max-1)
@@ -257,9 +265,13 @@ CONTAINS
          tddft_env%nStates = min(tddft_env%nstates, tddft_env%nstates_max-3)
          tddft_env%mxvec = min(tddft_env%maxvec*tddft_env%nstates, &
                                tddft_env%nstates_max-3)
-         this%spin_pair_coupling(1:6) =-this%spin_pair_coupling(1:6)
+         this%spin_pair_coupling(1:6,1:2) =-this%spin_pair_coupling(1:6,1:2)
       END SELECT
-      print *, "KKK C_hf=", this%spin_pair_coupling
+      IF (sub_env%para_env%is_source()) THEN
+         print *, "KKK C_hf=", tddft_env%C_hf_alpha, tddft_env%C_hf_beta, tddft_env%do_hfx_cam
+         print *, "KKK C_hf=", this%spin_pair_coupling
+      END IF
+
 
       !=== hmat_ao_ao [nbf, nbf] =======================
       CALL cp_fm_struct_create(fm_struct, &
@@ -875,9 +887,8 @@ CONTAINS
          CALL cp_fm_set_element(tddft_env%evects_mo(istate), imo_occ, imo_virt, 1.0_dp)
          IF (istate > tddft_env%nStates) CYCLE
          IF (log_unit > 0) &
-            WRITE (log_unit, '(T7,I8,T24,I8,T37,A5,T45,I8,T54,A5,T60,2F14.5)') &
-            istate, imo_occ, '(adp)', gs_mos(2)%homo + imo_virt, '(adp)', e_virt_m_occ(istate)*evolt, &
-            tddft_env%evects_mo(istate)%local_data(imo_occ, imo_virt)
+            WRITE (log_unit, '(T7,I8,T24,I8,T37,A5,T45,I8,T54,A5,T60,F14.5)') &
+            istate, imo_occ, '(adp)', gs_mos(2)%homo + imo_virt, '(adp)', e_virt_m_occ(istate)*evolt
       end do
 
       IF (log_unit > 0) THEN
@@ -1153,9 +1164,12 @@ CONTAINS
       TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER     :: rho_ia_g
       TYPE(hfx_type), DIMENSION(:, :), POINTER        :: hfx_data
       INTEGER :: imat
+      TYPE(section_vals_type), POINTER                   :: hf_section
       LOGICAL :: skip_sym, skip_asym
       TYPE(pw_poisson_type), POINTER :: poisson_env
       REAL(KIND=dp) :: pair_energy
+      INTEGER :: n_rep_hf, i_rep, i_thread
+
       IF (.FALSE. .AND. ivec == 1) THEN
          print *, this%unused
          tddft_env = tddft_env
@@ -1164,8 +1178,13 @@ CONTAINS
          sub_env = sub_env
          NULLIFY(tddfpt_control)
       END IF
+
       CALL get_qs_env(qs_env=qs_env, &
                       x_data=hfx_data)
+
+      hf_section => section_vals_get_subs_vals(section_vals=qs_env%input, &
+                                               subsection_name="DFT%XC%HF")
+      CALL section_vals_get(hf_section, n_repetition=n_rep_hf)
 
       !-----------------------------------------------
       ! ERI contraction: Sigma = ERI * X [DBCSR type]
@@ -1173,12 +1192,23 @@ CONTAINS
       IF (tddfpt_control%do_hfx) THEN
          DO imat = 1, 7
 
-            IF (abs(this%spin_pair_coupling(imat))<1.0e-10_dp) CYCLE
-
-            IF (sub_env%para_env%is_source()) THEN
-               hfx_data%general_parameter%fraction = this%spin_pair_coupling(imat)
+            IF (abs(this%spin_pair_coupling(imat, 1))<1.0e-10_dp) CYCLE
+!           IF (abs(this%spin_pair_coupling(imat, 2))<1.0e-10_dp) CYCLE
+!
+            IF (tddft_env%do_hfx_cam) THEN
+               DO i_rep = 1, n_rep_hf
+                  DO i_thread = 1, SIZE(hfx_data, 2)
+                     hfx_data(i_rep, i_thread)%potential_parameter%scale_coulomb = this%spin_pair_coupling(imat, 1)
+                     hfx_data(i_rep, i_thread)%potential_parameter%scale_longrange = this%spin_pair_coupling(imat, 2)
+                  END DO
+               END DO
+            ELSE
+               DO i_rep = 1, n_rep_hf
+                  DO i_thread = 1, SIZE(hfx_data, 2)
+                     hfx_data(i_rep, i_thread)%general_parameter%fraction = this%spin_pair_coupling(imat, 1)
+                  END DO
+               END DO
             END IF
-            CALL sub_env%para_env%bcast(hfx_data%general_parameter%fraction, source=0)
 
             logger = logger
 !           print *, "KKK| imat = ", imat, hfx_data%general_parameter%fraction
@@ -1239,7 +1269,7 @@ CONTAINS
                                   matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
                                   keep_sparsity=.TRUE.)
 
-            ! Symmetric
+            ! Symmetric part
             CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
             IF (.NOT.skip_sym) THEN
                CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
@@ -1247,13 +1277,14 @@ CONTAINS
                                      qs_env=qs_env)
             END IF
 
-            ! Antisymmetric
+            ! Antisymmetric part
             CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
             IF (.NOT.skip_asym) THEN
                CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
                                      rho_ao=this%work_rho_ao_ao_asymm, &
                                      qs_env=qs_env)
             END IF
+
             ! BDCSR to FM
             CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
             CALL cp_fm_set_all(matrix=this%work2_ao_ao, alpha=0.0_dp)
@@ -1310,7 +1341,7 @@ CONTAINS
             CALL pw_transfer(this%work_v_gspace, this%work_v_rspace)
 
             ! Scale by Hartree-Fock exchange
-            CALL pw_scale(this%work_v_rspace, this%spin_pair_coupling(imat))
+            CALL pw_scale(this%work_v_rspace, this%spin_pair_coupling(imat, 1))
 
             ! Scale by grid volume element
             CALL pw_scale(this%work_v_rspace, this%work_v_rspace%pw_grid%dvol)
@@ -1336,10 +1367,20 @@ CONTAINS
 !           print *, "KKK| imat = ", imat
 !           CALL print_mat_ao_ao(this%work2_ao_ao, "hmat_ao_coulomb", logger, ivec)
          END DO
-      IF (sub_env%para_env%is_source()) THEN
-         hfx_data%general_parameter%fraction = this%C_hf
-      END IF
-      CALL sub_env%para_env%bcast(hfx_data%general_parameter%fraction, source=0)
+         IF (tddft_env%do_hfx_cam) THEN
+            DO i_rep = 1, n_rep_hf
+               DO i_thread = 1, SIZE(hfx_data, 2)
+                  hfx_data(i_rep, i_thread)%potential_parameter%scale_coulomb = tddft_env%C_hf_alpha
+                  hfx_data(i_rep, i_thread)%potential_parameter%scale_longrange = tddft_env%C_hf_beta
+               END DO
+            END DO
+         ELSE
+            DO i_rep = 1, n_rep_hf
+               DO i_thread = 1, SIZE(hfx_data, 2)
+                  hfx_data(i_rep, i_thread)%general_parameter%fraction = tddft_env%C_hf_alpha
+               END DO
+            END DO
+         END IF
       END IF
 
    END SUBROUTINE mrsf_apply_operator

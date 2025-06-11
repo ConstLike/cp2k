@@ -6,6 +6,10 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddft_types
+   USE input_constants,                 ONLY: &
+        do_hfx_auto_shells, do_potential_coulomb, do_potential_gaussian, do_potential_id, &
+        do_potential_long, do_potential_mix_cl, do_potential_mix_cl_trunc, do_potential_mix_lg, &
+        do_potential_short, do_potential_truncated, hfx_ri_do_2c_diag, hfx_ri_do_2c_iter
    USE hfx_types,                       ONLY: hfx_type
    USE qs_integrate_potential,          ONLY: integrate_v_rspace,&
                                               integrate_v_rspace_one_center
@@ -304,16 +308,20 @@ MODULE qs_tddft_types
       !> Energy difference E_virt - E_occ
       REAL(dp), ALLOCATABLE, DIMENSION(:) :: e_virt_minus_occ
 
+      LOGICAL :: do_hfx
+      REAL(KIND=dp) :: C_hf_alpha
+      REAL(KIND=dp) :: C_hf_beta
+      REAL(KIND=dp) :: C_hf_omega
       !> Flag indicating if the functional is range-separated
-      LOGICAL :: is_range_separated
+      LOGICAL :: do_hfx_cam
       !> Index for long-range HFX setup in qs_env%x_data
-      INTEGER :: irep_long_range
+      INTEGER :: irep_long_range = 2
       !> Index for short-range HFX setup in qs_env%x_data
-      INTEGER :: irep_short_range
+      INTEGER :: irep_short_range = 1
       !> Long-range HFX kernel data (1, n_threads)
-      TYPE(hfx_type), ALLOCATABLE, DIMENSION(:,:) :: kernel_x_data_lr
+      TYPE(hfx_type), ALLOCATABLE, DIMENSION(:,:) :: hfx_data_lr
       !> Short-range HFX kernel data (1, n_threads)
-      TYPE(hfx_type), ALLOCATABLE, DIMENSION(:,:) :: kernel_x_data_sr
+      TYPE(hfx_type), ALLOCATABLE, DIMENSION(:,:) :: hfx_data_sr
 
    END TYPE tddft_info_type
 
@@ -374,15 +382,62 @@ CONTAINS
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
-      TYPE(hfx_type), DIMENSION(:,:), POINTER            :: hfx_data
-      INTEGER                                            :: ivec, ispin, handle, i_thread, n_threads
+      TYPE(section_vals_type), POINTER                   :: hf_section
+      INTEGER                                            :: ivec, ispin, handle
+      INTEGER :: n_rep_hf, potential_type
+      LOGICAL :: explicit
 
       CALL timeset(routineN, handle)
 
       CALL get_qs_env(qs_env=qs_env, &
                       dft_control=dft_control, &
-                      matrix_s=matrix_s, &
-                      x_data=hfx_data)
+                      matrix_s=matrix_s)
+
+      ! Get number of HF sections
+      hf_section => section_vals_get_subs_vals(section_vals=qs_env%input, &
+                                               subsection_name="DFT%XC%HF")
+      CALL section_vals_val_get(section_vals=hf_section, &
+                                keyword_name="FRACTION", &
+                                r_val=tddft_env%C_hf_alpha, &
+                                i_rep_section=1)
+      CALL section_vals_get(hf_section, n_repetition=n_rep_hf)
+      IF (n_rep_hf > 0) THEN
+          ! Get FRACTION from the first HF section
+          CALL section_vals_val_get(hf_section, "FRACTION", r_val=tddft_env%C_hf_alpha, i_rep_section=1)
+          tddft_env%do_hfx = ABS(tddft_env%C_hf_alpha) > 1.0e-10_dp
+          IF (tddft_env%do_hfx) THEN
+              ! Get POTENTIAL_TYPE, defaults to do_potential_coulomb if not specified
+              CALL section_vals_val_get(hf_section, "INTERACTION_POTENTIAL%POTENTIAL_TYPE", &
+                                        i_val=potential_type, i_rep_section=1, explicit=explicit)
+              IF (.NOT. explicit) potential_type = do_potential_coulomb
+              tddft_env%do_hfx_cam = (potential_type == do_potential_mix_cl .OR. &
+                            potential_type == do_potential_mix_cl_trunc .OR. &
+                            potential_type == do_potential_short .OR. &
+                            potential_type == do_potential_long)
+          ELSE
+              tddft_env%do_hfx_cam = .FALSE.
+          END IF
+      ELSE
+          tddft_env%do_hfx = .FALSE.
+          tddft_env%do_hfx_cam = .FALSE.
+      END IF
+
+      If (tddft_env%do_hfx_cam) THEN
+         CALL section_vals_val_get(hf_section, "INTERACTION_POTENTIAL%SCALE_COULOMB", &
+                                   r_val=tddft_env%C_hf_alpha)
+         CALL section_vals_val_get(hf_section, "INTERACTION_POTENTIAL%SCALE_LONGRANGE", &
+                                   r_val=tddft_env%C_hf_beta)
+         CALL section_vals_val_get(hf_section, "INTERACTION_POTENTIAL%OMEGA", &
+                                   r_val=tddft_env%C_hf_omega)
+      END IF
+
+      IF (sub_env%para_env%is_source()) THEN
+         PRINT *, "KKK| do_hfx=", tddft_env%do_hfx
+         PRINT *, "KKK| do_hfx_cam=", tddft_env%do_hfx_cam
+         PRINT *, "KKK| C_hf_alpha=", tddft_env%C_hf_alpha
+         PRINT *, "KKK| C_hf_beta =", tddft_env%C_hf_beta
+         PRINT *, "KKK| C_hf_omega =", tddft_env%C_hf_omega
+      END IF
 
       CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=tddft_env%nocca)
       CALL cp_fm_get_info(gs_mos(2)%mos_occ, ncol_global=tddft_env%noccb)
@@ -517,43 +572,7 @@ CONTAINS
       !--------------------
 
       ! Allocate and set up qs_rho_type
-
-      ! --- Initialize range-separated HFX data ---
-      IF (ASSOCIATED(hfx_data)) THEN
-         ! Check if the functional is range-separated (more than one HFX section)
-         IF (SIZE(hfx_data, 1) > 1) THEN
-            tddft_env%is_range_separated = .TRUE.
-            ! Assume first index is SR, second is LR
-            tddft_env%irep_short_range = 1
-            tddft_env%irep_long_range = 2
-         ELSE
-            tddft_env%is_range_separated = .FALSE.
-            tddft_env%irep_short_range = 0
-            tddft_env%irep_long_range = 0
-         END IF
-         ! Number of threads corresponds to second dimension of hfx_data
-         n_threads = SIZE(hfx_data, 2)
-      ELSE
-         tddft_env%is_range_separated = .FALSE.
-         tddft_env%irep_short_range = 0
-         tddft_env%irep_long_range = 0
-         n_threads = 0
-      END IF
-
-      ! Allocate and populate kernel_x_data_lr and kernel_x_data_sr if range-separated
-      IF (tddft_env%is_range_separated) THEN
-         IF (n_threads > 0) THEN
-            ALLOCATE(tddft_env%kernel_x_data_lr(1, n_threads))
-            ALLOCATE(tddft_env%kernel_x_data_sr(1, n_threads))
-            DO i_thread = 1, n_threads
-               tddft_env%kernel_x_data_lr(1, i_thread) = hfx_data(tddft_env%irep_long_range, i_thread)
-               tddft_env%kernel_x_data_sr(1, i_thread) = hfx_data(tddft_env%irep_short_range, i_thread)
-            END DO
-         ELSE
-            CPABORT("HFX data not found for range-separated functional")
-         END IF
-      END IF
-
+      !
       CALL timestop(handle)
 
    END SUBROUTINE tddft_initialization
@@ -693,8 +712,8 @@ CONTAINS
 !     END IF
 
       ! --- Deallocate range-separated HFX data ---
-      IF (ALLOCATED(this%kernel_x_data_lr)) DEALLOCATE(this%kernel_x_data_lr)
-      IF (ALLOCATED(this%kernel_x_data_sr)) DEALLOCATE(this%kernel_x_data_sr)
+      IF (ALLOCATED(this%hfx_data_sr)) DEALLOCATE(this%hfx_data_sr)
+      IF (ALLOCATED(this%hfx_data_lr)) DEALLOCATE(this%hfx_data_lr)
 
       CALL release_kernel_env(kernel_env%full_kernel)
       NULLIFY (kernel_env%full_kernel)

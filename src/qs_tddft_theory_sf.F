@@ -676,9 +676,8 @@ CONTAINS
          CALL cp_fm_set_element(tddft_env%evects_mo(istate), imo_occ, imo_virt, 1.0_dp)
          IF (istate > tddft_env%nStates) CYCLE
          IF (log_unit > 0) &
-            WRITE (log_unit, '(T7,I8,T24,I8,T37,A5,T45,I8,T54,A5,T60,2F14.5)') &
-            istate, imo_occ, '(alp)', gs_mos(2)%homo + imo_virt, '(bet)', e_virt_m_occ(istate)*evolt, &
-            tddft_env%evects_mo(istate)%local_data(imo_occ, imo_virt)
+            WRITE (log_unit, '(T7,I8,T24,I8,T37,A5,T45,I8,T54,A5,T60,F14.5)') &
+            istate, imo_occ, '(alp)', gs_mos(2)%homo + imo_virt, '(bet)', e_virt_m_occ(istate)*evolt
       end do
 
       IF (log_unit > 0) THEN
@@ -809,46 +808,17 @@ CONTAINS
                                matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
                                keep_sparsity=.TRUE.)
 
-         IF (tddft_env%is_range_separated) THEN
-            ! --- Range-separated HFX: Compute LR and SR separately ---
-            ! Symmetric part
-            CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
-            ! Long-range contribution
-            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
-                                  rho_ao=this%work_rho_ao_ao_symm, &
-                                  qs_env=qs_env, &
-                                  external_x_data=tddft_env%kernel_x_data_lr)
-            ! Add short-range contribution
-            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
-                                  rho_ao=this%work_rho_ao_ao_symm, &
-                                  qs_env=qs_env, &
-                                  external_x_data=tddft_env%kernel_x_data_sr)
+         ! Symmetric
+         CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
+         CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
+                               rho_ao=this%work_rho_ao_ao_symm, &
+                               qs_env=qs_env)
 
-            ! Antisymmetric part
-            CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
-            ! Long-range contribution
-            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
-                                  rho_ao=this%work_rho_ao_ao_asymm, &
-                                  qs_env=qs_env, &
-                                  external_x_data=tddft_env%kernel_x_data_lr)
-            ! Add short-range contribution
-            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
-                                  rho_ao=this%work_rho_ao_ao_asymm, &
-                                  qs_env=qs_env, &
-                                  external_x_data=tddft_env%kernel_x_data_sr)
-         ELSE
-            ! Symmetric
-            CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
-            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
-                                  rho_ao=this%work_rho_ao_ao_symm, &
-                                  qs_env=qs_env)
-
-            ! Antisymmetric
-            CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
-            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
-                                  rho_ao=this%work_rho_ao_ao_asymm, &
-                                  qs_env=qs_env)
-         END IF
+         ! Antisymmetric
+         CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
+         CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
+                               rho_ao=this%work_rho_ao_ao_asymm, &
+                               qs_env=qs_env)
 
          ! BDCSR to FM
          CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
