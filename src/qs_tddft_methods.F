@@ -6,6 +6,8 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddft_methods
+   USE qs_tddfpt2_methods,              ONLY: kernel_info, &
+                                              tddfpt_input
    USE header,                          ONLY: tddft_header
    USE message_passing,                 ONLY: mp_comm_type,&
                                               mp_para_env_type,&
@@ -206,54 +208,74 @@ MODULE qs_tddft_methods
    INTEGER, PARAMETER, PRIVATE          :: nderivs = 3
    INTEGER, PARAMETER, PRIVATE          :: maxspins = 2
 
-   PUBLIC :: tddft, tddft_energies
+   PUBLIC :: tddft
 
 CONTAINS
+
    SUBROUTINE tddft(qs_env, calc_forces)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       LOGICAL, INTENT(IN)                                :: calc_forces
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft'
 
+      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+         POINTER                                         :: gs_mos
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(section_vals_type), POINTER                   :: tddfpt_print_section
       TYPE(section_vals_type), POINTER                   :: tddfpt_section
       TYPE(section_vals_type), POINTER                   :: xc_section
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
-         POINTER                                         :: gs_mos
-      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(tddft_info_type)                              :: tddft_env
+      CLASS(tddft_theory_type), ALLOCATABLE              :: theory_handler
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_ks_oep
-      INTEGER                                            :: log_unit
-      INTEGER                                            :: handle
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      CHARACTER(LEN=6), DIMENSION(1)                     :: theory_to_run
+      CHARACTER(LEN=6)                                   :: logo
+      INTEGER                                            :: handle, i, log_unit
+      LOGICAL                                            :: do_admm, do_exck, do_hfx, do_hfxlr, &
+                                                            do_hfxsr
+      TYPE(section_vals_type), POINTER                   :: hfxsr_section, lri_section
 
       CALL timeset(routineN, handle)
+
+      IF(calc_forces) THEN
+      END IF
+
+      NULLIFY (logger)
+      logger => cp_get_default_logger()
+
+
+      NULLIFY (tddfpt_section)
+      tddfpt_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT")
+
+      CALL tddfpt_input(qs_env, do_hfx, do_admm, do_exck, &
+                        do_hfxsr, do_hfxlr, xc_section, tddfpt_print_section, &
+                        lri_section, hfxsr_section)
+
+      log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, "PROGRAM_BANNER", &
+                                      extension=".tddfptLog")
 
       CALL get_qs_env(qs_env, &
                       blacs_env=blacs_env, &
                       dft_control=dft_control, &
                       matrix_ks=matrix_ks)
-
-      IF(calc_forces) THEN
-      END IF
+      tddfpt_control => dft_control%tddfpt2_control
+      tddfpt_control%do_hfx = do_hfx
+      tddfpt_control%do_admm = do_admm
+      tddfpt_control%do_hfxsr = do_hfxsr
+      tddfpt_control%hfxsr_primbas = 0
+      tddfpt_control%hfxsr_re_int = .TRUE.
+      tddfpt_control%do_hfxlr = do_hfxlr
+      tddfpt_control%do_exck = do_exck
 
       NULLIFY(tddfpt_control)
       tddfpt_control => dft_control%tddfpt2_control
 
-      NULLIFY (logger, tddfpt_section, tddfpt_print_section, xc_section)
-      logger => cp_get_default_logger()
-      tddfpt_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT")
-      tddfpt_print_section => section_vals_get_subs_vals(tddfpt_section, "PRINT")
-      xc_section => section_vals_get_subs_vals(tddfpt_section, "XC")
-
-      log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, "PROGRAM_BANNER", &
-                                      extension=".tddfptLog")
-
       CALL cite_reference(Iannuzzi2005)
 
-      CALL tddfpt_header(log_unit)
-!     CALL kernel_info(log_unit, dft_control, tddfpt_control, xc_section)
+      CALL tddft_header(log_unit)
+      CALL kernel_info(log_unit, dft_control, tddfpt_control, xc_section)
 
       NULLIFY (gs_mos)
       CALL tddfpt_init_mos(qs_env, gs_mos, log_unit)
@@ -268,42 +290,18 @@ CONTAINS
 
       IF (ASSOCIATED(matrix_ks_oep)) matrix_ks => matrix_ks_oep
 
-      END SUBROUTINE tddft
+      IF ((tddfpt_control%do_lrigpw) .AND. &
+          (tddfpt_control%kernel /= tddfpt_kernel_full)) THEN
+         CALL cp_abort(__LOCATION__, "LRI only implemented for full kernel")
+      END IF
 
-   SUBROUTINE tddft_energies(qs_env, sub_env, kernel_env, full_kernel_env, &
-                             gs_mos, matrix_ks, logger, tddfpt_control, &
-                             xc_section, tddfpt_print_section)
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(tddfpt_subgroup_env_type)                     :: sub_env
-      TYPE(kernel_env_type)                              :: kernel_env
-      TYPE(full_kernel_env_type), TARGET                 :: full_kernel_env
-      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
-         POINTER                                         :: gs_mos
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks
-      TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
-      TYPE(section_vals_type), POINTER                   :: xc_section
-      TYPE(section_vals_type), POINTER                   :: tddfpt_print_section
 
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_energies'
-
-      TYPE(tddft_info_type)                              :: tddft_env
-      CLASS(tddft_theory_type), ALLOCATABLE              :: theory_handler
-      CHARACTER(LEN=6), DIMENSION(3)                     :: theory_to_run
-      CHARACTER(LEN=6)                                   :: logo
-      INTEGER                                            :: handle, i
-
-      CALL timeset(routineN, handle)
-
-      full_kernel_env = full_kernel_env
-      xc_section = xc_section
-      kernel_env = kernel_env
-
-      theory_to_run = ["    SF", "MRSF-S", "MRSF-T"]
+!     theory_to_run = ["    SF", "MRSF-S", "MRSF-T"]
+      theory_to_run = ["    SF"]
 
       DO i = 1, SIZE(theory_to_run)
 
-         CALL tddft_initialization(tddft_env, qs_env, gs_mos, sub_env)
+         CALL tddft_initialization(tddft_env, qs_env, gs_mos, blacs_env)
 
          CALL tddft_setup_data(tddft_env, qs_env, gs_mos, &
                                matrix_ks, tddfpt_control)
@@ -322,17 +320,22 @@ CONTAINS
           END SELECT
 
          CALL tddft_run(tddft_env, theory_handler, qs_env, tddfpt_control, logger, &
-                        tddfpt_print_section, gs_mos, kernel_env, &
-                        sub_env, logo)
+                        tddfpt_print_section, gs_mos, &
+                        blacs_env, logo)
 
          DEALLOCATE(theory_handler)
 
-         CALL tddft_finalization(tddft_env, sub_env, kernel_env)
+         CALL tddft_finalization(tddft_env, blacs_env)
       END DO
+
+      DO i = tddft_env%nspins, 1, -1
+         CALL tddfpt_release_ground_state_mos(gs_mos(i))
+      END DO
+      DEALLOCATE (gs_mos)
 
       CALL timestop(handle)
 
-   END SUBROUTINE tddft_energies
+   END SUBROUTINE tddft
 
    SUBROUTINE tddft_setup_data(tddft_env, qs_env, gs_mos, matrix_ks, &
                                tddfpt_control)
@@ -388,17 +391,16 @@ CONTAINS
    END SUBROUTINE tddft_setup_data
 
    SUBROUTINE tddft_run(tddft_env, theory_handler, qs_env, tddfpt_control, logger, tddfpt_print_section, &
-                        gs_mos, kernel_env, sub_env, logo)
+                        gs_mos, blacs_env, logo)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       CLASS(tddft_theory_type)                           :: theory_handler
-      TYPE(kernel_env_type)                              :: kernel_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(section_vals_type), POINTER                   :: tddfpt_print_section
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          POINTER                                         :: gs_mos
-      TYPE(tddfpt_subgroup_env_type)                     :: sub_env
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       CHARACTER(LEN=6)                                   :: logo
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_run'
@@ -414,7 +416,7 @@ CONTAINS
 
       t1 = m_walltime()
 
-      CALL theory_handler%allocate_theory_data(qs_env, tddft_env, sub_env)
+      CALL theory_handler%allocate_theory_data(qs_env, tddft_env, blacs_env)
 
       niters = tddfpt_control%niters
       IF (niters > 0) THEN
@@ -422,7 +424,7 @@ CONTAINS
          log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, &
                                          "GUESS_VECTORS", extension=".tddfptLog")
 
-         CALL theory_handler%initialize_guess_vectors(qs_env, sub_env, tddft_env, gs_mos, &
+         CALL theory_handler%initialize_guess_vectors(qs_env, tddft_env, gs_mos, &
                                                       tddfpt_control, log_unit)
 
          ! Close logger
@@ -465,15 +467,15 @@ CONTAINS
                   CALL theory_handler%mo_to_ao_transform(tddft_env, gs_mos, ivec, logger)
 
                   !> Apply all operators (HFX, XC, ...), build Sigma vectors (=A*X) in AO space
-                  CALL theory_handler%apply_operator(qs_env, tddft_env, kernel_env, &
-                                                     sub_env, tddfpt_control, ivec, logger)
+                  CALL theory_handler%apply_operator(qs_env, tddft_env, &
+                                                     blacs_env, tddfpt_control, ivec, logger)
 
                   !> AO->MO transformation for resulting vectors
                   CALL theory_handler%ao_to_mo_transform(tddft_env,gs_mos,ivec, logger)
                END DO
 
                !> Run converger and expand the vectors space if needed
-               tddft_env%status = run_converger(tddft_env, sub_env, tddfpt_control, &
+               tddft_env%status = run_converger(tddft_env, blacs_env, tddfpt_control, &
                                                 log_unit, logger, iter)
 
                !> Print iteration time and max_error
@@ -566,14 +568,14 @@ CONTAINS
 
       CALL theory_handler%print_theory_data(qs_env, tddft_env, gs_mos, tddfpt_control, log_unit)
 
-      CALL theory_handler%deallocate_theory_data(sub_env)
+      CALL theory_handler%deallocate_theory_data(qs_env)
 
       CALL timestop(handle)
    END SUBROUTINE tddft_run
 
-   FUNCTION run_converger(tddft_env, sub_env, tddfpt_control, log_unit, logger, iter) RESULT(status)
+   FUNCTION run_converger(tddft_env, blacs_env, tddfpt_control, log_unit, logger, iter) RESULT(status)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
-      TYPE(tddfpt_subgroup_env_type)                     :: sub_env
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       INTEGER                                            :: log_unit
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -591,7 +593,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      CALL converger_run(tddft_env, log_unit, sub_env, logger, iter)
+      CALL converger_run(tddft_env, log_unit, blacs_env, logger, iter)
 
       tddft_env%max_error = maxval(tddft_env%residual_norms)
       ! Compute max energy difference between this and previous iteration
@@ -710,9 +712,9 @@ CONTAINS
 
    END FUNCTION run_converger
 
-   SUBROUTINE converger_run(tddft_env, log_unit, sub_env, logger, iter)
+   SUBROUTINE converger_run(tddft_env, log_unit, blacs_env, logger, iter)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
-      TYPE(tddfpt_subgroup_env_type)                     :: sub_env
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       INTEGER                                            :: log_unit
       TYPE(cp_logger_type), POINTER                      :: logger
       INTEGER                                            :: iter
@@ -725,8 +727,8 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       ! Dynamic allocation based on current value of nvec: A[nvec,nvec]
-      CALL allocate_fm_matrix(tddft_env%subspace, tddft_env%nvec, tddft_env%nvec, sub_env)
-      CALL allocate_fm_matrix(tddft_env%subspace_evecs, tddft_env%nvec, tddft_env%nvec, sub_env)
+      CALL allocate_fm_matrix(tddft_env%subspace, tddft_env%nvec, tddft_env%nvec, blacs_env)
+      CALL allocate_fm_matrix(tddft_env%subspace_evecs, tddft_env%nvec, tddft_env%nvec, blacs_env)
 
       ! (1) build sub-space matrix Atilde = X^T * sigma * X
       ! Could be DGEMM

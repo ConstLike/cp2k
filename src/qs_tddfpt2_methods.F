@@ -6,7 +6,6 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddfpt2_methods
-   USE qs_tddft_methods,                ONLY: tddft_energies
    USE admm_methods,                    ONLY: admm_fit_mo_coeffs
    USE admm_types,                      ONLY: admm_type,&
                                               get_admm_env
@@ -127,7 +126,7 @@ MODULE qs_tddfpt2_methods
    INTEGER, PARAMETER, PRIVATE          :: nderivs = 3
    INTEGER, PARAMETER, PRIVATE          :: maxspins = 2
 
-   PUBLIC :: tddfpt, tddfpt_energies, tddfpt_input
+   PUBLIC :: tddfpt, tddfpt_energies, tddfpt_input, kernel_info
 
 ! **************************************************************************************************
 
@@ -163,7 +162,7 @@ CONTAINS
       TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       TYPE(cp_fm_struct_type), POINTER                   :: matrix_struct
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: my_mos, my_all_mos
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: my_mos
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :)     :: dipole_op_mos_occ, evects, S_evects
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_ks_oep, matrix_s, &
@@ -210,7 +209,6 @@ CONTAINS
                       cell=cell, &
                       dft_control=dft_control, &
                       matrix_ks=matrix_ks, &
-                      matrix_s=matrix_s, &
                       mos=mos, &
                       scf_env=scf_env)
       tddfpt_control => dft_control%tddfpt2_control
@@ -246,9 +244,9 @@ CONTAINS
 
       CALL tddfpt_header(log_unit)
       CALL kernel_info(log_unit, dft_control, tddfpt_control, xc_section)
+
       ! obtain occupied and virtual (unoccupied) ground-state Kohn-Sham orbitals
       NULLIFY (gs_mos)
-
       CALL tddfpt_init_mos(qs_env, gs_mos, log_unit)
 
       ! obtain smeared occupation numbers
@@ -288,21 +286,12 @@ CONTAINS
 
       ! split mpi communicator
       ALLOCATE (my_mos(nspins))
-      ALLOCATE (my_all_mos(nspins))
       DO ispin = 1, nspins
          my_mos(ispin) = gs_mos(ispin)%mos_occ
-         my_all_mos(ispin) = gs_mos(ispin)%mos_full
       END DO
       CALL tddfpt_sub_env_init(sub_env, qs_env, mos_occ=my_mos(:), &
-                               mos=my_all_mos(:), kernel=tddfpt_control%kernel)
+                               kernel=tddfpt_control%kernel)
       DEALLOCATE (my_mos)
-      DEALLOCATE (my_all_mos)
-
-      IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
-         CALL tddft_energies(qs_env, sub_env, kernel_env, full_kernel_env, &
-                             gs_mos, matrix_ks, logger, tddfpt_control, &
-                             xc_section, tddfpt_print_section)
-      END IF
 
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
          ! create environment for Full Kernel

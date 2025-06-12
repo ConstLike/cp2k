@@ -309,28 +309,20 @@ MODULE qs_tddft_types
       REAL(dp), ALLOCATABLE, DIMENSION(:) :: e_virt_minus_occ
 
       LOGICAL :: do_hfx
+      !> Flag indicating if the functional is range-separated
+      LOGICAL :: do_hfx_cam
       REAL(KIND=dp) :: C_hf_alpha
       REAL(KIND=dp) :: C_hf_beta
       REAL(KIND=dp) :: C_hf_omega
-      !> Flag indicating if the functional is range-separated
-      LOGICAL :: do_hfx_cam
-      !> Index for long-range HFX setup in qs_env%x_data
-      INTEGER :: irep_long_range = 2
-      !> Index for short-range HFX setup in qs_env%x_data
-      INTEGER :: irep_short_range = 1
-      !> Long-range HFX kernel data (1, n_threads)
-      TYPE(hfx_type), ALLOCATABLE, DIMENSION(:,:) :: hfx_data_lr
-      !> Short-range HFX kernel data (1, n_threads)
-      TYPE(hfx_type), ALLOCATABLE, DIMENSION(:,:) :: hfx_data_sr
 
    END TYPE tddft_info_type
 
 CONTAINS
 
-   SUBROUTINE allocate_fm_matrix(matrix, nrow, ncol, sub_env)
+   SUBROUTINE allocate_fm_matrix(matrix, nrow, ncol, blacs_env)
       TYPE(cp_fm_type), POINTER, INTENT(OUT)             :: matrix
       INTEGER, INTENT(IN)                                :: nrow, ncol
-      TYPE(tddfpt_subgroup_env_type), INTENT(IN)         :: sub_env
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'allocate_fm_matrix'
 
@@ -342,7 +334,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=nrow, &
                                ncol_global=ncol, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(matrix)
       CALL cp_fm_create(matrix, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
@@ -370,12 +362,12 @@ CONTAINS
 
    END SUBROUTINE deallocate_fm_matrix
 
-   SUBROUTINE tddft_initialization(tddft_env, qs_env, gs_mos, sub_env)
+   SUBROUTINE tddft_initialization(tddft_env, qs_env, gs_mos, blacs_env)
       CLASS(tddft_info_type), INTENT(INOUT)              :: tddft_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          POINTER                                         :: gs_mos
-      TYPE(tddfpt_subgroup_env_type), INTENT(IN)         :: sub_env
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_allocate_data'
 
@@ -431,7 +423,7 @@ CONTAINS
                                    r_val=tddft_env%C_hf_omega)
       END IF
 
-      IF (sub_env%para_env%is_source()) THEN
+      IF (blacs_env%para_env%is_source()) THEN
          PRINT *, "KKK| do_hfx=", tddft_env%do_hfx
          PRINT *, "KKK| do_hfx_cam=", tddft_env%do_hfx_cam
          PRINT *, "KKK| C_hf_alpha=", tddft_env%C_hf_alpha
@@ -483,12 +475,12 @@ CONTAINS
       CALL allocate_fm_matrix(matrix=tddft_env%focka_noc_noc, &
                               nrow=tddft_env%nocca, &
                               ncol=tddft_env%nocca, &
-                              sub_env=sub_env)
+                              blacs_env=blacs_env)
       !=== fockb_vir_vir [nvirb, nvirb]
       CALL allocate_fm_matrix(matrix=tddft_env%fockb_vir_vir, &
                               nrow=tddft_env%nvirb, &
                               ncol=tddft_env%nvirb, &
-                              sub_env=sub_env)
+                              blacs_env=blacs_env)
 
       !--------------------
       ! ALLOCATE  FM POOL
@@ -499,7 +491,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nocca, &
                                ncol_global=tddft_env%nvirb, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       CALL fm_pool_create(tddft_env%fm_pool_mo%pool, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
       !---------- END MO POOL [nocca, nvirb]
@@ -537,7 +529,7 @@ CONTAINS
          CALL cp_fm_struct_create(fm_struct, &
                                   nrow_global=tddft_env%nbf, &
                                   ncol_global=tddft_env%nbf, &
-                                  context=sub_env%blacs_env)
+                                  context=blacs_env)
          CALL fm_pool_create(tddft_env%fm_pool_ao(ispin)%pool, fm_struct)
          CALL cp_fm_struct_release(fm_struct)
       END DO
@@ -577,10 +569,9 @@ CONTAINS
 
    END SUBROUTINE tddft_initialization
 
-   SUBROUTINE tddft_finalization(this, sub_env, kernel_env)
+   SUBROUTINE tddft_finalization(this, blacs_env)
       CLASS(tddft_info_type), INTENT(INOUT)              :: this
-      TYPE(tddfpt_subgroup_env_type)                     :: sub_env
-      TYPE(kernel_env_type)                              :: kernel_env
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_deallocate_data'
 
@@ -588,7 +579,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      sub_env = sub_env
+      blacs_env = blacs_env
       !--------------------
       ! DEALLOCATE  DP
       !--------------------
@@ -710,13 +701,6 @@ CONTAINS
 !        CALL qs_rho_release(this%rho_orb_struct_sub)
 !        DEALLOCATE(this%rho_orb_struct_sub)
 !     END IF
-
-      ! --- Deallocate range-separated HFX data ---
-      IF (ALLOCATED(this%hfx_data_sr)) DEALLOCATE(this%hfx_data_sr)
-      IF (ALLOCATED(this%hfx_data_lr)) DEALLOCATE(this%hfx_data_lr)
-
-      CALL release_kernel_env(kernel_env%full_kernel)
-      NULLIFY (kernel_env%full_kernel)
 
       CALL timestop(handle)
 

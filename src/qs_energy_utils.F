@@ -60,6 +60,7 @@ MODULE qs_energy_utils
                                               qs_rho_type
    USE qs_scf,                          ONLY: scf
    USE qs_tddfpt2_methods,              ONLY: tddfpt
+   USE qs_tddft_methods,                ONLY: tddft
    USE qs_vxc,                          ONLY: qs_xc_density
    USE qs_vxc_atom,                     ONLY: calculate_vxc_atom
    USE tip_scan_methods,                ONLY: tip_scanning
@@ -195,10 +196,14 @@ CONTAINS
          CALL linres_calculation_low(qs_env)
       END IF
 
-      ! Calculates the energy, response vector and some contributions to the force
       IF (dft_control%tddfpt2_control%enabled) THEN
-         CALL tddfpt(qs_env, calc_forces)
+         CALL tddft(qs_env, calc_forces)
       END IF
+
+      ! Calculates the energy, response vector and some contributions to the force
+!     IF (dft_control%tddfpt2_control%enabled) THEN
+!        CALL tddfpt(qs_env, calc_forces)
+!     END IF
 
       ! post-SCF bandstructure calculation from higher level methods
       NULLIFY (post_scf_bands_section)

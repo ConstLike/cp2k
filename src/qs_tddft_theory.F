@@ -37,6 +37,7 @@
 ! **************************************************************************************************
 MODULE qs_tddft_theory
 
+   USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: tddfpt2_control_type
    USE cp_log_handling,                 ONLY: cp_logger_type
    USE qs_environment_types,            ONLY: qs_environment_type
@@ -90,27 +91,25 @@ MODULE qs_tddft_theory
 ! **************************************************************************************************
    ABSTRACT INTERFACE
       !> Allocate any theory-specific working arrays, buffers, etc.
-      SUBROUTINE allocate_theory_iface(this, qs_env, tddft_env, sub_env)
-         IMPORT :: tddft_theory_type, tddft_info_type, tddfpt_subgroup_env_type,&
+      SUBROUTINE allocate_theory_iface(this, qs_env, tddft_env, blacs_env)
+         IMPORT :: tddft_theory_type, tddft_info_type, cp_blacs_env_type,&
                    qs_environment_type
          CLASS(tddft_theory_type), INTENT(INOUT) :: this
          TYPE(qs_environment_type), POINTER :: qs_env
          TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
-         TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
+         TYPE(cp_blacs_env_type), POINTER                :: blacs_env
       END SUBROUTINE
       !> Set up initial guess vectors (theory-specific, e.g. SF, MRSF, ...)
-      SUBROUTINE init_guess_iface(this, qs_env, sub_env, tddft_env, gs_mos, &
+      SUBROUTINE init_guess_iface(this, qs_env, tddft_env, gs_mos, &
                                   tddfpt_control, log_unit)
          IMPORT                                          :: tddft_theory_type, &
                                                             tddft_info_type, &
                                                             tddfpt_ground_state_mos, &
                                                             qs_environment_type, &
                                                             cp_logger_type, &
-                                                            tddfpt2_control_type, & 
-                                                            tddfpt_subgroup_env_type
+                                                            tddfpt2_control_type
          CLASS(tddft_theory_type), INTENT(INOUT)         :: this
          TYPE(qs_environment_type), POINTER :: qs_env
-         TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
          TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
          TYPE(tddfpt_ground_state_mos), &
             DIMENSION(:), POINTER                        :: gs_mos
@@ -131,20 +130,18 @@ MODULE qs_tddft_theory
          TYPE(cp_logger_type), POINTER                   :: logger
       END SUBROUTINE
       !> Apply all HFX/XC/Coulomb/... operators for this theory, in AO basis
-      SUBROUTINE apply_op_iface(this, qs_env, tddft_env, kernel_env, sub_env, &
+      SUBROUTINE apply_op_iface(this, qs_env, tddft_env, blacs_env, &
                                 tddfpt_control, ivec, logger)
          IMPORT                                          :: tddft_theory_type, &
                                                             tddft_info_type, &
                                                             qs_environment_type, &
                                                             cp_logger_type, &
-                                                            kernel_env_type, &
-                                                            tddfpt_subgroup_env_type, &
+                                                            cp_blacs_env_type, &
                                                             tddfpt2_control_type
          CLASS(tddft_theory_type), INTENT(INOUT)         :: this
          TYPE(qs_environment_type), POINTER              :: qs_env
          TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
-         TYPE(kernel_env_type)                           :: kernel_env
-         TYPE(tddfpt_subgroup_env_type)                  :: sub_env
+         TYPE(cp_blacs_env_type), POINTER                :: blacs_env
          TYPE(tddfpt2_control_type), POINTER             :: tddfpt_control
          INTEGER, INTENT(IN)                             :: ivec
          TYPE(cp_logger_type), POINTER                   :: logger
@@ -175,10 +172,10 @@ MODULE qs_tddft_theory
          INTEGER                                         :: log_unit
       END SUBROUTINE
       !> Deallocate/free any theory-specific resources
-      SUBROUTINE deallocate_theory_iface(this, sub_env)
-         IMPORT :: tddft_theory_type, tddfpt_subgroup_env_type
+      SUBROUTINE deallocate_theory_iface(this, qs_env)
+         IMPORT :: tddft_theory_type, qs_environment_type
+         TYPE(qs_environment_type), POINTER :: qs_env
          CLASS(tddft_theory_type), INTENT(INOUT) :: this
-         TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
       END SUBROUTINE
    END INTERFACE
 

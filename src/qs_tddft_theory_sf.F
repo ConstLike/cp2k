@@ -7,6 +7,10 @@
 !
 MODULE qs_tddft_theory_sf
 
+   USE pw_env_types,                    ONLY: pw_env_release,&
+                                              pw_env_retain,&
+                                              pw_env_type
+   USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE machine,                         ONLY: m_flush,&
                                               m_walltime
    USE util,                            ONLY: sort
@@ -191,19 +195,20 @@ MODULE qs_tddft_theory_sf
 
 CONTAINS
 
-   SUBROUTINE sf_allocate_theory_data(this, qs_env, tddft_env, sub_env)
+   SUBROUTINE sf_allocate_theory_data(this, qs_env, tddft_env, blacs_env)
       CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
       TYPE(qs_environment_type), POINTER :: qs_env
       TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
-      TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'sf_allocate_theory_data'
 
-      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-         POINTER                                         :: sab_hfx
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
+      TYPE(dbcsr_distribution_type), POINTER :: dbcsr_dist
+      TYPE(pw_env_type), POINTER :: pw_env
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), POINTER :: sab_orb
       INTEGER                                            :: handle, ivec, ispin
 
       CALL timeset(routineN, handle)
@@ -212,7 +217,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
                                ncol_global=tddft_env%nbf, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%hmat_ao_ao)
       CALL cp_fm_create(this%hmat_ao_ao, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
@@ -222,7 +227,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
                                ncol_global=tddft_env%nbf, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%evects_ao_ao(1))
       DO ivec = 1, 1
          CALL cp_fm_create(this%evects_ao_ao(1), fm_struct)
@@ -234,7 +239,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
                                ncol_global=tddft_env%nvirb, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%work_ao_vir)
       CALL cp_fm_create(this%work_ao_vir, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
@@ -244,7 +249,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nocca, &
                                ncol_global=tddft_env%nbf, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%work_noc_ao)
       CALL cp_fm_create(this%work_noc_ao, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
@@ -254,7 +259,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nocca, &
                                ncol_global=tddft_env%nocca, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%work_noc_noc)
       CALL cp_fm_create(this%work_noc_noc, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
@@ -264,7 +269,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
                                ncol_global=tddft_env%nocca, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%work_ao_noc)
       CALL cp_fm_create(this%work_ao_noc, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
@@ -274,7 +279,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nvirb, &
                                ncol_global=tddft_env%nvirb, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%work_vir_vir)
       CALL cp_fm_create(this%work_vir_vir, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
@@ -284,7 +289,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nocca, &
                                ncol_global=tddft_env%nvirb, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%work_noc_vir)
       CALL cp_fm_create(this%work_noc_vir, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
@@ -294,7 +299,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
                                ncol_global=tddft_env%nbf, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%work1_ao_ao)
       CALL cp_fm_create(this%work1_ao_ao, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
@@ -304,7 +309,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
                                ncol_global=tddft_env%nbf, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%work2_ao_ao)
       CALL cp_fm_create(this%work2_ao_ao, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
@@ -314,7 +319,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
                                ncol_global=tddft_env%nbf, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%rho_ia_ao_fm)
       CALL cp_fm_create(this%rho_ia_ao_fm, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
@@ -323,7 +328,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
                                ncol_global=tddft_env%nbf, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%rho_fm_ao(tddft_env%nSpins))
       DO ispin = 1, tddft_env%nSpins
          CALL cp_fm_create(this%rho_fm_ao(ispin), fm_struct)
@@ -335,7 +340,7 @@ CONTAINS
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nocca, &
                                ncol_global=tddft_env%nvirb, &
-                               context=sub_env%blacs_env)
+                               context=blacs_env)
       ALLOCATE(this%dipoles_mo(3))
       DO ivec = 1, 3
          CALL cp_fm_create(this%dipoles_mo(ivec), fm_struct)
@@ -349,8 +354,9 @@ CONTAINS
       !--------------------
       CALL get_qs_env(qs_env=qs_env, &
                       matrix_s=matrix_s, &
-                      dbcsr_dist=sub_env%dbcsr_dist, &
-                      sab_orb=sab_hfx)
+                      dbcsr_dist=dbcsr_dist, &
+                      pw_env=pw_env, &
+                      sab_orb=sab_orb)
 
       NULLIFY (this%A_ia_munu_sub)
       CALL dbcsr_allocate_matrix_set(this%A_ia_munu_sub, 1)
@@ -358,8 +364,8 @@ CONTAINS
          CALL dbcsr_init_p(this%A_ia_munu_sub(ispin)%matrix)
          CALL tddfpt_dbcsr_create_by_dist(this%A_ia_munu_sub(ispin)%matrix, &
                                           template=matrix_s(1)%matrix, &
-                                          dbcsr_dist=sub_env%dbcsr_dist, &
-                                          sab=sub_env%sab_orb)
+                                          dbcsr_dist=dbcsr_dist, &
+                                          sab=sab_orb)
       END DO
 
       NULLIFY (this%work_rho_ao_ao_symm)
@@ -371,8 +377,8 @@ CONTAINS
          CALL tddfpt_dbcsr_create_by_dist( &
                   this%work_rho_ao_ao_symm(ispin)%matrix, &
                   template=matrix_s(1)%matrix, &
-                  dbcsr_dist=sub_env%dbcsr_dist, &
-                  sab=sab_hfx)
+                  dbcsr_dist=dbcsr_dist, &
+                  sab=sab_orb)
 
          CALL dbcsr_init_p(this%work_rho_ao_ao_asymm(ispin)%matrix)
          CALL dbcsr_create(this%work_rho_ao_ao_asymm(ispin)%matrix, &
@@ -390,8 +396,8 @@ CONTAINS
          CALL dbcsr_init_p(this%work_hmat_symm(ispin)%matrix)
          CALL tddfpt_dbcsr_create_by_dist(this%work_hmat_symm(ispin)%matrix, &
                                           template=matrix_s(1)%matrix, &
-                                          dbcsr_dist=sub_env%dbcsr_dist, &
-                                          sab=sab_hfx)
+                                          dbcsr_dist=dbcsr_dist, &
+                                          sab=sab_orb)
 
          CALL dbcsr_init_p(this%work_hmat_asymm(ispin)%matrix)
          CALL dbcsr_create(this%work_hmat_asymm(ispin)%matrix, matrix_type=dbcsr_type_antisymmetric, &
@@ -406,8 +412,8 @@ CONTAINS
          CALL dbcsr_init_p(this%rho_ia_ao(ispin)%matrix)
          CALL tddfpt_dbcsr_create_by_dist(matrix=this%rho_ia_ao(ispin)%matrix, &
                                           template=matrix_s(1)%matrix, &
-                                          dbcsr_dist=sub_env%dbcsr_dist, &
-                                          sab=sub_env%sab_orb)
+                                          dbcsr_dist=dbcsr_dist, &
+                                          sab=sab_orb)
       END DO
       NULLIFY (this%rho_orb_struct_sub)
       ALLOCATE (this%rho_orb_struct_sub)
@@ -415,13 +421,13 @@ CONTAINS
       CALL qs_rho_set(this%rho_orb_struct_sub, rho_ao=this%rho_ia_ao)
       CALL qs_rho_rebuild(this%rho_orb_struct_sub, qs_env, &
                           rebuild_ao=.FALSE., &
-                          rebuild_grids=.TRUE., &
-                          pw_env_external=sub_env%pw_env)
+                          rebuild_grids=.TRUE.) !, &
+!                         pw_env_external=pw_env)
 
       !--------------------
       ! ALLOCATE  PW
       !--------------------
-      CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
+      CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
 
       ALLOCATE (this%A_ia_rspace_sub(tddft_env%nSpins))
       DO ispin = 1, tddft_env%nSpins
@@ -461,12 +467,18 @@ CONTAINS
 
    END SUBROUTINE sf_allocate_theory_data
 
-   SUBROUTINE sf_deallocate_theory_data(this, sub_env)
+   SUBROUTINE sf_deallocate_theory_data(this, qs_env)
       CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
-      TYPE(tddfpt_subgroup_env_type), INTENT(IN) :: sub_env
+      TYPE(qs_environment_type), POINTER :: qs_env
 
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       TYPE(pw_pool_type), POINTER :: auxbas_pw_pool
+      TYPE(pw_env_type), POINTER :: pw_env
       INTEGER :: ivec, ispin
+
+      CALL get_qs_env(qs_env=qs_env, &
+                      pw_env=pw_env, &
+                      blacs_env=blacs_env)
 
       IF (ASSOCIATED(this%hmat_ao_ao)) THEN
          CALL cp_fm_release(this%hmat_ao_ao)
@@ -559,7 +571,7 @@ CONTAINS
          DEALLOCATE(this%work_hmat_asymm)
       END IF
 
-      CALL pw_env_get(sub_env%pw_env, auxbas_pw_pool=auxbas_pw_pool)
+      CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
 
       IF (ASSOCIATED(this%A_ia_rspace_sub)) THEN
          DO ispin = 1, SIZE(this%A_ia_rspace_sub)
@@ -606,11 +618,10 @@ CONTAINS
 
    END SUBROUTINE sf_deallocate_theory_data
 
-   SUBROUTINE sf_initialize_guess_vectors(this, qs_env, sub_env, tddft_env, gs_mos, &
+   SUBROUTINE sf_initialize_guess_vectors(this, qs_env, tddft_env, gs_mos, &
                                           tddfpt_control, log_unit)
       CLASS(tddft_sf_theory_type), INTENT(INOUT)         :: this
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(tddfpt_subgroup_env_type), INTENT(IN)         :: sub_env
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), POINTER                           :: gs_mos
@@ -627,13 +638,14 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      CALL tddfpt_construct_ground_state_orb_density( &
-               rho_orb_struct=this%rho_orb_struct_sub, &
-               rho_xc_struct=this%gs_rho_xc_struct, &
-               is_rks_triplets=tddfpt_control%rks_triplets, &
-               qs_env=qs_env, &
-               sub_env=sub_env, &
-               wfm_rho_orb=this%rho_ia_ao_fm)
+!     CALL tddfpt_construct_ground_state_orb_density( &
+!              rho_orb_struct=this%rho_orb_struct_sub, &
+!              rho_xc_struct=this%gs_rho_xc_struct, &
+!              is_rks_triplets=tddfpt_control%rks_triplets, &
+!              qs_env=qs_env, &
+!              sub_env=sub_env, &
+!              wfm_rho_orb=this%rho_ia_ao_fm)
+      qs_env = qs_env
 
 
       IF (.FALSE.) THEN
@@ -726,13 +738,12 @@ CONTAINS
 
    END SUBROUTINE sf_mo_to_ao_transform
 
-   SUBROUTINE sf_apply_operator(this, qs_env, tddft_env, kernel_env, sub_env, &
+   SUBROUTINE sf_apply_operator(this, qs_env, tddft_env, blacs_env, &
                                 tddfpt_control, ivec, logger)
       CLASS(tddft_sf_theory_type), INTENT(INOUT)      :: this
       TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
       TYPE(qs_environment_type), POINTER              :: qs_env
-      TYPE(kernel_env_type)                           :: kernel_env
-      TYPE(tddfpt_subgroup_env_type)                  :: sub_env
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       TYPE(tddfpt2_control_type), POINTER             :: tddfpt_control
       INTEGER, INTENT(IN)                             :: ivec
       TYPE(cp_logger_type), POINTER                   :: logger
@@ -740,8 +751,7 @@ CONTAINS
          print *, this%unused
          tddft_env = tddft_env
          NULLIFY(qs_env)
-         kernel_env = kernel_env
-         sub_env = sub_env
+         blacs_env = blacs_env
          NULLIFY(tddfpt_control)
       END IF
       !-----------------------------------------------
@@ -853,7 +863,7 @@ CONTAINS
 !     ! Rebuild response density grids with current trial vector
 !     CALL qs_rho_update_rho(rho_struct=this%rho_orb_struct_sub, &
 !                            qs_env=qs_env, &
-!                            pw_env_external=sub_env%pw_env, &
+!                            pw_env_external=pw_env, &
 !                            task_list_external=sub_env%task_list_orb, &
 !                            para_env_external=sub_env%para_env)
 !     DO i = 1, tddft_env%nSpins
@@ -863,7 +873,7 @@ CONTAINS
 !                          kernel_env=kernel_env%full_kernel, &
 !                          rho_ia_struct=this%rho_orb_struct_sub, &
 !                          is_rks_triplets=tddfpt_control%rks_triplets, &
-!                          pw_env=sub_env%pw_env, &
+!                          pw_env=pw_env, &
 !                          work_v_xc=this%work_v_xc, &
 !                          work_v_xc_tau=this%work_v_xc_tau, &
 !                          spinflip=tddfpt_control%spinflip) ! 1 collinear, 2=noncollinear
@@ -876,7 +886,7 @@ CONTAINS
 !                             qs_env=qs_env, &
 !                             calculate_forces=.FALSE., &
 !                             gapw=.FALSE., &
-!                             pw_env_external=sub_env%pw_env, &
+!                             pw_env_external=pw_env, &
 !                             task_list_external=sub_env%task_list_orb)
 !     CALL copy_dbcsr_to_fm(matrix=this%A_ia_munu_sub(1)%matrix, &
 !                           fm=this%work2_ao_ao)

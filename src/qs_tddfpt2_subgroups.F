@@ -116,9 +116,6 @@ MODULE qs_tddfpt2_subgroups
       !> occupied MOs stored in a matrix form [nao x nmo_occ(spin)] distributed across processes
       !> in the parallel group
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)      :: mos_occ
-      !> full set of MOs (both occupied and virtual) stored in a matrix form [nao x nmo(spin)]
-      !> distributed across processes in the parallel group
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)      :: mos
       !> group-specific copy of the ADMM A matrix 'admm_type%A'
       TYPE(cp_fm_type), POINTER                          :: admm_A => NULL()
       !
@@ -174,24 +171,22 @@ CONTAINS
 !> \param sub_env  parallel group environment (initialised on exit)
 !> \param qs_env   Quickstep environment
 !> \param mos_occ  ground state molecular orbitals in primary atomic basis set
-!> \param mos      full set of molecular orbitals (occupied + virtual) (optional)
 !> \param kernel   Type of kernel (full/sTDA) that will be used
 !> \par History
 !>    * 01.2017 (sub)group-related code has been moved here from the main subroutine tddfpt()
 !>              [Sergey Chulkov]
 !>    * 04.2025 Added support for full orbital sets [Konstantin Komarov]
 ! **************************************************************************************************
-   SUBROUTINE tddfpt_sub_env_init(sub_env, qs_env, mos_occ, mos, kernel)
+   SUBROUTINE tddfpt_sub_env_init(sub_env, qs_env, mos_occ, kernel)
       TYPE(tddfpt_subgroup_env_type), INTENT(out)        :: sub_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(cp_fm_type), DIMENSION(:), INTENT(in)         :: mos_occ
       INTEGER, INTENT(in)                                :: kernel
-      TYPE(cp_fm_type), DIMENSION(:), INTENT(in), OPTIONAL :: mos
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_sub_env_init'
 
       INTEGER                                            :: handle, ispin, nao, nao_aux, natom, &
-                                                            nmo_occ, nspins, nmo
+                                                            nmo_occ, nspins
       TYPE(admm_type), POINTER                           :: admm_env
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env_global
@@ -221,7 +216,6 @@ CONTAINS
       sub_env%is_split = tddfpt_control%nprocs > 0 .AND. tddfpt_control%nprocs*2 <= para_env_global%num_pe
 
       ALLOCATE (sub_env%mos_occ(nspins))
-      ALLOCATE (sub_env%mos(nspins)) ! array for full MO matrices
       NULLIFY (sub_env%admm_A)
 
       IF (sub_env%is_split) THEN
@@ -251,13 +245,6 @@ CONTAINS
             CALL cp_fm_struct_release(fm_struct)
             CALL tddfpt_fm_replicate_across_subgroups(fm_src=mos_occ(ispin), &
                                                       fm_dest_sub=sub_env%mos_occ(ispin), sub_env=sub_env)
-            ! Handle full orbitals (mos)
-            CALL cp_fm_get_info(mos(ispin), nrow_global=nao, ncol_global=nmo)
-            CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nmo, context=sub_env%blacs_env)
-            CALL cp_fm_create(sub_env%mos(ispin), fm_struct)
-            CALL cp_fm_struct_release(fm_struct)
-            CALL tddfpt_fm_replicate_across_subgroups(fm_src=mos(ispin), &
-                                                     fm_dest_sub=sub_env%mos(ispin), sub_env=sub_env)
          END DO
 
          IF (dft_control%do_admm) THEN
@@ -277,7 +264,6 @@ CONTAINS
          sub_env%blacs_env => blacs_env_global
 
          sub_env%mos_occ(:) = mos_occ(:)
-         sub_env%mos(:) = mos(:)
 
          IF (dft_control%do_admm) THEN
             CALL get_qs_env(qs_env, admm_env=admm_env)
