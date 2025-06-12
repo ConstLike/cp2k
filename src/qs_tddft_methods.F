@@ -6,6 +6,7 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddft_methods
+   USE header,                          ONLY: tddft_header
    USE message_passing,                 ONLY: mp_comm_type,&
                                               mp_para_env_type,&
                                               mp_request_type
@@ -205,9 +206,69 @@ MODULE qs_tddft_methods
    INTEGER, PARAMETER, PRIVATE          :: nderivs = 3
    INTEGER, PARAMETER, PRIVATE          :: maxspins = 2
 
-   PUBLIC :: tddft_energies
+   PUBLIC :: tddft, tddft_energies
 
 CONTAINS
+   SUBROUTINE tddft(qs_env, calc_forces)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      LOGICAL, INTENT(IN)                                :: calc_forces
+
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft'
+
+      TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(section_vals_type), POINTER                   :: tddfpt_print_section
+      TYPE(section_vals_type), POINTER                   :: tddfpt_section
+      TYPE(section_vals_type), POINTER                   :: xc_section
+      TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+         POINTER                                         :: gs_mos
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_ks_oep
+      INTEGER                                            :: log_unit
+      INTEGER                                            :: handle
+
+      CALL timeset(routineN, handle)
+
+      CALL get_qs_env(qs_env, &
+                      blacs_env=blacs_env, &
+                      dft_control=dft_control, &
+                      matrix_ks=matrix_ks)
+
+      IF(calc_forces) THEN
+      END IF
+
+      NULLIFY(tddfpt_control)
+      tddfpt_control => dft_control%tddfpt2_control
+
+      NULLIFY (logger, tddfpt_section, tddfpt_print_section, xc_section)
+      logger => cp_get_default_logger()
+      tddfpt_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT")
+      tddfpt_print_section => section_vals_get_subs_vals(tddfpt_section, "PRINT")
+      xc_section => section_vals_get_subs_vals(tddfpt_section, "XC")
+
+      log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, "PROGRAM_BANNER", &
+                                      extension=".tddfptLog")
+
+      CALL cite_reference(Iannuzzi2005)
+
+      CALL tddfpt_header(log_unit)
+!     CALL kernel_info(log_unit, dft_control, tddfpt_control, xc_section)
+
+      NULLIFY (gs_mos)
+      CALL tddfpt_init_mos(qs_env, gs_mos, log_unit)
+
+      ! Obtain smeared occupation numbers
+      IF (tddfpt_control%do_smearing) THEN
+         CALL tddfpt_smeared_occupation(qs_env, gs_mos, log_unit)
+      END IF
+
+      ! Obtain corrected KS-matrix
+      CALL tddfpt_oecorr(qs_env, gs_mos, matrix_ks_oep)
+
+      IF (ASSOCIATED(matrix_ks_oep)) matrix_ks => matrix_ks_oep
+
+      END SUBROUTINE tddft
 
    SUBROUTINE tddft_energies(qs_env, sub_env, kernel_env, full_kernel_env, &
                              gs_mos, matrix_ks, logger, tddfpt_control, &
@@ -245,7 +306,7 @@ CONTAINS
          CALL tddft_initialization(tddft_env, qs_env, gs_mos, sub_env)
 
          CALL tddft_setup_data(tddft_env, qs_env, gs_mos, &
-                               matrix_ks, tddfpt_control, sub_env)
+                               matrix_ks, tddfpt_control)
 
          logo = theory_to_run(i)
          SELECT CASE (logo)
@@ -274,14 +335,13 @@ CONTAINS
    END SUBROUTINE tddft_energies
 
    SUBROUTINE tddft_setup_data(tddft_env, qs_env, gs_mos, matrix_ks, &
-                               tddfpt_control, sub_env)
+                               tddfpt_control)
       CLASS(tddft_info_type), INTENT(INOUT)              :: tddft_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          POINTER                                         :: gs_mos
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks
-      TYPE(tddfpt_subgroup_env_type)                     :: sub_env
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_setup_data'
 
@@ -290,7 +350,6 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       qs_env = qs_env
-      sub_env = sub_env
       tddfpt_control = tddfpt_control
 
       DO ispin = 1, tddft_env%nSpins

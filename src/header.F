@@ -25,7 +25,7 @@ MODULE header
    PUBLIC :: cp2k_header, cp2k_footer, vib_header
    PUBLIC :: fist_header, se_header, dftb_header, qs_header, tddfpt_header
    PUBLIC :: qmmm_header, atom_header, atom_footer, band_header, xtb_header
-   PUBLIC :: tmc_header, tmc_ana_header
+   PUBLIC :: tmc_header, tmc_ana_header, tddft_header
    PUBLIC :: sirius_header
    PUBLIC :: tddfpt_soc_header
 
@@ -134,6 +134,30 @@ CONTAINS
          "*******************************************************************************"
 
    END SUBROUTINE tddfpt_header
+
+! **************************************************************************************************
+!> \brief ...
+!> \param iw ...
+! **************************************************************************************************
+   SUBROUTINE tddft_header(iw)
+      INTEGER, INTENT(in)                                :: iw
+
+      IF (iw < 0) RETURN
+      WRITE (iw, '(/,(T2,A79))') &
+         "*******************************************************************************", &
+         "** [ MODULE LOADING ] >>>  TDDFT Engine initialized                          **", &
+         "**                                                                           **", &
+         "**    ########|######| ######| #######|########|    +--------------------+   **", &
+         "**    ---##+--+##+--##|##+--##|##+---+ ---##+--+    | version: Jul 2025  |   **", &
+         "**       ##|   ##|  ##|##|  ##|#####|     ##|       | status: STABLE     |   **", &
+         "**       ##|   ##|  ##|##|  ##|##+--+     ##|       | author: Konstantin |   **", &
+         "**       ##|   ######| ######| ##|        ##|       |         Komarov    |   **", &
+         "**       ---   +-----+ +-----+ +-+        +-+       +--------------------+   **", &
+         "**                                                                           **", &
+         "** [MODULE LOADED ] >>>  Excited states, unlocked.                           **", &
+         "*******************************************************************************"
+
+   END SUBROUTINE tddft_header
 
 ! **************************************************************************************************
 !> \brief ...
