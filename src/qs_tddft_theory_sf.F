@@ -421,8 +421,7 @@ CONTAINS
       CALL qs_rho_set(this%rho_orb_struct_sub, rho_ao=this%rho_ia_ao)
       CALL qs_rho_rebuild(this%rho_orb_struct_sub, qs_env, &
                           rebuild_ao=.FALSE., &
-                          rebuild_grids=.TRUE.) !, &
-!                         pw_env_external=pw_env)
+                          rebuild_grids=.TRUE.)
 
       !--------------------
       ! ALLOCATE  PW
@@ -534,9 +533,9 @@ CONTAINS
       END IF
       IF (ALLOCATED(this%dipoles_mo)) THEN
          DO ivec = 1, SIZE(this%dipoles_mo)
-            CALL cp_fm_release(this%dipoles_mo)
+            CALL cp_fm_release(this%dipoles_mo(ivec))
          END DO
-!        DEALLOCATE(this%dipoles_mo)
+         DEALLOCATE(this%dipoles_mo)
       END IF
 
       IF (ASSOCIATED(this%A_ia_munu_sub)) THEN
@@ -614,6 +613,12 @@ CONTAINS
             CALL dbcsr_deallocate_matrix(this%rho_ia_ao(ivec)%matrix)
          END DO
          DEALLOCATE(this%rho_ia_ao)
+      END IF
+
+      IF (ASSOCIATED(this%rho_orb_struct_sub)) THEN
+!        CALL qs_rho_release(this%rho_orb_struct_sub)
+!        DEALLOCATE(this%rho_orb_struct_sub)
+         NULLIFY(this%rho_orb_struct_sub)
       END IF
 
    END SUBROUTINE sf_deallocate_theory_data
@@ -1124,7 +1129,16 @@ CONTAINS
 
          n_spin_imbalance = REAL(tddft_env%nocca - tddft_env%noccb, dp)
          s2_spin = 0.25_dp * n_spin_imbalance * (n_spin_imbalance - 2.0_dp)
+         IF (log_unit > 0) THEN
+            WRITE(log_unit, '(A,I5)') "DBG| For state ", istate
+            WRITE(log_unit, '(A,I5,A,I5)') "DBG| N_alpha = ", tddft_env%nocca, ", N_beta = ", tddft_env%noccb
+            WRITE(log_unit, '(A,F12.6)') "DBG| n_spin_imbalance = ", n_spin_imbalance
+            WRITE(log_unit, '(A,F12.6)') "DBG| s2_spin = ", s2_spin
+         END IF
          s2_beta_occ = REAL(tddft_env%noccb, dp) + 1.0_dp
+         IF (log_unit > 0) THEN
+            WRITE(log_unit, '(A,F12.6)') "DBG| s2_beta_occ = ", s2_beta_occ
+         END IF
 
          !--------------------------------------------------------------
          ! Compute S^2 expectation value for excited state:
@@ -1166,6 +1180,9 @@ CONTAINS
          ! s2_cross = -tr[(rho_beta_excited) * scr1]
          CALL cp_fm_trace(this%work2_ao_ao, this%work1_ao_ao, s2_cross)
          s2_cross = -s2_cross
+         IF (log_unit > 0) THEN
+            WRITE(log_unit, '(A,F12.6)') "DBG| s2_cross = ", s2_cross
+         END IF
 
          ! scr1 = S * dens_diff_ij * S [ta stands for dens_diff_ij, that is, the excited-state difference (alpha block)]
          CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
@@ -1180,6 +1197,9 @@ CONTAINS
          ! s2_anti = -tr[dens_diff_ab * scr1]
          CALL cp_fm_trace(tddft_env%dens_diff_ab(istate), this%work2_ao_ao, s2_anti)
          s2_anti = -s2_anti
+         IF (log_unit > 0) THEN
+            WRITE(log_unit, '(A,F12.6)') "DBG| s2_anti = ", s2_anti
+         END IF
 
          ! s2_offdiag = (1/2) * tr[symmetrized(evects_ao_ao) * Smat]
          CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
@@ -1188,9 +1208,15 @@ CONTAINS
          CALL cp_fm_scale_and_add(1.0_dp, this%work2_ao_ao, 0.5_dp, this%work1_ao_ao)
          CALL cp_fm_trace(this%work2_ao_ao, this%hmat_ao_ao, s2_offdiag)
          s2_offdiag = s2_offdiag / 2.0_dp
+         IF (log_unit > 0) THEN
+            WRITE(log_unit, '(A,F12.6)') "DBG| s2_offdiag = ", s2_offdiag
+         END IF
 
          ! s^2 = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag^2
          s2_mat(istate) = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag**2
+         IF (log_unit > 0) THEN
+            WRITE(log_unit, '(A,F12.6)') "DBG| s2_mat = ", s2_mat(istate)
+         END IF
       END DO
 
       trans_dipoles(:, :) = SQRT(2.0_dp)*trans_dipoles(:, :)

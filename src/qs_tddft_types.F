@@ -696,12 +696,6 @@ CONTAINS
          DEALLOCATE(this%dipole_op_mos_occ)
       END IF
 
-
-!     IF (ASSOCIATED(this%rho_orb_struct_sub)) THEN
-!        CALL qs_rho_release(this%rho_orb_struct_sub)
-!        DEALLOCATE(this%rho_orb_struct_sub)
-!     END IF
-
       CALL timestop(handle)
 
    END SUBROUTINE tddft_finalization

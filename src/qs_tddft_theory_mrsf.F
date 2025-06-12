@@ -709,9 +709,9 @@ CONTAINS
       END IF
       IF (ALLOCATED(this%dipoles_mo)) THEN
          DO ivec = 1, SIZE(this%dipoles_mo)
-            CALL cp_fm_release(this%dipoles_mo)
+            CALL cp_fm_release(this%dipoles_mo(ivec))
          END DO
-!        DEALLOCATE(this%dipoles_mo)
+         DEALLOCATE(this%dipoles_mo)
       END IF
 
       CALL dbcsr_release(this%work_coulomb%matrix)
@@ -1779,10 +1779,10 @@ CONTAINS
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: s2_mat
       REAL(kind=dp)                                      :: osc_strength, val, f, energ
 !     REAL(KIND=dp) :: n_spin_imbalance, s2_spin, s2_beta_occ, s2_cross, s2_anti, s2_offdiag
-      INTEGER                                            :: handle, ideriv, istate, ispin
+      INTEGER                                            :: handle, ideriv, istate, jstate, ispin
       INTEGER, ALLOCATABLE :: indices(:), i_indices(:), a_indices(:)
       REAL(KIND=dp), ALLOCATABLE :: amplitudes(:)
-      INTEGER :: n_amplitudes, max_amplitudes, i, a, idx, jstate
+      INTEGER :: n_amplitudes, max_amplitudes, i, a, idx
 
       CALL timeset(routineN, handle)
 
@@ -1839,10 +1839,20 @@ CONTAINS
       ! s2_mat
       ALLOCATE (s2_mat(tddft_env%nstates), source=0.0_dp)
 
+      jstate = jstate
       DO istate = 1, tddft_env%nStates
+!     DO jstate = istate, tddft_env%nStates
          !--------------------------------------
          ! Orthogonal transform: X vector to AO
          !--------------------------------------
+!        CALL cp_fm_set_all(matrix=this%work_noc_vir, alpha=0.0_dp)
+!        CALL cp_fm_to_fm(source=tddft_env%evects_mo(istate), &
+!                         destination=this%work_noc_vir)
+!
+!        CALL cp_fm_set_all(matrix=this%work2_noc_vir, alpha=0.0_dp)
+!        CALL cp_fm_to_fm(source=tddft_env%evects_mo(jstate), &
+!                         destination=this%work2_noc_vir)
+ 
          ! C[nbf,nvirb] = 1.0*A[nbf,nocca]*B[nocca,nvirb] + 0.0*C[nbf,nvirb]
          CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nvirb, tddft_env%nocca, &
                             1.0_dp, gs_mos(1)%mos_occ, &
@@ -1905,6 +1915,7 @@ CONTAINS
             s2_mat(istate) = 2.0_dp
          END SELECT
 
+!     END DO
       END DO
 
       trans_dipoles(:, :) = 0.0_dp
