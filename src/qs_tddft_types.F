@@ -423,14 +423,6 @@ CONTAINS
                                    r_val=tddft_env%C_hf_omega)
       END IF
 
-      IF (blacs_env%para_env%is_source()) THEN
-         PRINT *, "KKK| do_hfx=", tddft_env%do_hfx
-         PRINT *, "KKK| do_hfx_cam=", tddft_env%do_hfx_cam
-         PRINT *, "KKK| C_hf_alpha=", tddft_env%C_hf_alpha
-         PRINT *, "KKK| C_hf_beta =", tddft_env%C_hf_beta
-         PRINT *, "KKK| C_hf_omega =", tddft_env%C_hf_omega
-      END IF
-
       CALL cp_fm_get_info(gs_mos(1)%mos_occ, ncol_global=tddft_env%nocca)
       CALL cp_fm_get_info(gs_mos(2)%mos_occ, ncol_global=tddft_env%noccb)
       CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=tddft_env%nvira)

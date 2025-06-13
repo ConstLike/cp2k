@@ -275,11 +275,6 @@ CONTAINS
                                tddft_env%nstates_max-3)
          this%spin_pair_coupling(1:6,1:2) =-this%spin_pair_coupling(1:6,1:2)
       END SELECT
-      IF (blacs_env%para_env%is_source()) THEN
-         print *, "KKK C_hf=", tddft_env%C_hf_alpha, tddft_env%C_hf_beta, tddft_env%do_hfx_cam
-         print *, "KKK C_hf=", this%spin_pair_coupling
-      END IF
-
 
       !=== hmat_ao_ao [nbf, nbf] =======================
       CALL cp_fm_struct_create(fm_struct, &
@@ -826,13 +821,38 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       qs_env = qs_env
-!     CALL tddfpt_construct_ground_state_orb_density( &
-!              rho_orb_struct=this%rho_orb_struct_sub, &
-!              rho_xc_struct=this%gs_rho_xc_struct, &
-!              is_rks_triplets=tddfpt_control%rks_triplets, &
-!              qs_env=qs_env, &
-!              sub_env=sub_env, &
-!              wfm_rho_orb=this%rho_ia_ao_fm)
+
+      IF (log_unit > 0) THEN
+         WRITE(log_unit, '(/,T2,A)') "-------------------------------------------------------------------------------"
+         WRITE(log_unit, '(T2,A)')   "-                   MRSF-TDDFT Fitting Parameters                             -"
+         WRITE(log_unit, '(T2,A)')   "-------------------------------------------------------------------------------"
+         IF (tddft_env%do_hfx_cam) THEN
+            WRITE(log_unit, '(T14,A,F6.3)') "Fraction of short-range HF exchange (alpha) ........", &
+               tddft_env%C_hf_alpha
+            WRITE(log_unit, '(T14,A,F6.3)') "Fraction of long-range HF exchange (beta) ..........", &
+               tddft_env%C_hf_beta
+            WRITE(log_unit, '(T14,A,F6.3)') "Total long-range HF exchange (alpha + beta) ........", & 
+               tddft_env%C_hf_alpha + tddft_env%C_hf_beta
+            WRITE(log_unit, '(T14,A,F6.3)') "Range-separation parameter (omega) .................", & 
+               tddft_env%C_hf_omega
+            WRITE(log_unit, '(/,T14,A)') "Spin-pair coupling parameters:"
+            WRITE(log_unit, '(T31,A,T41,A,T51,A)') "CO-CO  |", "OV-OV  |", "CO-OV"
+            WRITE(log_unit, '(T2,A,T30,F6.3,A,T40,F6.3,A,T50,F6.3)') "                    alpha: |", &
+               this%spin_pair_coupling(6,1), "  |", this%spin_pair_coupling(5,1), "  |", this%spin_pair_coupling(1,1)
+            WRITE(log_unit, '(T2,A,T30,F6.3,A,T40,F6.3,A,T50,F6.3)') "                     beta: |", &
+               this%spin_pair_coupling(6,2), "  |", this%spin_pair_coupling(5,2), "  |",this%spin_pair_coupling(1,2)
+         ELSE
+            WRITE(log_unit, '(T14,A,F6.3)') "Fraction of Hartree-Fock exchange ........", &
+               tddft_env%C_hf_alpha
+            WRITE(log_unit, '(/,T14,A)') "Spin-pair coupling parameters:"
+            WRITE(log_unit, '(T31,A,T41,A,T51,A)') "CO-CO  |", "OV-OV  |", "CO-OV"
+            WRITE(log_unit, '(T30,F6.3,A,T40,F6.3,A,T50,F6.3)')  &
+               this%spin_pair_coupling(6,1), "  |", this%spin_pair_coupling(5,1), "  |", this%spin_pair_coupling(1,1)
+         END IF
+         WRITE(log_unit, '(T2,A)') "-------------------------------------------------------------------------------"
+         WRITE(log_unit, '(T2,A)') "- Legend: CO = Closed-shell Occupied, OV = Open-shell Virtual               -"
+         WRITE(log_unit, '(T2,A)') "-------------------------------------------------------------------------------"
+      END IF
 
 
       IF (.FALSE.) THEN
