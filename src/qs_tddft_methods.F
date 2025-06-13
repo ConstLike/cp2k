@@ -230,7 +230,7 @@ CONTAINS
       CLASS(tddft_theory_type), ALLOCATABLE              :: theory_handler
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_ks_oep
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
-      CHARACTER(LEN=6), DIMENSION(1)                     :: theory_to_run
+      CHARACTER(LEN=6), DIMENSION(3)                     :: theory_to_run
       CHARACTER(LEN=6)                                   :: logo
       INTEGER                                            :: handle, i, log_unit
       LOGICAL                                            :: do_admm, do_exck, do_hfx, do_hfxlr, &
@@ -260,6 +260,7 @@ CONTAINS
                       blacs_env=blacs_env, &
                       dft_control=dft_control, &
                       matrix_ks=matrix_ks)
+      NULLIFY(tddfpt_control)
       tddfpt_control => dft_control%tddfpt2_control
       tddfpt_control%do_hfx = do_hfx
       tddfpt_control%do_admm = do_admm
@@ -268,9 +269,6 @@ CONTAINS
       tddfpt_control%hfxsr_re_int = .TRUE.
       tddfpt_control%do_hfxlr = do_hfxlr
       tddfpt_control%do_exck = do_exck
-
-      NULLIFY(tddfpt_control)
-      tddfpt_control => dft_control%tddfpt2_control
 
       CALL cite_reference(Iannuzzi2005)
 
@@ -295,9 +293,13 @@ CONTAINS
          CALL cp_abort(__LOCATION__, "LRI only implemented for full kernel")
       END IF
 
-
-!     theory_to_run = ["    SF", "MRSF-S", "MRSF-T"]
-      theory_to_run = ["    SF"]
+      theory_to_run = ["    SF", "MRSF-S", "MRSF-T"]
+!     IF(tddfpt_control%sf_tddft==1) THEN
+!        theory_to_run = ["    SF"]
+!     ELSE IF(tddfpt_control%mrsf_type==1) THEN
+!        IF (tddfpt_control%mrsf_mult==1) theory_to_run = ["MRSF-S"]
+!        IF (tddfpt_control%mrsf_mult==3) theory_to_run = ["MRSF-T"]
+!     END IF
 
       DO i = 1, SIZE(theory_to_run)
 
@@ -384,7 +386,6 @@ CONTAINS
                               s_firstrow=tddft_env%noccb+1, &
                               s_firstcol=tddft_env%noccb+1, &
                               t_firstrow=1, t_firstcol=1)
-
 
       CALL timestop(handle)
 

@@ -56,7 +56,8 @@ MODULE cp_control_utils
         sccs_derivative_cd3, sccs_derivative_cd5, sccs_derivative_cd7, sccs_derivative_fft, &
         sccs_fattebert_gygi, sic_ad, sic_eo, sic_list_all, sic_list_unpaired, sic_mauri_spz, &
         sic_mauri_us, sic_none, slater, tddfpt_dipole_length, tddfpt_kernel_stda, &
-        use_mom_ref_user, xtb_vdw_type_d3, xtb_vdw_type_d4, xtb_vdw_type_none
+        use_mom_ref_user, xtb_vdw_type_d3, xtb_vdw_type_d4, xtb_vdw_type_none, &
+        tddft_sf_col, tddft_sf_noncol, mrsf_col, mrsf_noncol
    USE input_cp2k_check,                ONLY: xc_functionals_expand
    USE input_cp2k_dft,                  ONLY: create_dft_section
    USE input_enumeration_types,         ONLY: enum_i2c,&
@@ -1627,7 +1628,6 @@ CONTAINS
       CALL section_vals_val_get(t_section, "NPROC_STATE", i_val=t_control%nprocs)
       CALL section_vals_val_get(t_section, "KERNEL", i_val=t_control%kernel)
       CALL section_vals_val_get(t_section, "SPINFLIP", i_val=t_control%spinflip)
-      CALL section_vals_val_get(t_section, "SF_TDDFT", i_val=t_control%sf_tddft)
       CALL section_vals_val_get(t_section, "OE_CORR", i_val=t_control%oe_corr)
       CALL section_vals_val_get(t_section, "EV_SHIFT", r_val=t_control%ev_shift)
       CALL section_vals_val_get(t_section, "EOS_SHIFT", r_val=t_control%eos_shift)
@@ -1644,6 +1644,22 @@ CONTAINS
       CALL section_vals_val_get(t_section, "ADMM_KERNEL_XC_CORRECTION", l_val=t_control%admm_xc_correction)
       CALL section_vals_val_get(t_section, "EXCITON_DESCRIPTORS", l_val=t_control%do_exciton_descriptors)
       CALL section_vals_val_get(t_section, "DIRECTIONAL_EXCITON_DESCRIPTORS", l_val=t_control%do_directional_exciton_descriptors)
+
+      CALL section_vals_val_get(t_section, "SF_TDDFT", i_val=t_control%sf_tddft)
+      CALL section_vals_val_get(t_section, "MRSF", i_val=t_control%mrsf_type)
+      CALL section_vals_val_get(t_section, "MRSF_MULT", i_val=t_control%mrsf_mult)
+      CALL section_vals_val_get(t_section, "SPIN_PAIR_COUPLING", explicit=explicit)
+      IF (explicit) THEN
+         CALL section_vals_val_get(t_section, "SPIN_PAIR_COUPLING", r_vals=t_control%mrsf_SPC)
+      END IF
+      CALL section_vals_val_get(t_section, "MRSF_HF", explicit=explicit)
+      IF (explicit) THEN
+         CALL section_vals_val_get(t_section, "MRSF_HF", r_vals=t_control%mrsf_HF)
+      END IF
+      IF (t_control%sf_tddft==tddft_sf_col .or. t_control%mrsf_type==mrsf_col) THEN
+         t_control%tddft_enabled = .TRUE.
+         t_control%enabled = .FALSE.
+      END IF
 
       ! read automatically generated auxiliary basis for LRI
       CALL section_vals_val_get(t_section, "AUTO_BASIS", n_rep_val=nrep)

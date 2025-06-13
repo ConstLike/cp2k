@@ -469,6 +469,8 @@ MODULE cp_control_types
    TYPE tddfpt2_control_type
       !> compute TDDFPT excitation energies and oscillator strengths
       LOGICAL                              :: enabled = .FALSE.
+      !> compute TDDFT excitation energies and oscillator strengths
+      LOGICAL                              :: tddft_enabled = .FALSE.
       !> number of excited states to converge
       INTEGER                              :: nstates = 0
       !> maximal number of iterations to be performed
@@ -484,6 +486,14 @@ MODULE cp_control_types
       !> type of spin excitations to compute
       INTEGER                              :: spinflip = 0
       INTEGER                              :: sf_tddft = 0
+      ! Type of MRSF: 0: not used, 1: COLLINEAR, 2: NONCOLLINEAR
+      INTEGER                              :: mrsf_type = 0
+      ! MRSF Multiplicity: 1 (singlets), 3 (triplets)
+      INTEGER                              :: mrsf_mult = 1
+      ! MRSF HF exchange
+      REAL(KIND=dp), DIMENSION(:), POINTER :: mrsf_HF => NULL()
+      ! MRSF spin pair coupling parameters
+      REAL(KIND=dp), DIMENSION(:), POINTER :: mrsf_SPC => NULL()
       !> for full kernel, do we have HFX/ADMM
       LOGICAL                              :: do_hfx = .FALSE.
       LOGICAL                              :: do_admm = .FALSE.

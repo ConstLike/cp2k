@@ -588,6 +588,9 @@ MODULE input_constants
    INTEGER, PARAMETER, PUBLIC               :: no_sf_tddft = 0, &
                                                tddft_sf_col = 1, &
                                                tddft_sf_noncol = 2
+   INTEGER, PARAMETER, PUBLIC               :: no_mrsf = 0, &
+                                               mrsf_col = 1, &
+                                               mrsf_noncol = 2
    INTEGER, PARAMETER, PUBLIC               :: oe_none = 0, &
                                                oe_lb = 1, &
                                                oe_gllb = 2, &

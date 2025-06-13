@@ -203,11 +203,6 @@ CONTAINS
             WRITE (iounit, "(T2,A,T37,I4,4I10)") "TDDFPT| ", ispin, moc(1, ispin), moc(2, ispin), &
                mvt(2, ispin), moc(2, ispin) + mvt(2, ispin)
          END DO
-         WRITE(iounit, "(T2,A,T36,A)") "TDDFPT| Full Orbital Set:", &
-            " Spin       AOs      Total     HOMO"
-         DO ispin = 1, nspins
-            WRITE(iounit, "(T2,A,T37,I4,3I10)") "TDDFPT| ", ispin, mfc(1, ispin), mfc(2, ispin), gs_mos(ispin)%homo
-         END DO
       END IF
 
       IF (ASSOCIATED(evals_virt)) THEN

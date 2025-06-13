@@ -7,6 +7,7 @@
 !
 MODULE qs_tddft_theory_mrsf
 
+   USE cp_control_types,                ONLY: dft_control_type
    USE task_list_types,                 ONLY: allocate_task_list,&
                                               deallocate_task_list,&
                                               task_list_type
@@ -137,7 +138,7 @@ MODULE qs_tddft_theory_mrsf
 
    TYPE, EXTENDS(tddft_theory_type) :: tddft_mrsf_theory_type
 
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:,:) :: spin_pair_coupling
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:,:) :: scp
 
       !> Hamiltonian matrix in AO basis
       TYPE(cp_fm_type), POINTER, DIMENSION(:) :: hmat_ao_ao => NULL()
@@ -236,33 +237,72 @@ CONTAINS
       TYPE(pw_env_type), POINTER :: pw_env
       TYPE(neighbor_list_set_p_type), DIMENSION(:), POINTER :: sab_orb
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
+      TYPE(section_vals_type), POINTER                   :: tddfpt_section
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       INTEGER                                            :: handle, ivec, ispin, imat
+      LOGICAL                                            :: explicit
 
       CALL timeset(routineN, handle)
 
 
-      ALLOCATE(this%spin_pair_coupling(7, 2), source=0.0_dp)
+      NULLIFY (tddfpt_section)
+      tddfpt_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT")
 
-      IF (tddft_env%do_hfx_cam) THEN
-         ! For Short-Range (SR), Coulomb, Alpha term
-         this%spin_pair_coupling(1:4,1) = tddft_env%C_hf_alpha
-         this%spin_pair_coupling(5,1) = tddft_env%C_hf_alpha
-         this%spin_pair_coupling(6,1) = tddft_env%C_hf_alpha
-         this%spin_pair_coupling(7,1) = tddft_env%C_hf_alpha
-         ! Store Long-term (LR) scaling in second column
-         this%spin_pair_coupling(1:4,2) = tddft_env%C_hf_beta
-         this%spin_pair_coupling(5,2) = tddft_env%C_hf_beta
-         this%spin_pair_coupling(6,2) = tddft_env%C_hf_beta
-         this%spin_pair_coupling(7,2) = tddft_env%C_hf_beta
+      CALL get_qs_env(qs_env, &
+                      dft_control=dft_control)
+
+      NULLIFY(tddfpt_control)
+      tddfpt_control => dft_control%tddfpt2_control
+      CALL section_vals_val_get(tddfpt_section, "SPIN_PAIR_COUPLING", explicit=explicit)
+
+      ALLOCATE(this%scp(7, 2), source=0.0_dp)
+      IF (explicit) THEN
+         IF (tddft_env%do_hfx_cam) THEN
+            ! For Short-Range (SR) in first column and Long-Range (LR) in second column
+            this%scp(1:4,1:2) = tddfpt_control%mrsf_SPC(3)
+            this%scp(5,1:2) = tddfpt_control%mrsf_SPC(2)
+            this%scp(6,1:2) = tddfpt_control%mrsf_SPC(1)
+         ELSE
+            ! Non-range-separated: use total HF fraction as in original code
+            this%scp(1:4,1) = tddfpt_control%mrsf_SPC(3)
+            this%scp(5,1) = tddfpt_control%mrsf_SPC(2)
+            this%scp(6,1) = tddfpt_control%mrsf_SPC(1)
+         END IF
       ELSE
-         ! Non-range-separated: use total HF fraction as in original code
-         this%spin_pair_coupling(1:4,1) = tddft_env%C_hf_alpha
-         this%spin_pair_coupling(5,1) = tddft_env%C_hf_alpha
-         this%spin_pair_coupling(6,1) = tddft_env%C_hf_alpha
-         this%spin_pair_coupling(7,1) = tddft_env%C_hf_alpha
+         IF (tddft_env%do_hfx_cam) THEN
+            ! For Short-Range (SR), Coulomb, Alpha term
+            this%scp(1:6,1:2) = 0.5_dp
+         ELSE
+            ! Non-range-separated: use total HF fraction as in original code
+            this%scp(1:6,1) = 0.5_dp
+         END IF
       END IF
+
+      CALL section_vals_val_get(tddfpt_section, "MRSF_HF", explicit=explicit)
+      IF (explicit) THEN
+         IF (tddft_env%do_hfx_cam) THEN
+            ! For Short-Range (SR), Alpha term
+            this%scp(7,1) = tddfpt_control%mrsf_HF(1)
+            ! Store Long-Range (LR), Beta term scaling in second column
+            this%scp(7,2) = tddfpt_control%mrsf_HF(2)
+         ELSE
+            ! Non-range-separated: use total HF fraction as in original code
+            this%scp(7,1) = tddfpt_control%mrsf_HF(1)
+         END IF
+      ELSE
+         IF (tddft_env%do_hfx_cam) THEN
+            ! For Short-Range (SR), Coulomb, Alpha term
+            this%scp(7,1) = tddft_env%C_hf_alpha
+            this%scp(7,2) = tddft_env%C_hf_beta
+         ELSE
+            ! Non-range-separated: use total HF fraction as in original code
+            this%scp(7,1) = tddft_env%C_hf_alpha
+         END IF
+      END IF
+
       SELECT CASE (tddft_env%response_type)
       CASE(2) ! MRSF-S
          tddft_env%nStates = min(tddft_env%nstates, tddft_env%nstates_max-1)
@@ -273,7 +313,7 @@ CONTAINS
          tddft_env%nStates = min(tddft_env%nstates, tddft_env%nstates_max-3)
          tddft_env%mxvec = min(tddft_env%maxvec*tddft_env%nstates, &
                                tddft_env%nstates_max-3)
-         this%spin_pair_coupling(1:6,1:2) =-this%spin_pair_coupling(1:6,1:2)
+         this%scp(1:6,1:2) =-this%scp(1:6,1:2)
       END SELECT
 
       !=== hmat_ao_ao [nbf, nbf] =======================
@@ -617,8 +657,8 @@ CONTAINS
                       blacs_env=blacs_env, &
                       pw_env=pw_env)
 
-      IF (ALLOCATED(this%spin_pair_coupling)) THEN
-         DEALLOCATE(this%spin_pair_coupling)
+      IF (ALLOCATED(this%scp)) THEN
+         DEALLOCATE(this%scp)
       END IF
       IF (ASSOCIATED(this%hmat_ao_ao)) THEN
          DO imat = 1, SIZE(this%hmat_ao_ao)
@@ -828,26 +868,26 @@ CONTAINS
          WRITE(log_unit, '(T2,A)')   "-------------------------------------------------------------------------------"
          IF (tddft_env%do_hfx_cam) THEN
             WRITE(log_unit, '(T14,A,F6.3)') "Fraction of short-range HF exchange (alpha) ........", &
-               tddft_env%C_hf_alpha
+               this%scp(7,1)
             WRITE(log_unit, '(T14,A,F6.3)') "Fraction of long-range HF exchange (beta) ..........", &
-               tddft_env%C_hf_beta
+               this%scp(7,2)
             WRITE(log_unit, '(T14,A,F6.3)') "Total long-range HF exchange (alpha + beta) ........", & 
-               tddft_env%C_hf_alpha + tddft_env%C_hf_beta
+               this%scp(7,1) + this%scp(7,2)
             WRITE(log_unit, '(T14,A,F6.3)') "Range-separation parameter (omega) .................", & 
                tddft_env%C_hf_omega
             WRITE(log_unit, '(/,T14,A)') "Spin-pair coupling parameters:"
             WRITE(log_unit, '(T31,A,T41,A,T51,A)') "CO-CO  |", "OV-OV  |", "CO-OV"
             WRITE(log_unit, '(T2,A,T30,F6.3,A,T40,F6.3,A,T50,F6.3)') "                    alpha: |", &
-               this%spin_pair_coupling(6,1), "  |", this%spin_pair_coupling(5,1), "  |", this%spin_pair_coupling(1,1)
+               abs(this%scp(6,1)), "  |", abs(this%scp(5,1)), "  |", abs(this%scp(1,1))
             WRITE(log_unit, '(T2,A,T30,F6.3,A,T40,F6.3,A,T50,F6.3)') "                     beta: |", &
-               this%spin_pair_coupling(6,2), "  |", this%spin_pair_coupling(5,2), "  |",this%spin_pair_coupling(1,2)
+               abs(this%scp(6,2)), "  |", abs(this%scp(5,2)), "  |", abs(this%scp(1,2))
          ELSE
             WRITE(log_unit, '(T14,A,F6.3)') "Fraction of Hartree-Fock exchange ........", &
-               tddft_env%C_hf_alpha
+               this%scp(7,1)
             WRITE(log_unit, '(/,T14,A)') "Spin-pair coupling parameters:"
             WRITE(log_unit, '(T31,A,T41,A,T51,A)') "CO-CO  |", "OV-OV  |", "CO-OV"
             WRITE(log_unit, '(T30,F6.3,A,T40,F6.3,A,T50,F6.3)')  &
-               this%spin_pair_coupling(6,1), "  |", this%spin_pair_coupling(5,1), "  |", this%spin_pair_coupling(1,1)
+               this%scp(6,1), "  |", this%scp(5,1), "  |", this%scp(1,1)
          END IF
          WRITE(log_unit, '(T2,A)') "-------------------------------------------------------------------------------"
          WRITE(log_unit, '(T2,A)') "- Legend: CO = Closed-shell Occupied, OV = Open-shell Virtual               -"
@@ -1220,21 +1260,24 @@ CONTAINS
       !-----------------------------------------------
       IF (tddfpt_control%do_hfx) THEN
          DO imat = 1, 7
+            IF (tddft_env%do_hfx_cam) THEN
+               IF (abs(this%scp(imat, 1)) < 1.0e-10_dp .AND. &
+                   abs(this%scp(imat, 2)) < 1.0e-10_dp) CYCLE
+            ELSE
+               IF (abs(this%scp(imat, 1)) < 1.0e-10_dp) CYCLE
+            END IF
 
-            IF (abs(this%spin_pair_coupling(imat, 1))<1.0e-10_dp) CYCLE
-!           IF (abs(this%spin_pair_coupling(imat, 2))<1.0e-10_dp) CYCLE
-!
             IF (tddft_env%do_hfx_cam) THEN
                DO i_rep = 1, n_rep_hf
                   DO i_thread = 1, SIZE(hfx_data, 2)
-                     hfx_data(i_rep, i_thread)%potential_parameter%scale_coulomb = this%spin_pair_coupling(imat, 1)
-                     hfx_data(i_rep, i_thread)%potential_parameter%scale_longrange = this%spin_pair_coupling(imat, 2)
+                     hfx_data(i_rep, i_thread)%potential_parameter%scale_coulomb = this%scp(imat, 1)
+                     hfx_data(i_rep, i_thread)%potential_parameter%scale_longrange = this%scp(imat, 2)
                   END DO
                END DO
             ELSE
                DO i_rep = 1, n_rep_hf
                   DO i_thread = 1, SIZE(hfx_data, 2)
-                     hfx_data(i_rep, i_thread)%general_parameter%fraction = this%spin_pair_coupling(imat, 1)
+                     hfx_data(i_rep, i_thread)%general_parameter%fraction = this%scp(imat, 1)
                   END DO
                END DO
             END IF
@@ -1370,7 +1413,7 @@ CONTAINS
             CALL pw_transfer(this%work_v_gspace, this%work_v_rspace)
 
             ! Scale by Hartree-Fock exchange
-            CALL pw_scale(this%work_v_rspace, this%spin_pair_coupling(imat, 1))
+            CALL pw_scale(this%work_v_rspace, this%scp(imat, 1))
 
             ! Scale by grid volume element
             CALL pw_scale(this%work_v_rspace, this%work_v_rspace%pw_grid%dvol)

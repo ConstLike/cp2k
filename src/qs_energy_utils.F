@@ -196,14 +196,14 @@ CONTAINS
          CALL linres_calculation_low(qs_env)
       END IF
 
-      IF (dft_control%tddfpt2_control%enabled) THEN
+      IF (dft_control%tddfpt2_control%tddft_enabled) THEN
          CALL tddft(qs_env, calc_forces)
       END IF
 
       ! Calculates the energy, response vector and some contributions to the force
-!     IF (dft_control%tddfpt2_control%enabled) THEN
-!        CALL tddfpt(qs_env, calc_forces)
-!     END IF
+      IF (dft_control%tddfpt2_control%enabled) THEN
+         CALL tddfpt(qs_env, calc_forces)
+      END IF
 
       ! post-SCF bandstructure calculation from higher level methods
       NULLIFY (post_scf_bands_section)
