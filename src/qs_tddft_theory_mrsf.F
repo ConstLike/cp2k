@@ -1770,19 +1770,18 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'mrsf_print_theory_data'
 
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       CHARACTER(len=2)                                   :: lsd_str
       CHARACTER(len=1)                                   :: mult_str
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :)        :: trans_dipoles
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: trans_dipoles_exc_exc
+      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: trans_dipoles
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: s2_mat
       REAL(kind=dp)                                      :: osc_strength, val, f, energ
-!     REAL(KIND=dp) :: n_spin_imbalance, s2_spin, s2_beta_occ, s2_cross, s2_anti, s2_offdiag
       INTEGER                                            :: handle, ideriv, istate, jstate, ispin
       INTEGER, ALLOCATABLE :: indices(:), i_indices(:), a_indices(:)
       REAL(KIND=dp), ALLOCATABLE :: amplitudes(:)
       INTEGER :: n_amplitudes, max_amplitudes, i, a, idx
+      INTEGER, DIMENSION(2)                       :: nmo_occ
+      INTEGER :: lr1, lr2, nbf, nocca, noccb, nvira, nvirb, shift
 
       CALL timeset(routineN, handle)
 
@@ -1792,6 +1791,18 @@ CONTAINS
       CASE (2)
          lsd_str = ' U'
       END SELECT
+
+      ! Extract dimensions from tddft_env
+      nbf = tddft_env%nbf
+      nocca = tddft_env%nocca
+      noccb = tddft_env%noccb
+      nvira = tddft_env%nvira  ! nvira = nbf - nocca
+      nvirb = tddft_env%nvirb  ! nvirb = nbf - noccb
+
+      ! Define indices
+      lr1 = nocca - 1
+      lr2 = nocca
+      shift = nocca - noccb
 
       ! *** summary header ***
       CALL integer_to_string(3, mult_str)
@@ -1817,121 +1828,92 @@ CONTAINS
 
       CALL get_qs_env(qs_env=qs_env, &
                       matrix_s=matrix_s)
-      ! Get ground state density matrices from rho_orb_struct_sub to
-      CALL qs_rho_get(this%rho_orb_struct_sub, rho_ao=rho_ao)
+
       DO ispin = 1, tddft_env%nSpins
-         CALL copy_dbcsr_to_fm(rho_ao(ispin)%matrix, this%rho_fm_ao(ispin))
+         CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, &
+                             ncol_global=nmo_occ(ispin))
       END DO
 
-      ! matrix_s to cp_fm uging tmp matrix hmat_ao_ao
-      CALL cp_fm_set_all(matrix=this%hmat_ao_ao(1), alpha=0.0_dp)
-      CALL copy_dbcsr_to_fm(matrix_s(1)%matrix, this%hmat_ao_ao(1))
+      ! compute GS alpha and beta densities
+      DO ispin = 1, tddft_env%nSpins
+         CALL parallel_gemm('N', 'T', nbf, nbf, nmo_occ(ispin), &
+                            1.0_dp, gs_mos(ispin)%mos_occ, &
+                                    gs_mos(ispin)%mos_occ, &
+                            0.0_dp, this%rho_fm_ao(ispin))
+      END DO
 
+      ! Transform AO-MO dipoles to fully MO-based dipoles
       DO ideriv = 1, 3
          CALL parallel_gemm('T', 'N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nbf, &
                             1.0_dp,  tddft_env%dipole_op_mos_occ(ideriv, 1), &
                                      gs_mos(2)%mos_virt, &
-                            0.0_dp, this%dipoles_mo(ideriv))
+                            0.0_dp, this%dipoles_mo(ideriv)) ![nocca, nvirb]
       END DO
 
       ! transition dipole moment
-      ALLOCATE (trans_dipoles(tddft_env%nstates, 3), source=0.0_dp)
+      ALLOCATE (trans_dipoles(tddft_env%nstates, tddft_env%nstates, 3), source=0.0_dp)
       ! s2_mat
       ALLOCATE (s2_mat(tddft_env%nstates), source=0.0_dp)
 
-      jstate = jstate
       DO istate = 1, tddft_env%nStates
-!     DO jstate = istate, tddft_env%nStates
-         !--------------------------------------
-         ! Orthogonal transform: X vector to AO
-         !--------------------------------------
-!        CALL cp_fm_set_all(matrix=this%work_noc_vir, alpha=0.0_dp)
-!        CALL cp_fm_to_fm(source=tddft_env%evects_mo(istate), &
-!                         destination=this%work_noc_vir)
-!
-!        CALL cp_fm_set_all(matrix=this%work2_noc_vir, alpha=0.0_dp)
-!        CALL cp_fm_to_fm(source=tddft_env%evects_mo(jstate), &
-!                         destination=this%work2_noc_vir)
- 
-         ! C[nbf,nvirb] = 1.0*A[nbf,nocca]*B[nocca,nvirb] + 0.0*C[nbf,nvirb]
-         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nvirb, tddft_env%nocca, &
-                            1.0_dp, gs_mos(1)%mos_occ, &
-                                    tddft_env%evects_mo(istate), &
-                            0.0_dp, this%work_ao_vir)
-         ! C[nbf,nbf] = 1.0*A[nbf,nvirb]*(B[nbf,nvirb])^T + 0.0*C[nbf,nbf]
-         CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nbf, tddft_env%nvirb, &
-                            1.0_dp, this%work_ao_vir, &
-                                    gs_mos(2)%mos_virt, &
-                            0.0_dp, this%evects_ao_ao(1))
+         CALL cp_fm_set_all(matrix=this%work_noc_vir, alpha=0.0_dp)
+         CALL cp_fm_to_fm(source=tddft_env%evects_mo(istate), &
+                          destination=this%work_noc_vir)
+         ! -- Apply multiplicity-specific transformation of excitation amplitudes
+         ! These rearrange selected active orbital amplitudes for correct MRSF spin-mapping
+         SELECT CASE (tddft_env%response_type)
+         CASE (2) ! MRSF-S
+            CALL cp_fm_get_element(tddft_env%evects_mo(istate), lr1, 1, val)
+            val = val * 1.0_dp / sqrt(2.0_dp)
+            CALL cp_fm_set_element(this%work_noc_vir, lr1, 1, val)
 
-         !--------------------------------------------------------------
-         ! Compute AO-basis difference density matrices:
-         !   dens_diff_ij = AO transform of -X X^T (occupied block)
-         !   dens_diff_ab = AO transform of  X^T X (virtual block)
-         !   Delta_rho = dens_diff_ab + dens_diff_ij
-         !   where X = tddft_env%evects_mo(istate)
-         !--------------------------------------------------------------
-         ! Compute dens_diff_ij: (hole contribution, occupied block)
-         CALL parallel_gemm('N', 'T', tddft_env%nocca, tddft_env%nocca, tddft_env%nvirb, &
-                           -1.0_dp, tddft_env%evects_mo(istate), &
-                                    tddft_env%evects_mo(istate), &
-                            0.0_dp, this%work_noc_noc)
-         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nocca, tddft_env%nocca, &
-                            1.0_dp, gs_mos(1)%mos_occ, &
-                                    this%work_noc_noc, &
-                            0.0_dp, this%work_ao_noc)
-         CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nbf, tddft_env%nocca, &
-                            1.0_dp, this%work_ao_noc, &
-                                    gs_mos(1)%mos_occ, &
-                            0.0_dp, tddft_env%dens_diff_ij(istate))
+            CALL cp_fm_get_element(tddft_env%evects_mo(istate), lr1, 1, val)
+            val = -val * 1.0_dp / sqrt(2.0_dp)
+            CALL cp_fm_set_element(this%work_noc_vir, lr2, 2, val)
+         CASE (3) ! MRSF-S
+            CALL cp_fm_get_element(tddft_env%evects_mo(istate), lr1, 1, val)
+            val = val * 1.0_dp / sqrt(2.0_dp)
+            CALL cp_fm_set_element(this%work_noc_vir, lr1, 1, val)
 
-         ! Compute dens_diff_ab: (particle contribution, virtual block)
-         CALL parallel_gemm('T', 'N', tddft_env%nvirb, tddft_env%nvirb, tddft_env%nocca, &
-                            1.0_dp, tddft_env%evects_mo(istate), &
-                                    tddft_env%evects_mo(istate), &
-                            0.0_dp, this%work_vir_vir)
-         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nvirb, tddft_env%nvirb, &
-                            1.0_dp, gs_mos(2)%mos_virt, &
-                                    this%work_vir_vir, &
-                            0.0_dp, this%work_ao_vir)
-         CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nbf, tddft_env%nvirb, &
-                            1.0_dp, this%work_ao_vir, &
-                                    gs_mos(2)%mos_virt, &
-                            0.0_dp, tddft_env%dens_diff_ab(istate))
+            CALL cp_fm_get_element(tddft_env%evects_mo(istate), lr1, 1, val)
+            val = val * 1.0_dp / sqrt(2.0_dp)
+            CALL cp_fm_set_element(this%work_noc_vir, lr2, 2, val)
+
+            CALL cp_fm_set_element(this%work_noc_vir, lr2, 1, 0.0_dp)
+
+            CALL cp_fm_set_element(this%work_noc_vir, lr1, 2, 0.0_dp)
+         END SELECT
 
          !--------------------------------------------------------------
          ! Compute transition dipoles for state istate
          !--------------------------------------------------------------
          DO ideriv = 1, 3
-            CALL cp_fm_trace(tddft_env%evects_mo(istate), &
+            CALL cp_fm_trace(this%work_noc_vir, &
                              this%dipoles_mo(ideriv), &
-                             trans_dipoles(istate, ideriv))
+                             trans_dipoles(1, istate, ideriv))
          END DO
 
-         SELECT CASE (tddft_env%response_type)
-         CASE (2)
-            s2_mat(istate) = 0.0_dp
-         CASE (3)
-            s2_mat(istate) = 2.0_dp
-         END SELECT
-
-!     END DO
       END DO
 
-      trans_dipoles(:, :) = 0.0_dp
+      SELECT CASE (tddft_env%response_type)
+      CASE (2)
+         s2_mat(1:tddft_env%nStates) = 0.0_dp
+      CASE (3)
+         s2_mat(1:tddft_env%nStates) = 2.0_dp
+      END SELECT
 
       ! *** summary information ***
       DO istate = 1, tddft_env%nstates
          osc_strength = 2.0_dp/3.0_dp*tddft_env%evals(istate)* &
-                        accurate_dot_product(trans_dipoles(istate, 1:3), &
-                                             trans_dipoles(istate, 1:3))
+                        accurate_dot_product(trans_dipoles(1, istate, 1:3), &
+                                             trans_dipoles(1, istate, 1:3))
          IF (log_unit > 0) THEN
             WRITE (log_unit, '(1X,A,T9,I5,T15,F11.5,T30,F4.2,T34,3(1X,ES11.4E2),T70,ES12.4E2)') &
               "TDDFT| ", istate, tddft_env%evals(istate)*evolt, s2_mat(istate), &
-              trans_dipoles(istate, 1:3), osc_strength
+              trans_dipoles(1, istate, 1:3), osc_strength
          END IF
       END DO
-      DEALLOCATE (trans_dipoles, s2_mat)
+      DEALLOCATE (s2_mat)
 
       ! punch a checksum for the regs
       IF (log_unit > 0) THEN
@@ -1994,27 +1976,8 @@ CONTAINS
             "-------------------------------------------------------------------------------"
       END IF
 
-      DEALLOCATE(amplitudes, i_indices, a_indices, indices)
 
-      ALLOCATE(trans_dipoles_exc_exc(tddft_env%nstates, tddft_env%nstates, 3), source=0.0_dp)
-
-      DO istate = 1, tddft_env%nstates
-         DO jstate = istate + 1, tddft_env%nstates
-            ! Calculate difference of excitation vectors: X_I - X_J
-            CALL cp_fm_scale_and_add(0.0_dp, this%work_noc_vir, &
-                                     1.0_dp, tddft_env%evects_mo(istate))
-            CALL cp_fm_scale_and_add(1.0_dp, this%work_noc_vir, &
-                                     -1.0_dp, tddft_env%evects_mo(jstate))
-            ! Calculating transition dipole moments
-            DO ideriv = 1, 3
-               CALL cp_fm_trace(this%work_noc_vir, &
-                                this%dipoles_mo(ideriv), &
-                                trans_dipoles_exc_exc(istate, jstate, ideriv))
-            END DO
-         END DO
-      END DO
-
-      IF (log_unit > 0) THEN
+      IF (log_unit > 0 .and. .FALSE.) THEN
          WRITE (log_unit, "(1X,A)") "", &
             "-------------------------------------------------------------------------------", &
             "-                  Transition Dipoles Between Excited States                  -", &
@@ -2026,16 +1989,16 @@ CONTAINS
          DO istate = 1, tddft_env%nstates
             DO jstate = istate + 1, tddft_env%nstates
                energ = tddft_env%evals(jstate) - tddft_env%evals(istate)
-               f = 2.0_dp / 3.0_dp * energ * SUM(trans_dipoles_exc_exc(istate, jstate, :)**2)
+               f = 2.0_dp / 3.0_dp * energ * SUM(trans_dipoles(istate, jstate, :)**2)
                WRITE (log_unit, '(3X,I0,1X,"->",1X,I0,T11,F11.5,3X,3(1X,ES11.4E2),2X,ES12.4E2)') &
-                  istate, jstate, energ * evolt, trans_dipoles_exc_exc(istate, jstate, 1:3), f
+                  istate, jstate, energ * evolt, trans_dipoles(istate, jstate, 1:3), f
             END DO
          END DO
          WRITE (log_unit, "(1X,A)") &
             "-------------------------------------------------------------------------------"
       END IF
 
-      DEALLOCATE(trans_dipoles_exc_exc)
+      DEALLOCATE(trans_dipoles)
 
       CALL timestop(handle)
 

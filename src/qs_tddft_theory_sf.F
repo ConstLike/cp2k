@@ -152,8 +152,7 @@ MODULE qs_tddft_theory_sf
       TYPE(qs_rho_type), POINTER :: gs_rho_xc_struct => NULL()
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: A_ia_munu_sub
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: A_ia_rspace_sub => NULL()
-      TYPE(qs_rho_type), POINTER :: rho_orb_struct_sub => NULL()
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: rho_ia_ao
+      TYPE(qs_rho_type), POINTER :: rho_orb_struct => NULL()
       TYPE(cp_fm_type), POINTER, DIMENSION(:) :: rho_fm_ao => NULL()
 
       !> [HFX kernel] Symmetric AO density matrices [nSpins]
@@ -400,26 +399,18 @@ CONTAINS
                                           sab=sab_orb)
 
          CALL dbcsr_init_p(this%work_hmat_asymm(ispin)%matrix)
-         CALL dbcsr_create(this%work_hmat_asymm(ispin)%matrix, matrix_type=dbcsr_type_antisymmetric, &
+         CALL dbcsr_create(this%work_hmat_asymm(ispin)%matrix, &
+                           matrix_type=dbcsr_type_antisymmetric, &
                            template=this%work_hmat_symm(ispin)%matrix)
          CALL dbcsr_complete_redistribute(this%work_hmat_symm(ispin)%matrix, &
                                           this%work_hmat_asymm(ispin)%matrix)
       END DO
 
-      NULLIFY (this%rho_ia_ao)
-      CALL dbcsr_allocate_matrix_set(this%rho_ia_ao, tddft_env%nSpins)
-      DO ispin = 1, tddft_env%nSpins
-         CALL dbcsr_init_p(this%rho_ia_ao(ispin)%matrix)
-         CALL tddfpt_dbcsr_create_by_dist(matrix=this%rho_ia_ao(ispin)%matrix, &
-                                          template=matrix_s(1)%matrix, &
-                                          dbcsr_dist=dbcsr_dist, &
-                                          sab=sab_orb)
-      END DO
-      NULLIFY (this%rho_orb_struct_sub)
-      ALLOCATE (this%rho_orb_struct_sub)
-      CALL qs_rho_create(this%rho_orb_struct_sub)
-      CALL qs_rho_set(this%rho_orb_struct_sub, rho_ao=this%rho_ia_ao)
-      CALL qs_rho_rebuild(this%rho_orb_struct_sub, qs_env, &
+      NULLIFY (this%rho_orb_struct)
+      ALLOCATE (this%rho_orb_struct)
+      CALL qs_rho_create(this%rho_orb_struct)
+      CALL qs_rho_set(this%rho_orb_struct, rho_ao=this%work_rho_ao_ao_symm)
+      CALL qs_rho_rebuild(this%rho_orb_struct, qs_env, &
                           rebuild_ao=.FALSE., &
                           rebuild_grids=.TRUE.)
 
@@ -455,7 +446,7 @@ CONTAINS
 
 !     ! Full kernel
 !     CALL create_kernel_env(kernel_env=full_kernel_env, &
-!                            rho_struct_sub=this%rho_orb_struct_sub, &
+!                            rho_struct_sub=this%rho_orb_struct, &
 !                            xc_section=xc_section, &
 !                            is_rks_triplets=tddfpt_control%rks_triplets, &
 !                            sub_env=sub_env)
@@ -608,17 +599,11 @@ CONTAINS
          END DO
          DEALLOCATE(this%work_v_xc_tau)
       END IF
-      IF (ASSOCIATED(this%rho_ia_ao)) THEN
-         DO ivec = 1, SIZE(this%rho_ia_ao)
-            CALL dbcsr_deallocate_matrix(this%rho_ia_ao(ivec)%matrix)
-         END DO
-         DEALLOCATE(this%rho_ia_ao)
-      END IF
 
-      IF (ASSOCIATED(this%rho_orb_struct_sub)) THEN
-!        CALL qs_rho_release(this%rho_orb_struct_sub)
-!        DEALLOCATE(this%rho_orb_struct_sub)
-         NULLIFY(this%rho_orb_struct_sub)
+      IF (ASSOCIATED(this%rho_orb_struct)) THEN
+!        CALL qs_rho_release(this%rho_orb_struct)
+!        DEALLOCATE(this%rho_orb_struct)
+         NULLIFY(this%rho_orb_struct)
       END IF
 
    END SUBROUTINE sf_deallocate_theory_data
@@ -643,18 +628,9 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-!     CALL tddfpt_construct_ground_state_orb_density( &
-!              rho_orb_struct=this%rho_orb_struct_sub, &
-!              rho_xc_struct=this%gs_rho_xc_struct, &
-!              is_rks_triplets=tddfpt_control%rks_triplets, &
-!              qs_env=qs_env, &
-!              sub_env=sub_env, &
-!              wfm_rho_orb=this%rho_ia_ao_fm)
-      qs_env = qs_env
-
-
       IF (.FALSE.) THEN
          print *, this%unused
+         qs_env = qs_env
          NULLIFY(tddfpt_control)
       END IF
 
@@ -785,18 +761,10 @@ CONTAINS
          ! Set density-like to 0.0
          CALL dbcsr_set(matrix=this%work_rho_ao_ao_symm(1)%matrix, &
                         alpha=0.0_dp)
-!        ! XC part
-!        CALL dbcsr_set(matrix=this%rho_ia_ao(1)%matrix, &
-!                       alpha=0.0_dp)
-
          ! FM to DBCSR
          CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
                                matrix=this%work_rho_ao_ao_symm(1)%matrix, &
                                keep_sparsity=.TRUE.)
-!        ! XC part
-!        CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
-!                              matrix=this%rho_ia_ao(1)%matrix, &
-!                                 keep_sparsity=.TRUE.)
          !--------------------------------------
          ! Get Antisymmetric part of X vector
          !--------------------------------------
@@ -866,17 +834,14 @@ CONTAINS
 !     !-----------------------------------------------
 !     ! Density set at initial step to work_rho_ao_ao_symm
 !     ! Rebuild response density grids with current trial vector
-!     CALL qs_rho_update_rho(rho_struct=this%rho_orb_struct_sub, &
-!                            qs_env=qs_env, &
-!                            pw_env_external=pw_env, &
-!                            task_list_external=sub_env%task_list_orb, &
-!                            para_env_external=sub_env%para_env)
+!     CALL qs_rho_update_rho(rho_struct=this%rho_orb_struct, &
+!                            qs_env=qs_env)
 !     DO i = 1, tddft_env%nSpins
 !        CALL pw_zero(this%A_ia_rspace_sub(i))
 !     END DO
 !     CALL tddfpt_apply_xc(A_ia_rspace=this%A_ia_rspace_sub, &
 !                          kernel_env=kernel_env%full_kernel, &
-!                          rho_ia_struct=this%rho_orb_struct_sub, &
+!                          rho_ia_struct=this%rho_orb_struct, &
 !                          is_rks_triplets=tddfpt_control%rks_triplets, &
 !                          pw_env=pw_env, &
 !                          work_v_xc=this%work_v_xc, &
@@ -915,11 +880,7 @@ CONTAINS
 
       REAL(KIND=DP)                                      :: val, sig
       INTEGER                                            :: a, i, ij
-      IF (.FALSE. .and. ivec==1) THEN
-         print *, this%unused
-         tddft_env = tddft_env
-         NULLIFY(gs_mos)
-      END IF
+
       !-----------------------------------------------
       ! Transform back to MO basis
       !-----------------------------------------------
@@ -999,7 +960,6 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_print_theory_data'
 
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       CHARACTER(len=2)                                   :: lsd_str
       CHARACTER(len=1)                                   :: mult_str
@@ -1011,7 +971,8 @@ CONTAINS
       INTEGER                                            :: handle, ideriv, istate, ispin
       INTEGER, ALLOCATABLE :: indices(:), i_indices(:), a_indices(:)
       REAL(KIND=dp), ALLOCATABLE :: amplitudes(:)
-      INTEGER :: n_amplitudes, max_amplitudes, i, a, idx, jstate
+      INTEGER, DIMENSION(2)                       :: nmo_occ
+      INTEGER :: n_amplitudes, max_amplitudes, i, a, idx, jstate, nao, nspins
 
       CALL timeset(routineN, handle)
 
@@ -1046,10 +1007,15 @@ CONTAINS
 
       CALL get_qs_env(qs_env=qs_env, &
                       matrix_s=matrix_s)
-      ! Get ground state density matrices from rho_orb_struct_sub to
-      CALL qs_rho_get(this%rho_orb_struct_sub, rho_ao=rho_ao)
-      DO ispin = 1, tddft_env%nSpins
-         CALL copy_dbcsr_to_fm(rho_ao(ispin)%matrix, this%rho_fm_ao(ispin))
+
+      nspins = SIZE(gs_mos)
+      DO ispin = 1, nspins
+         CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, nrow_global=nao, ncol_global=nmo_occ(ispin))
+      END DO
+      DO ispin = 1, nspins
+         CALL parallel_gemm('N', 'T', nao, nao, nmo_occ(ispin), 1.0_dp, &
+                            gs_mos(ispin)%mos_occ, gs_mos(ispin)%mos_occ, &
+                            0.0_dp, this%rho_fm_ao(ispin))
       END DO
 
       ! matrix_s to cp_fm uging tmp matrix hmat_ao_ao
@@ -1129,16 +1095,7 @@ CONTAINS
 
          n_spin_imbalance = REAL(tddft_env%nocca - tddft_env%noccb, dp)
          s2_spin = 0.25_dp * n_spin_imbalance * (n_spin_imbalance - 2.0_dp)
-         IF (log_unit > 0) THEN
-            WRITE(log_unit, '(A,I5)') "DBG| For state ", istate
-            WRITE(log_unit, '(A,I5,A,I5)') "DBG| N_alpha = ", tddft_env%nocca, ", N_beta = ", tddft_env%noccb
-            WRITE(log_unit, '(A,F12.6)') "DBG| n_spin_imbalance = ", n_spin_imbalance
-            WRITE(log_unit, '(A,F12.6)') "DBG| s2_spin = ", s2_spin
-         END IF
          s2_beta_occ = REAL(tddft_env%noccb, dp) + 1.0_dp
-         IF (log_unit > 0) THEN
-            WRITE(log_unit, '(A,F12.6)') "DBG| s2_beta_occ = ", s2_beta_occ
-         END IF
 
          !--------------------------------------------------------------
          ! Compute S^2 expectation value for excited state:
@@ -1180,9 +1137,6 @@ CONTAINS
          ! s2_cross = -tr[(rho_beta_excited) * scr1]
          CALL cp_fm_trace(this%work2_ao_ao, this%work1_ao_ao, s2_cross)
          s2_cross = -s2_cross
-         IF (log_unit > 0) THEN
-            WRITE(log_unit, '(A,F12.6)') "DBG| s2_cross = ", s2_cross
-         END IF
 
          ! scr1 = S * dens_diff_ij * S [ta stands for dens_diff_ij, that is, the excited-state difference (alpha block)]
          CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
@@ -1197,9 +1151,6 @@ CONTAINS
          ! s2_anti = -tr[dens_diff_ab * scr1]
          CALL cp_fm_trace(tddft_env%dens_diff_ab(istate), this%work2_ao_ao, s2_anti)
          s2_anti = -s2_anti
-         IF (log_unit > 0) THEN
-            WRITE(log_unit, '(A,F12.6)') "DBG| s2_anti = ", s2_anti
-         END IF
 
          ! s2_offdiag = (1/2) * tr[symmetrized(evects_ao_ao) * Smat]
          CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
@@ -1208,15 +1159,9 @@ CONTAINS
          CALL cp_fm_scale_and_add(1.0_dp, this%work2_ao_ao, 0.5_dp, this%work1_ao_ao)
          CALL cp_fm_trace(this%work2_ao_ao, this%hmat_ao_ao, s2_offdiag)
          s2_offdiag = s2_offdiag / 2.0_dp
-         IF (log_unit > 0) THEN
-            WRITE(log_unit, '(A,F12.6)') "DBG| s2_offdiag = ", s2_offdiag
-         END IF
 
          ! s^2 = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag^2
          s2_mat(istate) = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag**2
-         IF (log_unit > 0) THEN
-            WRITE(log_unit, '(A,F12.6)') "DBG| s2_mat = ", s2_mat(istate)
-         END IF
       END DO
 
       trans_dipoles(:, :) = SQRT(2.0_dp)*trans_dipoles(:, :)
@@ -1299,23 +1244,23 @@ CONTAINS
 
       ALLOCATE(trans_dipoles_exc_exc(tddft_env%nstates, tddft_env%nstates, 3), source=0.0_dp)
 
-      DO istate = 1, tddft_env%nstates
-         DO jstate = istate + 1, tddft_env%nstates
-            ! Calculate difference of excitation vectors: X_I - X_J
-            CALL cp_fm_scale_and_add(0.0_dp, this%work_noc_vir, &
-                                     1.0_dp, tddft_env%evects_mo(istate))
-            CALL cp_fm_scale_and_add(1.0_dp, this%work_noc_vir, &
-                                     -1.0_dp, tddft_env%evects_mo(jstate))
-            ! Calculating transition dipole moments
-            DO ideriv = 1, 3
-               CALL cp_fm_trace(this%work_noc_vir, &
-                                this%dipoles_mo(ideriv), &
-                                trans_dipoles_exc_exc(istate, jstate, ideriv))
-            END DO
-         END DO
-      END DO
+!     DO istate = 1, tddft_env%nstates
+!        DO jstate = istate + 1, tddft_env%nstates
+!           ! Calculate difference of excitation vectors: X_I - X_J
+!           CALL cp_fm_scale_and_add(0.0_dp, this%work_noc_vir, &
+!                                    1.0_dp, tddft_env%evects_mo(istate))
+!           CALL cp_fm_scale_and_add(1.0_dp, this%work_noc_vir, &
+!                                    -1.0_dp, tddft_env%evects_mo(jstate))
+!           ! Calculating transition dipole moments
+!           DO ideriv = 1, 3
+!              CALL cp_fm_trace(this%work_noc_vir, &
+!                               this%dipoles_mo(ideriv), &
+!                               trans_dipoles_exc_exc(istate, jstate, ideriv))
+!           END DO
+!        END DO
+!     END DO
 
-      IF (log_unit > 0) THEN
+      IF (log_unit > 0 .and. .FALSE.) THEN
          WRITE (log_unit, "(1X,A)") "", &
             "-------------------------------------------------------------------------------", &
             "-                  Transition Dipoles Between Excited States                  -", &
