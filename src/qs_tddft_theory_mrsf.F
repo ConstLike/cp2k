@@ -7,6 +7,10 @@
 !
 MODULE qs_tddft_theory_mrsf
 
+   USE kinds,                           ONLY: default_path_length
+   USE qs_tddfpt2_properties,           ONLY: tddfpt_dipole_operator,&
+                                              tddfpt_print_exciton_descriptors,&
+                                              tddfpt_print_nto_analysis
    USE cp_control_types,                ONLY: dft_control_type
    USE task_list_types,                 ONLY: allocate_task_list,&
                                               deallocate_task_list,&
@@ -1816,12 +1820,14 @@ CONTAINS
 
    END SUBROUTINE mrsf_ao_to_mo_transform
 
-   SUBROUTINE mrsf_print_theory_data(this, qs_env, tddft_env, gs_mos, tddfpt_control, log_unit)
+   SUBROUTINE mrsf_print_theory_data(this, qs_env, tddft_env, gs_mos, ostrength,&
+              tddfpt_control, log_unit)
       CLASS(tddft_mrsf_theory_type), INTENT(INOUT) :: this
       TYPE(qs_environment_type), POINTER :: qs_env
       TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), POINTER :: gs_mos
+      REAL(kind=dp), DIMENSION(:)                     :: ostrength
       TYPE(tddfpt2_control_type), POINTER  :: tddfpt_control
       INTEGER :: log_unit
 
@@ -1837,8 +1843,11 @@ CONTAINS
       INTEGER, ALLOCATABLE :: indices(:), i_indices(:), a_indices(:)
       REAL(KIND=dp), ALLOCATABLE :: amplitudes(:)
       INTEGER :: n_amplitudes, max_amplitudes, i, a, idx
+      TYPE(section_vals_type), POINTER                   :: tddfpt_section
+      TYPE(section_vals_type), POINTER                   :: tddfpt_print_section
       INTEGER, DIMENSION(2)                       :: nmo_occ
       INTEGER :: lr1, lr2, nbf, nocca, noccb, nvira, nvirb, shift
+      CHARACTER(LEN=default_path_length)                 :: suffix
 
       CALL timeset(routineN, handle)
 
@@ -1964,6 +1973,7 @@ CONTAINS
          osc_strength = 2.0_dp/3.0_dp*tddft_env%evals(istate)* &
                         accurate_dot_product(trans_dipoles(1, istate, 1:3), &
                                              trans_dipoles(1, istate, 1:3))
+         ostrength(istate) = osc_strength
          IF (log_unit > 0) THEN
             WRITE (log_unit, '(1X,A,T9,I5,T15,F11.5,T30,F4.2,T34,3(1X,ES11.4E2),T70,ES12.4E2)') &
               "TDDFT| ", istate, tddft_env%evals(istate)*evolt, s2_mat(istate), &
@@ -2056,6 +2066,56 @@ CONTAINS
       END IF
 
       DEALLOCATE(trans_dipoles)
+
+      DO istate = 1, tddft_env%nStates
+         CALL cp_fm_set_all(matrix=this%work_noc_vir, alpha=0.0_dp)
+         CALL cp_fm_to_fm(source=tddft_env%evects_mo(istate), &
+                          destination=this%work_noc_vir)
+         ! -- Apply multiplicity-specific transformation of excitation amplitudes
+!        ! These rearrange selected active orbital amplitudes for correct MRSF spin-mapping
+!        SELECT CASE (tddft_env%response_type)
+!        CASE (2) ! MRSF-S
+!           CALL cp_fm_get_element(tddft_env%evects_mo(istate), tddft_env%nocca-1, 1, val)
+!           val = val * 1.0_dp / sqrt(2.0_dp)
+!           CALL cp_fm_set_element(this%work_noc_vir, tddft_env%nocca-1, 1, val)
+!
+!           CALL cp_fm_get_element(tddft_env%evects_mo(istate), tddft_env%nocca-1, 1, val)
+!           val = -val * 1.0_dp / sqrt(2.0_dp)
+!           CALL cp_fm_set_element(this%work_noc_vir, tddft_env%nocca, 2, val)
+!        CASE (3) ! MRSF-S
+!           CALL cp_fm_get_element(tddft_env%evects_mo(istate), tddft_env%nocca-1, 1, val)
+!           val = val * 1.0_dp / sqrt(2.0_dp)
+!           CALL cp_fm_set_element(this%work_noc_vir, tddft_env%nocca-1, 1, val)
+!
+!           CALL cp_fm_get_element(tddft_env%evects_mo(istate), tddft_env%nocca-1, 1, val)
+!           val = val * 1.0_dp / sqrt(2.0_dp)
+!           CALL cp_fm_set_element(this%work_noc_vir, tddft_env%nocca, 2, val)
+!
+!           CALL cp_fm_set_element(this%work_noc_vir, tddft_env%nocca, 1, 0.0_dp)
+!
+!           CALL cp_fm_set_element(this%work_noc_vir, tddft_env%nocca-1, 2, 0.0_dp)
+!        END SELECT
+         CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nocca, tddft_env%nvirb, &
+                         1.0_dp, gs_mos(2)%mos_virt, &
+                                 this%work_noc_vir, &
+                         0.0_dp, tddft_env%evects(1, istate))
+
+      END DO
+      SELECT CASE (tddft_env%response_type)
+      CASE (2) ! MRSF-S
+         suffix = TRIM("mrs-")
+      CASE (3) ! MRSF-S
+         suffix = TRIM("mrt-")
+      END SELECT
+ 
+      tddfpt_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT")
+      tddfpt_print_section => section_vals_get_subs_vals(tddfpt_section, "PRINT")
+      CALL tddfpt_print_nto_analysis(qs_env, &
+                                     tddft_env%evects, tddft_env%evals, &
+                                     ostrength, &
+                                     gs_mos, &
+                                     matrix_s(1)%matrix, &
+                                     tddfpt_print_section, suffix)
 
       CALL timestop(handle)
 

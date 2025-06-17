@@ -280,6 +280,7 @@ MODULE qs_tddft_types
 
       !> TDDFT excitation eigenvalues (e.g., omega_i)
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:) :: evals
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:,:) :: evects
       !> Trial vectors in MO basis: X_k
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: evects_mo
       !> Sigma vectors in MO basis: sigma_k = H X_k
@@ -550,6 +551,16 @@ CONTAINS
          CALL fm_pool_create_fm(tddft_env%fm_pool_ao(1)%pool, &
                                 tddft_env%dens_diff_ab(ivec))
       END DO
+      CALL cp_fm_struct_create(fm_struct, &
+                            nrow_global=tddft_env%nbf, &
+                            ncol_global=tddft_env%nocca, &
+                            context=blacs_env)
+      ALLOCATE(tddft_env%evects(1, tddft_env%nvec))
+      DO ivec = 1, tddft_env%nvec
+         CALL cp_fm_create(matrix=tddft_env%evects(1, ivec), &
+                           matrix_struct=fm_struct)
+      END DO
+      CALL cp_fm_struct_release(fm_struct)
 
       !--------------------
       ! ALLOCATE  RHO
@@ -686,6 +697,12 @@ CONTAINS
             END DO
          END DO
          DEALLOCATE(this%dipole_op_mos_occ)
+      END IF
+      IF (ALLOCATED(this%evects)) THEN
+         DO ivec = 1, SIZE(this%evects, 2)
+            CALL cp_fm_release(this%evects(1, ivec))
+         END DO
+         DEALLOCATE(this%evects)
       END IF
 
       CALL timestop(handle)

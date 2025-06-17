@@ -567,7 +567,7 @@ CONTAINS
                                   gs_mos, &
                                   qs_env)
 
-      CALL theory_handler%print_theory_data(qs_env, tddft_env, gs_mos, tddfpt_control, log_unit)
+      CALL theory_handler%print_theory_data(qs_env, tddft_env, gs_mos, ostrength, tddfpt_control, log_unit)
 
       CALL theory_handler%deallocate_theory_data(qs_env)
       DEALLOCATE (ostrength)

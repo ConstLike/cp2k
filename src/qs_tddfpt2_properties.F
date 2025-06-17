@@ -927,7 +927,8 @@ CONTAINS
 !> \par History
 !>    * 06.2019 created [JGH]
 ! **************************************************************************************************
-   SUBROUTINE tddfpt_print_nto_analysis(qs_env, evects, evals, ostrength, gs_mos, matrix_s, print_section)
+   SUBROUTINE tddfpt_print_nto_analysis(qs_env, evects, evals, ostrength, gs_mos, matrix_s, print_section, &
+                                        suffix)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(in)      :: evects
       REAL(kind=dp), DIMENSION(:), INTENT(in)            :: evals, ostrength
@@ -935,6 +936,7 @@ CONTAINS
          INTENT(in)                                      :: gs_mos
       TYPE(dbcsr_type), POINTER                          :: matrix_s
       TYPE(section_vals_type), POINTER                   :: print_section
+      CHARACTER(LEN=*), OPTIONAL, INTENT(IN) :: suffix
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_print_nto_analysis'
       INTEGER, PARAMETER                                 :: ntomax = 10
@@ -1151,7 +1153,7 @@ CONTAINS
             CALL section_vals_val_get(nto_section, "STRIDE", i_vals=stride)
             CALL section_vals_val_get(nto_section, "APPEND", l_val=append_cube)
             IF (cube_file) THEN
-               CALL print_nto_cubes(qs_env, nto_set, istate, stride, append_cube, nto_section)
+               CALL print_nto_cubes(qs_env, nto_set, istate, stride, append_cube, nto_section, suffix)
             END IF
             CALL get_qs_env(qs_env, qs_kind_set=qs_kind_set, particle_set=particle_set)
             molden_section => section_vals_get_subs_vals(print_section, "MOS_MOLDEN")
@@ -1425,7 +1427,7 @@ CONTAINS
 !> \param append_cube ...
 !> \param print_section ...
 ! **************************************************************************************************
-   SUBROUTINE print_nto_cubes(qs_env, mos, istate, stride, append_cube, print_section)
+   SUBROUTINE print_nto_cubes(qs_env, mos, istate, stride, append_cube, print_section, suffix)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(mo_set_type), DIMENSION(:), INTENT(IN)        :: mos
@@ -1433,8 +1435,9 @@ CONTAINS
       INTEGER, DIMENSION(:), POINTER                     :: stride
       LOGICAL, INTENT(IN)                                :: append_cube
       TYPE(section_vals_type), POINTER                   :: print_section
+      CHARACTER(LEN=*), OPTIONAL, INTENT(IN)             :: suffix
 
-      CHARACTER(LEN=default_path_length)                 :: filename, my_pos_cube, title
+      CHARACTER(LEN=default_path_length)                 :: filename, my_pos_cube, title, nto_state
       INTEGER                                            :: i, iset, nmo, unit_nr
       LOGICAL                                            :: mpi_io
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
@@ -1452,6 +1455,7 @@ CONTAINS
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_subsys_type), POINTER                      :: subsys
 
+
       logger => cp_get_default_logger()
 
       CALL get_qs_env(qs_env=qs_env, dft_control=dft_control, pw_env=pw_env)
@@ -1467,6 +1471,11 @@ CONTAINS
          my_pos_cube = "APPEND"
       END IF
 
+      IF (PRESENT(suffix)) THEN
+         nto_state = TRIM(suffix)
+      ELSE
+         nto_state = ""
+      END IF
       CALL get_qs_env(qs_env=qs_env, &
                       atomic_kind_set=atomic_kind_set, &
                       qs_kind_set=qs_kind_set, &
@@ -1479,9 +1488,9 @@ CONTAINS
             CALL calculate_wavefunction(mo_coeff, i, wf_r, wf_g, atomic_kind_set, qs_kind_set, &
                                         cell, dft_control, particle_set, pw_env)
             IF (iset == 1) THEN
-               WRITE (filename, '(a4,I3.3,I2.2,a11)') "NTO_STATE", istate, i, "_Hole_State"
+               WRITE (filename, '(a4,I3.3,I2.2,a11)') nto_state, istate, i, "-hole"
             ELSEIF (iset == 2) THEN
-               WRITE (filename, '(a4,I3.3,I2.2,a15)') "NTO_STATE", istate, i, "_Particle_State"
+               WRITE (filename, '(a4,I3.3,I2.2,a15)') nto_state, istate, i, "-Particle"
             END IF
             mpi_io = .TRUE.
             unit_nr = cp_print_key_unit_nr(logger, print_section, '', extension=".cube", &

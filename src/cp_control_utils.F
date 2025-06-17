@@ -1656,9 +1656,11 @@ CONTAINS
       IF (explicit) THEN
          CALL section_vals_val_get(t_section, "MRSF_HF", r_vals=t_control%mrsf_HF)
       END IF
-      IF (t_control%sf_tddft==tddft_sf_col .or. t_control%mrsf_type==mrsf_col) THEN
-         t_control%tddft_enabled = .TRUE.
-         t_control%enabled = .FALSE.
+      IF (t_control%enabled) THEN
+         IF (t_control%sf_tddft==tddft_sf_col .or. t_control%mrsf_type==mrsf_col) THEN
+            t_control%tddft_enabled = .TRUE.
+            t_control%enabled = .FALSE.
+         END IF
       END IF
 
       ! read automatically generated auxiliary basis for LRI

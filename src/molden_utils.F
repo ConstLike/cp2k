@@ -371,11 +371,14 @@ CONTAINS
 
       INTEGER                                            :: orbital
 
+      IF(ndigits > 0) THEN
+      END IF
+
       DO orbital = 1, molden_ncomax
          IF (orbmap(orbital) /= 0) THEN
-            IF (ABS(mo_coeff(orbmap(orbital))) >= 10.0_dp**(-ndigits)) THEN
+!           IF (ABS(mo_coeff(orbmap(orbital))) >= 10.0_dp**(-ndigits)) THEN
                WRITE (iw, fmtstr1) irow_in + orbital - 1, mo_coeff(orbmap(orbital))
-            END IF
+!           END IF
          END IF
       END DO
 

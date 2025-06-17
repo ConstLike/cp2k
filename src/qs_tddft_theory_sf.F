@@ -7,6 +7,10 @@
 !
 MODULE qs_tddft_theory_sf
 
+   USE kinds,                           ONLY: default_path_length
+   USE qs_tddfpt2_properties,           ONLY: tddfpt_dipole_operator,&
+                                              tddfpt_print_exciton_descriptors,&
+                                              tddfpt_print_nto_analysis
    USE pw_env_types,                    ONLY: pw_env_release,&
                                               pw_env_retain,&
                                               pw_env_type
@@ -949,13 +953,17 @@ CONTAINS
       CALL print_mat_ao_ao(tddft_env%sigma_vecs(ivec), 'sigma_mat', logger, ivec)
    END SUBROUTINE sf_ao_to_mo_transform
 
-   SUBROUTINE sf_print_theory_data(this, qs_env, tddft_env, gs_mos, tddfpt_control, log_unit)
+   SUBROUTINE sf_print_theory_data(this, qs_env, tddft_env, gs_mos, ostrength, &
+                                   tddfpt_control, log_unit)
       CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
       TYPE(qs_environment_type), POINTER :: qs_env
       TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), POINTER :: gs_mos
+      REAL(kind=dp), DIMENSION(:)                     :: ostrength
       TYPE(tddfpt2_control_type), POINTER  :: tddfpt_control
+      TYPE(section_vals_type), POINTER                   :: tddfpt_section
+      TYPE(section_vals_type), POINTER                   :: tddfpt_print_section
       INTEGER :: log_unit
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_print_theory_data'
@@ -973,6 +981,7 @@ CONTAINS
       REAL(KIND=dp), ALLOCATABLE :: amplitudes(:)
       INTEGER, DIMENSION(2)                       :: nmo_occ
       INTEGER :: n_amplitudes, max_amplitudes, i, a, idx, jstate, nao, nspins
+      CHARACTER(LEN=default_path_length)                 :: suffix
 
       CALL timeset(routineN, handle)
 
@@ -1171,6 +1180,7 @@ CONTAINS
          osc_strength = 2.0_dp/3.0_dp*tddft_env%evals(istate)* &
                         accurate_dot_product(trans_dipoles(istate, 1:3), &
                                              trans_dipoles(istate, 1:3))
+         ostrength(istate) = osc_strength
          IF (log_unit > 0) THEN
             WRITE (log_unit, '(1X,A,T9,I5,T15,F11.5,T30,F4.2,T34,3(1X,ES11.4E2),T70,ES12.4E2)') &
               "TDDFT| ", istate, tddft_env%evals(istate)*evolt, s2_mat(istate), &
@@ -1282,6 +1292,26 @@ CONTAINS
       END IF
 
       DEALLOCATE(trans_dipoles_exc_exc)
+      DO istate = 1, tddft_env%nStates
+         CALL cp_fm_set_all(matrix=this%work_noc_vir, alpha=0.0_dp)
+         CALL cp_fm_to_fm(source=tddft_env%evects_mo(istate), &
+                          destination=this%work_noc_vir)
+         CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nocca, tddft_env%nvirb, &
+                         1.0_dp, gs_mos(2)%mos_virt, &
+                                 this%work_noc_vir, &
+                         0.0_dp, tddft_env%evects(1, istate))
+
+      END DO
+
+      suffix = TRIM("sfl-")
+      tddfpt_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT")
+      tddfpt_print_section => section_vals_get_subs_vals(tddfpt_section, "PRINT")
+      CALL tddfpt_print_nto_analysis(qs_env, &
+                                     tddft_env%evects, tddft_env%evals, &
+                                     ostrength, &
+                                     gs_mos, &
+                                     matrix_s(1)%matrix, &
+                                     tddfpt_print_section, suffix)
 
       CALL timestop(handle)
 

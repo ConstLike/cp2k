@@ -46,6 +46,7 @@ MODULE qs_tddft_theory
    USE qs_tddfpt2_types,                ONLY: tddfpt_ground_state_mos
    USE qs_tddft_types,                  ONLY: tddft_info_type
    USE cp_fm_types,                     ONLY: cp_fm_type
+   USE kinds,                           ONLY: dp
 
 #include "./base/base_uses.f90"
 
@@ -160,14 +161,15 @@ MODULE qs_tddft_theory
          TYPE(cp_logger_type), POINTER                   :: logger
       END SUBROUTINE
       !> Print theory-specific excitation analysis
-      SUBROUTINE print_theory_iface(this, qs_env, tddft_env, gs_mos, tddfpt_control, log_unit)
+      SUBROUTINE print_theory_iface(this, qs_env, tddft_env, gs_mos, ostrength, tddfpt_control, log_unit)
          IMPORT :: tddft_theory_type, tddft_info_type, tddfpt2_control_type, &
-                   tddfpt_ground_state_mos, qs_environment_type
+                   tddfpt_ground_state_mos, qs_environment_type, dp
          CLASS(tddft_theory_type), INTENT(INOUT) :: this
          TYPE(qs_environment_type), POINTER :: qs_env
          TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env
          TYPE(tddfpt_ground_state_mos), &
             DIMENSION(:), POINTER                        :: gs_mos
+         REAL(kind=dp), DIMENSION(:)                     :: ostrength
          TYPE(tddfpt2_control_type), POINTER             :: tddfpt_control
          INTEGER                                         :: log_unit
       END SUBROUTINE
