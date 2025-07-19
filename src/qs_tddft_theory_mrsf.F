@@ -7,6 +7,7 @@
 !
 MODULE qs_tddft_theory_mrsf
 
+   USE qs_energy_types,                 ONLY: qs_energy_type
    USE kinds,                           ONLY: default_path_length
    USE qs_tddfpt2_properties,           ONLY: tddfpt_dipole_operator,&
                                               tddfpt_print_exciton_descriptors,&
@@ -1838,14 +1839,15 @@ CONTAINS
       CHARACTER(len=1)                                   :: mult_str
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: trans_dipoles
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: s2_mat
-      REAL(kind=dp)                                      :: osc_strength, val, f, energ
+      REAL(kind=dp)                                      :: osc_strength, val, f, energ, gs_energy
       INTEGER                                            :: handle, ideriv, istate, jstate, ispin
       INTEGER, ALLOCATABLE :: indices(:), i_indices(:), a_indices(:)
       REAL(KIND=dp), ALLOCATABLE :: amplitudes(:)
       INTEGER :: n_amplitudes, max_amplitudes, i, a, idx
+      TYPE(qs_energy_type), POINTER                      :: energy
       TYPE(section_vals_type), POINTER                   :: tddfpt_section
       TYPE(section_vals_type), POINTER                   :: tddfpt_print_section
-      INTEGER, DIMENSION(2)                       :: nmo_occ
+      INTEGER, DIMENSION(2)                              :: nmo_occ
       INTEGER :: lr1, lr2, nbf, nocca, noccb, nvira, nvirb, shift
       CHARACTER(LEN=default_path_length)                 :: suffix
 
@@ -1885,15 +1887,17 @@ CONTAINS
             CPABORT("Unimplemented form of the dipole operator")
          END SELECT
 
-         WRITE (log_unit, '(T10,A,T19,A,T37,A,T69,A)') "State", "Excitation  S^2", &
+         WRITE (log_unit, '(T3,A,T15,A,T37,A,T69,A)') "State", "Excitation     S^2", &
             "Transition dipole (a.u.)", "Oscillator"
-         WRITE (log_unit, '(T10,A,T19,A,T37,A,T49,A,T61,A,T67,A)') "number", "energy (eV)", &
+         WRITE (log_unit, '(T3,A,T14,A,T37,A,T49,A,T61,A,T67,A)') "number", "energy (a.u.)", &
             "x", "y", "z", "strength (a.u.)"
-         WRITE (log_unit, '(T10,72("-"))')
+         WRITE (log_unit, '(T3,79("-"))')
       END IF
 
       CALL get_qs_env(qs_env=qs_env, &
-                      matrix_s=matrix_s)
+                      matrix_s=matrix_s, &
+                      energy=energy)
+      gs_energy = energy%total
 
       DO ispin = 1, tddft_env%nSpins
          CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, &
@@ -1975,8 +1979,8 @@ CONTAINS
                                              trans_dipoles(1, istate, 1:3))
          ostrength(istate) = osc_strength
          IF (log_unit > 0) THEN
-            WRITE (log_unit, '(1X,A,T9,I5,T15,F11.5,T30,F4.2,T34,3(1X,ES11.4E2),T70,ES12.4E2)') &
-              "TDDFT| ", istate, tddft_env%evals(istate)*evolt, s2_mat(istate), &
+            WRITE (log_unit, '(1X,I4,1X,F22.14,T30,F4.2,T34,3(1X,ES11.4E2),T70,ES12.4E2)') &
+              istate, gs_energy+tddft_env%evals(istate), s2_mat(istate), &
               trans_dipoles(1, istate, 1:3), osc_strength
          END IF
       END DO
