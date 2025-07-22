@@ -105,6 +105,7 @@ MODULE qs_tddft_theory_mrsf
                                               dbcsr_distribution_release,&
                                               dbcsr_distribution_type,&
                                               dbcsr_type_antisymmetric,&
+                                              dbcsr_type_symmetric,&
                                               dbcsr_deallocate_matrix
    USE cp_fm_types,                     ONLY: cp_fm_create,&
                                               cp_fm_get_info,&
@@ -130,6 +131,24 @@ MODULE qs_tddft_theory_mrsf
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_get_default_io_unit,&
                                               cp_logger_type
+   USE atomic_kind_types,               ONLY: atomic_kind_type
+   USE qs_kind_types,                   ONLY: qs_kind_type
+   USE qs_local_rho_types,              ONLY: local_rho_type, &
+                                              local_rho_set_create, &
+                                              local_rho_set_release
+   USE qs_rho0_ggrid,                   ONLY: integrate_vhg0_rspace
+   USE qs_rho0_methods,                 ONLY: init_rho0
+   USE qs_gapw_densities,               ONLY: prepare_gapw_den
+   USE qs_vxc_atom,                     ONLY: calculate_xc_2nd_deriv_atom
+   USE qs_ks_atom,                      ONLY: update_ks_atom
+   USE qs_rho_atom_types,               ONLY: rho_atom_type
+   USE hartree_local_types,             ONLY: hartree_local_type, &
+                                              hartree_local_create, &
+                                              hartree_local_release
+   USE hartree_local_methods,           ONLY: init_coulomb_local, &
+                                              Vh_1c_gg_integrals
+   USE qs_rho0_ggrid,                   ONLY: rho0_s_grid_create
+   USE qs_rho_atom_methods,             ONLY: allocate_rho_atom_internals
 
 #include "./base/base_uses.f90"
 
@@ -217,7 +236,6 @@ MODULE qs_tddft_theory_mrsf
       !> tau-dependent v_XC components (meta-GGA) [nSpins]
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: work_v_xc_tau => NULL()
 
-      ! -- theory-specific fields if needed --
    CONTAINS
       PROCEDURE, PASS(this) :: allocate_theory_data     => mrsf_allocate_theory_data
       PROCEDURE, PASS(this) :: deallocate_theory_data   => mrsf_deallocate_theory_data
@@ -546,8 +564,8 @@ CONTAINS
       CALL dbcsr_set(this%work_coulomb%matrix, 0.0_dp)
 
       NULLIFY (this%A_ia_munu_sub)
-      CALL dbcsr_allocate_matrix_set(this%A_ia_munu_sub, 1)
-      DO ispin = 1, 1
+      CALL dbcsr_allocate_matrix_set(this%A_ia_munu_sub, tddft_env%nSpins)
+      DO ispin = 1, tddft_env%nSpins
          CALL dbcsr_init_p(this%A_ia_munu_sub(ispin)%matrix)
          CALL tddfpt_dbcsr_create_by_dist(this%A_ia_munu_sub(ispin)%matrix, &
                                           template=matrix_s(1)%matrix, &
@@ -845,8 +863,8 @@ CONTAINS
    END SUBROUTINE mrsf_deallocate_theory_data
 
    SUBROUTINE mrsf_initialize_guess_vectors(this, qs_env, tddft_env, gs_mos, &
-                                          tddfpt_control, log_unit)
-      CLASS(tddft_mrsf_theory_type), INTENT(INOUT)         :: this
+                                            tddfpt_control, log_unit)
+      CLASS(tddft_mrsf_theory_type), INTENT(INOUT)       :: this
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
@@ -876,9 +894,9 @@ CONTAINS
                this%spc(7,1)
             WRITE(log_unit, '(T14,A,F6.3)') "Fraction of long-range HF exchange (beta) ..........", &
                this%spc(7,2)
-            WRITE(log_unit, '(T14,A,F6.3)') "Total long-range HF exchange (alpha + beta) ........", & 
+            WRITE(log_unit, '(T14,A,F6.3)') "Total long-range HF exchange (alpha + beta) ........", &
                this%spc(7,1) + this%spc(7,2)
-            WRITE(log_unit, '(T14,A,F6.3)') "Range-separation parameter (omega) .................", & 
+            WRITE(log_unit, '(T14,A,F6.3)') "Range-separation parameter (omega) .................", &
                tddft_env%C_hf_omega
          ELSE
             WRITE(log_unit, '(T14,A,F6.3)') "Fraction of Hartree-Fock exchange ........", &
@@ -1228,8 +1246,9 @@ CONTAINS
       TYPE(hfx_type), DIMENSION(:, :), POINTER        :: hfx_data
       INTEGER :: imat
       TYPE(section_vals_type), POINTER                   :: hf_section
-!     TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(task_list_type), POINTER                      :: task_list_orb
+      TYPE(dft_control_type), POINTER                    :: dft_control
       LOGICAL :: skip_sym, skip_asym
       TYPE(pw_poisson_type), POINTER :: poisson_env
       REAL(KIND=dp) :: pair_energy
@@ -1247,7 +1266,8 @@ CONTAINS
       CALL get_qs_env(qs_env=qs_env, &
                       x_data=hfx_data, &
                       pw_env=pw_env, &
-!                     para_env=para_env, &
+                      dft_control=dft_control, &
+                      para_env=para_env, &
                       task_list=task_list_orb)
 
       hf_section => section_vals_get_subs_vals(section_vals=qs_env%input, &
@@ -1392,12 +1412,25 @@ CONTAINS
             CALL qs_rho_update_rho(rho_struct=this%rho_orb_struct_sub, &
                                    qs_env=qs_env, &
                                    pw_env_external=pw_env, &
-                                   task_list_external=task_list_orb)
+!                                  task_list_external=task_list_orb, &
+                                   local_rho_set=tddft_env%local_rho_set)
 !                                  para_env_external=para_env)
+!
+            ! *** GAPW: Prepare GAPW densities after rho update ***
+            IF (dft_control%qs_control%gapw) THEN
+               CALL prepare_gapw_den(qs_env, &
+                                     tddft_env%local_rho_set, &
+                                     do_rho0=.TRUE.)
+            END IF
 
             ! Get the updated grid density
             CALL qs_rho_get(this%rho_orb_struct_sub, &
                             rho_g=rho_ia_g)
+
+            IF (dft_control%qs_control%gapw) THEN
+               CPASSERT(ASSOCIATED(tddft_env%local_rho_set))
+               CALL pw_axpy(tddft_env%local_rho_set%rho0_mpole%rho0_s_gs, rho_ia_g(1))
+            END IF
 
             ! Get Poisson environment
             CALL pw_env_get(pw_env, &
@@ -1411,11 +1444,30 @@ CONTAINS
             ! Transfer potential to real space
             CALL pw_transfer(this%work_v_gspace, this%work_v_rspace)
 
+            ! *** GAPW: Add local Hartree contributions to potential ***
+            IF (dft_control%qs_control%gapw) THEN
+               ! Compute 1-center GAPW Hartree integrals
+               CALL Vh_1c_gg_integrals(qs_env, &
+                                       pair_energy, &
+                                       ecoul_1c=tddft_env%hartree_local%ecoul_1c, &
+                                       local_rho_set=tddft_env%local_rho_set, &
+                                       para_env=para_env, &
+                                       tddft=.TRUE.,&
+                                       core_2nd=.TRUE.)
+            END IF
+
             ! Scale by Hartree-Fock exchange
             CALL pw_scale(this%work_v_rspace, this%spc(imat, 1))
 
             ! Scale by grid volume element
             CALL pw_scale(this%work_v_rspace, this%work_v_rspace%pw_grid%dvol)
+
+            IF (dft_control%qs_control%gapw) THEN
+               ! Add to work_v_rspace
+               CALL integrate_vhg0_rspace(qs_env, this%work_v_rspace, para_env, &
+                                          calculate_forces=.FALSE., &
+                                          local_rho_set=tddft_env%local_rho_set)
+            END IF
 
             ! Integrate into AO matrix
             CALL dbcsr_set(this%A_ia_munu_sub(1)%matrix, 0.0_dp)
@@ -1423,9 +1475,19 @@ CONTAINS
                                     hmat=this%A_ia_munu_sub(1), &
                                     qs_env=qs_env, &
                                     calculate_forces=.FALSE., &
-                                    gapw=.FALSE., &
-                                    pw_env_external=pw_env, &
-                                    task_list_external=task_list_orb)
+                                    gapw=dft_control%qs_control%gapw, &
+                                    pw_env_external=pw_env)
+!                                   task_list_external=task_list_orb)
+
+!           ! *** GAPW: Update KS atom with local contributions ***
+            IF (dft_control%qs_control%gapw) THEN
+               CALL update_ks_atom(qs_env, &
+                                   this%A_ia_munu_sub, &
+                                   this%work_rho_ao_ao_symm, &
+                                   forces=.FALSE., &
+                                   tddft=.TRUE., &
+                                   rho_atom_external=tddft_env%local_rho_set%rho_atom_set)
+            END IF
 
             ! Convert to full matrix and accumulate into hmat_ao_ao
             CALL copy_dbcsr_to_fm(matrix=this%A_ia_munu_sub(1)%matrix, &
@@ -2108,10 +2170,10 @@ CONTAINS
       SELECT CASE (tddft_env%response_type)
       CASE (2) ! MRSF-S
          suffix = TRIM("mrs-")
-      CASE (3) ! MRSF-S
+      CASE (3) ! MRSF-T
          suffix = TRIM("mrt-")
       END SELECT
- 
+
       tddfpt_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT")
       tddfpt_print_section => section_vals_get_subs_vals(tddfpt_section, "PRINT")
       CALL tddfpt_print_nto_analysis(qs_env, &

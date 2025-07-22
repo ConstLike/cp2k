@@ -6,6 +6,19 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddft_types
+   USE hartree_local_methods,           ONLY: init_coulomb_local
+   USE qs_rho0_ggrid,                   ONLY: rho0_s_grid_create
+   USE qs_rho_atom_methods,             ONLY: allocate_rho_atom_internals
+   USE qs_rho0_types,                   ONLY: rho0_mpole_type
+   USE qs_rho_atom_types,               ONLY: rho_atom_type
+   USE hartree_local_types,             ONLY: hartree_local_type, &
+                                              hartree_local_create, &
+                                              hartree_local_release
+   USE qs_local_rho_types,              ONLY: local_rho_type, &
+                                              local_rho_set_create, &
+                                              local_rho_set_release
+   USE qs_rho0_methods,                 ONLY: init_rho0
+   USE qs_gapw_densities,               ONLY: prepare_gapw_den
    USE input_constants,                 ONLY: &
         do_hfx_auto_shells, do_potential_coulomb, do_potential_gaussian, do_potential_id, &
         do_potential_long, do_potential_mix_cl, do_potential_mix_cl_trunc, do_potential_mix_lg, &
@@ -21,7 +34,7 @@ MODULE qs_tddft_types
    USE pw_methods,                      ONLY: pw_axpy,&
                                               pw_scale,&
                                               pw_zero
-   USE pw_env_types,                    ONLY: pw_env_get
+   USE pw_env_types,                    ONLY: pw_env_type
    USE pw_pool_types,                   ONLY: pw_pool_type
    USE pw_types,                        ONLY: pw_c1d_gs_type,&
                                               pw_r3d_rs_type
@@ -316,6 +329,19 @@ MODULE qs_tddft_types
       REAL(KIND=dp) :: C_hf_beta
       REAL(KIND=dp) :: C_hf_omega
 
+      ! *** GAPW-specific fields ***
+      !> Local rho set for GAPW densities (used for atomic grids)
+      TYPE(local_rho_type), POINTER :: local_rho_set => NULL()
+
+      !> Hartree local structure for GAPW (local Coulomb potentials)
+      TYPE(hartree_local_type), POINTER :: hartree_local => NULL()
+
+      !> Rho atom set for GAPW (atomic densities)
+      TYPE(rho_atom_type), DIMENSION(:), POINTER :: rho_atom_set => NULL()
+
+      !> Rho0 multipole for compensation charges in GAPW
+      TYPE(rho0_mpole_type), POINTER :: rho0_mpole => NULL()
+
    END TYPE tddft_info_type
 
 CONTAINS
@@ -379,6 +405,11 @@ CONTAINS
       INTEGER                                            :: ivec, ispin, handle
       INTEGER :: n_rep_hf, potential_type
       LOGICAL :: explicit
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      INTEGER                                            :: natom
+      TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(pw_env_type), POINTER :: pw_env
 
       CALL timeset(routineN, handle)
 
@@ -567,6 +598,47 @@ CONTAINS
       !--------------------
 
       ! Allocate and set up qs_rho_type
+
+      ! *** GAPW-specific initialization ***
+      IF (dft_control%qs_control%gapw) THEN
+         ! Retrieve atomic and kind sets for GAPW setup
+         CALL get_qs_env(qs_env, &
+                         pw_env=pw_env, &
+                         para_env=para_env, &
+                         atomic_kind_set=atomic_kind_set, &
+                         qs_kind_set=qs_kind_set, &
+                         natom=natom)
+
+         ! Create local_rho_set for atomic grids in GAPW
+         CALL local_rho_set_create(tddft_env%local_rho_set)
+         CALL allocate_rho_atom_internals(tddft_env%local_rho_set%rho_atom_set, &
+                                          atomic_kind_set, &
+                                          qs_kind_set, &
+                                          dft_control, &
+                                          para_env)
+
+         ! Initialize rho0 for compensation charges
+         CALL init_rho0(tddft_env%local_rho_set, &
+                        qs_env, &
+                        dft_control%qs_control%gapw_control, &
+                        zcore=0.0_dp)
+
+         ! Create grid for rho0 multipole
+         CALL rho0_s_grid_create(pw_env, &
+                                 tddft_env%local_rho_set%rho0_mpole)
+
+         ! Create hartree_local for local Coulomb potentials
+         CALL hartree_local_create(tddft_env%hartree_local)
+         CALL init_coulomb_local(tddft_env%hartree_local, natom)
+
+         ! Create rho_atom_set pointer for convenience
+         tddft_env%rho_atom_set => tddft_env%local_rho_set%rho_atom_set
+
+         ! Create rho0_mpole pointer
+         tddft_env%rho0_mpole => tddft_env%local_rho_set%rho0_mpole
+      ELSEIF (dft_control%qs_control%gapw_xc) THEN
+      END IF
+
       !
       CALL timestop(handle)
 
@@ -704,6 +776,20 @@ CONTAINS
          END DO
          DEALLOCATE(this%evects)
       END IF
+
+      ! *** GAPW-specific deallocation ***
+      ! Release local_rho_set and related structures
+      IF (ASSOCIATED(this%local_rho_set)) THEN
+         CALL local_rho_set_release(this%local_rho_set)
+      END IF
+
+      IF (ASSOCIATED(this%hartree_local)) THEN
+         CALL hartree_local_release(this%hartree_local)
+      END IF
+
+      ! Nullify pointers to avoid double-free
+      NULLIFY(this%rho_atom_set)
+      NULLIFY(this%rho0_mpole)
 
       CALL timestop(handle)
 
