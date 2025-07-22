@@ -1827,7 +1827,7 @@ CONTAINS
       TYPE(qs_energy_type), POINTER                      :: energy
       TYPE(qs_environment_type), POINTER                 :: qs_env_tmp
 !     TYPE(pw_type), POINTER                             :: rho_tmp
-!     CHARACTER(len=50)                                  :: filename
+      CHARACTER(len=50)                                  :: filename
 
       CALL timeset(routinen, handle)
 
@@ -1857,6 +1857,11 @@ CONTAINS
          ! - Non-additive XC potential
          ! - Electrostatic potential from other fragments
          CALL fat_vemb_frag(fat_env, v_emb=v_emb, i_frag=i_frag, to_file=.FALSE.)
+         IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
+            ! Write embedding to cube file
+            WRITE(filename,'(A,I0,A,I0,A)') 'embedding_frag', i_frag, '.cube'
+            CALL write_pw_to_cube(fat_env, pw_r=v_emb, filename=filename)
+         END IF
       END IF
 
       ! Set the embedding potential to the qs env
@@ -2857,8 +2862,8 @@ CONTAINS
          force_env_tmp => fat_env%force_env_sub(i)%force_env
          qs_env_tmp => force_env_tmp%qs_env
          CALL get_qs_env(qs_env_tmp, scf_control=scf_control_tmp)
-         scf_control_tmp%max_scf = 1
-         scf_control_tmp%ignore_convergence_failure = .TRUE.
+!        scf_control_tmp%max_scf = 1
+!        scf_control_tmp%ignore_convergence_failure = .TRUE.
          CALL qs_calc_energy_force(qs_env=qs_env_tmp, &
                                    calc_force=.TRUE., &
                                    consistent_energies=.FALSE., &
@@ -2987,7 +2992,7 @@ subroutine fat_embedding(force_env, converged, do_forces)
          CALL fat_force_store(fat_env)
          ! Save forces in the particle array of the embedding environment
          DO iparticle = 1, SIZE(particles_embed%els)
-            particles_embed%els(iparticle)%f(:) = fat_env%forces(iparticle,:)
+            particles_embed%els(iparticle)%f(:) = -fat_env%forces(iparticle,:)
          END DO
 
          IF (fat_env%force_env_ref%para_env%is_source()) THEN
