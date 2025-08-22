@@ -25,8 +25,8 @@ MODULE qs_tddft_methods
    USE qs_tddft_theory,                 ONLY: tddft_theory_type
    USE qs_tddft_types,                  ONLY: tddft_info_type,&
                                               tddft_initialization,&
-                                              tddft_finalization,&
-                                              allocate_fm_matrix,&
+                                              tddft_finalization
+   USE qs_tddft_utils,                  ONLY: allocate_fm_matrix,&
                                               deallocate_fm_matrix
    USE qs_integrate_potential,          ONLY: integrate_v_rspace,&
                                               integrate_v_rspace_one_center

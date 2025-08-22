@@ -197,8 +197,6 @@ MODULE qs_tddft_types
    PUBLIC :: tddft_info_type
    PUBLIC :: tddft_initialization
    PUBLIC :: tddft_finalization
-   PUBLIC :: allocate_fm_matrix
-   PUBLIC :: deallocate_fm_matrix
 
 ! **************************************************************************************************
 !> \brief General TDDFT buffers and configuration
@@ -298,49 +296,6 @@ MODULE qs_tddft_types
    END TYPE tddft_info_type
 
 CONTAINS
-
-   SUBROUTINE allocate_fm_matrix(matrix, nrow, ncol, blacs_env)
-      TYPE(cp_fm_type), POINTER, INTENT(OUT)             :: matrix
-      INTEGER, INTENT(IN)                                :: nrow, ncol
-      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
-
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'allocate_fm_matrix'
-
-      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
-      INTEGER                                            :: handle
-
-      CALL timeset(routineN, handle)
-
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=nrow, &
-                               ncol_global=ncol, &
-                               context=blacs_env)
-      ALLOCATE(matrix)
-      CALL cp_fm_create(matrix, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(matrix, 0.0_dp)
-
-      CALL timestop(handle)
-
-   END SUBROUTINE allocate_fm_matrix
-
-   SUBROUTINE deallocate_fm_matrix(matrix)
-      TYPE(cp_fm_type), POINTER, INTENT(INOUT)           :: matrix
-
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'deallocate_fm_matrix'
-
-      INTEGER                                            :: handle
-
-      CALL timeset(routineN, handle)
-
-      IF (ASSOCIATED(matrix)) THEN
-         CALL cp_fm_release(matrix)
-         DEALLOCATE(matrix)
-      END IF
-
-      CALL timestop(handle)
-
-   END SUBROUTINE deallocate_fm_matrix
 
    SUBROUTINE tddft_initialization(tddft_env, qs_env, gs_mos, blacs_env)
       CLASS(tddft_info_type), INTENT(INOUT)              :: tddft_env
