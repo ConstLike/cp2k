@@ -186,6 +186,10 @@ MODULE qs_tddft_theory_sf
       !> tau-dependent v_XC components (meta-GGA) [nSpins]
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: work_v_xc_tau => NULL()
 
+      !> Per-spin AO scratch matrices for Fock transformation [nbf, nbf]
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: dens_diff_ij
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: dens_diff_ab
+
       ! -- theory-specific fields if needed --
    CONTAINS
       PROCEDURE, PASS(this) :: allocate_theory_data     => sf_allocate_theory_data
@@ -337,6 +341,30 @@ CONTAINS
       DO ispin = 1, tddft_env%nSpins
          CALL cp_fm_create(this%rho_fm_ao(ispin), fm_struct)
          CALL cp_fm_set_all(this%rho_fm_ao(ispin), 0.0_dp)
+      END DO
+      CALL cp_fm_struct_release(fm_struct)
+      !=================================================
+      !=== dens_diff_ij [nbf, nbf] ========================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nbf, &
+                               ncol_global=tddft_env%nbf, &
+                               context=blacs_env)
+      ALLOCATE(this%dens_diff_ij(tddft_env%nStates))
+      DO ivec = 1, tddft_env%nStates
+         CALL cp_fm_create(this%dens_diff_ij(ivec), fm_struct)
+         CALL cp_fm_set_all(this%dens_diff_ij(ivec), 0.0_dp)
+      END DO
+      CALL cp_fm_struct_release(fm_struct)
+      !=================================================
+      !=== dens_diff_ab [nbf, nbf] ========================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nbf, &
+                               ncol_global=tddft_env%nbf, &
+                               context=blacs_env)
+      ALLOCATE(this%dens_diff_ab(tddft_env%nStates))
+      DO ivec = 1, tddft_env%nStates
+         CALL cp_fm_create(this%dens_diff_ab(ivec), fm_struct)
+         CALL cp_fm_set_all(this%dens_diff_ab(ivec), 0.0_dp)
       END DO
       CALL cp_fm_struct_release(fm_struct)
       !=================================================
@@ -520,6 +548,18 @@ CONTAINS
       IF (ASSOCIATED(this%rho_ia_ao_fm)) THEN
          CALL cp_fm_release(this%rho_ia_ao_fm)
          DEALLOCATE(this%rho_ia_ao_fm)
+      END IF
+      IF (ALLOCATED(this%dens_diff_ij)) THEN
+         DO ivec = 1, SIZE(this%dens_diff_ij)
+            CALL cp_fm_release(this%dens_diff_ij(ivec))
+         END DO
+         DEALLOCATE(this%dens_diff_ij)
+      END IF
+      IF (ALLOCATED(this%dens_diff_ab)) THEN
+         DO ivec = 1, SIZE(this%dens_diff_ab)
+            CALL cp_fm_release(this%dens_diff_ab(ivec))
+         END DO
+         DEALLOCATE(this%dens_diff_ab)
       END IF
       IF (ASSOCIATED(this%rho_fm_ao)) THEN
          DO ispin = 1, SIZE(this%rho_fm_ao)
@@ -1081,7 +1121,7 @@ CONTAINS
          CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nbf, tddft_env%nocca, &
                             1.0_dp, this%work_ao_noc, &
                                     gs_mos(1)%mos_occ, &
-                            0.0_dp, tddft_env%dens_diff_ij(istate))
+                            0.0_dp, this%dens_diff_ij(istate))
 
          ! Compute dens_diff_ab: (particle contribution, virtual block)
          CALL parallel_gemm('T', 'N', tddft_env%nvirb, tddft_env%nvirb, tddft_env%nocca, &
@@ -1095,7 +1135,7 @@ CONTAINS
          CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nbf, tddft_env%nvirb, &
                             1.0_dp, this%work_ao_vir, &
                                     gs_mos(2)%mos_virt, &
-                            0.0_dp, tddft_env%dens_diff_ab(istate))
+                            0.0_dp, this%dens_diff_ab(istate))
 
          !--------------------------------------------------------------
          ! Compute transition dipoles for state istate
@@ -1129,7 +1169,7 @@ CONTAINS
 !        !--------------------------------------------------------------
 !        ! Construct alpha excited state density: work1_ao_ao = rho_fm_ao(1) + dens_diff_ij
          CALL cp_fm_scale_and_add(0.0_dp, this%work1_ao_ao, 1.0_dp, this%rho_fm_ao(1))
-         CALL cp_fm_scale_and_add(1.0_dp, this%work1_ao_ao, 1.0_dp, tddft_env%dens_diff_ij(istate))
+         CALL cp_fm_scale_and_add(1.0_dp, this%work1_ao_ao, 1.0_dp, this%dens_diff_ij(istate))
 !        ! <--- this%work1_ao_ao now contains AO density for alpha (excited state candidate)
 
          ! scr1 = S * (rho_alpha_excited) * S
@@ -1144,7 +1184,7 @@ CONTAINS
 
 !        ! Construct beta excited state density: work2_ao_ao = rho_fm_ao(2) + dens_diff_ab
          CALL cp_fm_scale_and_add(0.0_dp, this%work2_ao_ao, 1.0_dp, this%rho_fm_ao(2))
-         CALL cp_fm_scale_and_add(1.0_dp, this%work2_ao_ao, 1.0_dp, tddft_env%dens_diff_ab(istate))
+         CALL cp_fm_scale_and_add(1.0_dp, this%work2_ao_ao, 1.0_dp, this%dens_diff_ab(istate))
 !        ! <--- this%work2_ao_ao now contains AO density for beta (excited state candidate)
 
          ! s2_cross = -tr[(rho_beta_excited) * scr1]
@@ -1154,7 +1194,7 @@ CONTAINS
          ! scr1 = S * dens_diff_ij * S [ta stands for dens_diff_ij, that is, the excited-state difference (alpha block)]
          CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
                             1.0_dp, this%hmat_ao_ao, &
-                                    tddft_env%dens_diff_ij(istate), &
+                                    this%dens_diff_ij(istate), &
                             0.0_dp, this%work1_ao_ao)
          CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
                             1.0_dp, this%work1_ao_ao, &
@@ -1162,7 +1202,7 @@ CONTAINS
                             0.0_dp, this%work2_ao_ao)
 
          ! s2_anti = -tr[dens_diff_ab * scr1]
-         CALL cp_fm_trace(tddft_env%dens_diff_ab(istate), this%work2_ao_ao, s2_anti)
+         CALL cp_fm_trace(this%dens_diff_ab(istate), this%work2_ao_ao, s2_anti)
          s2_anti = -s2_anti
 
          ! s2_offdiag = (1/2) * tr[symmetrized(evects_ao_ao) * Smat]

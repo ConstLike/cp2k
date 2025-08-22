@@ -5,6 +5,11 @@
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
 
+! **************************************************************************************************
+!> \brief Implements the Davidson eigensolver for TDDFT excitations
+!> \author Konstantin Komarov (constlike@gmail.com)
+!> \date Aug 2025
+! **************************************************************************************************
 MODULE qs_tddft_methods
    USE qs_tddfpt2_methods,              ONLY: kernel_info, &
                                               tddfpt_input
@@ -204,9 +209,6 @@ MODULE qs_tddft_methods
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_tddft_methods'
 
    LOGICAL, PARAMETER, PRIVATE          :: debug_this_module = .FALSE.
-   ! number of first derivative components (3: d/dx, d/dy, d/dz)
-   INTEGER, PARAMETER, PRIVATE          :: nderivs = 3
-   INTEGER, PARAMETER, PRIVATE          :: maxspins = 2
 
    PUBLIC :: tddft
 

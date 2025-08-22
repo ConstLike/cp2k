@@ -239,9 +239,6 @@ MODULE qs_tddft_types
       !> Work fot properties: Dipoles
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :) :: dipole_op_mos_occ
 
-      !> Per-spin AO scratch matrices for Fock transformation [nbf, nbf]
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: dens_diff_ij
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: dens_diff_ab
 
       !--------------------------------------------
       ! DAVIDSON NEEDS
@@ -541,16 +538,6 @@ CONTAINS
                                 tddft_env%work_ao_ao(ispin))
       END DO
 
-      ALLOCATE (tddft_env%dens_diff_ij(tddft_env%nStates))
-      DO ivec = 1, tddft_env%nStates
-         CALL fm_pool_create_fm(tddft_env%fm_pool_ao(1)%pool, &
-                                tddft_env%dens_diff_ij(ivec))
-      END DO
-      ALLOCATE (tddft_env%dens_diff_ab(tddft_env%nStates))
-      DO ivec = 1, tddft_env%nStates
-         CALL fm_pool_create_fm(tddft_env%fm_pool_ao(1)%pool, &
-                                tddft_env%dens_diff_ab(ivec))
-      END DO
       CALL cp_fm_struct_create(fm_struct, &
                             nrow_global=tddft_env%nbf, &
                             ncol_global=tddft_env%nocca, &
@@ -634,20 +621,6 @@ CONTAINS
                                       this%work_ao_ao(ispin))
          END DO
          DEALLOCATE(this%work_ao_ao)
-      END IF
-      IF (ALLOCATED(this%dens_diff_ab)) THEN
-         DO ivec = 1, SIZE(this%dens_diff_ab, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_ao(1)%pool, &
-                                      this%dens_diff_ab(ivec))
-         END DO
-         DEALLOCATE(this%dens_diff_ab)
-      END IF
-      IF (ALLOCATED(this%dens_diff_ij)) THEN
-         DO ivec = 1, SIZE(this%dens_diff_ij, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_ao(1)%pool, &
-                                      this%dens_diff_ij(ivec))
-         END DO
-         DEALLOCATE(this%dens_diff_ij)
       END IF
       IF (ALLOCATED(this%evects_mo)) THEN
          DO ivec = 1, SIZE(this%evects_mo, 1)
