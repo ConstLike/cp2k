@@ -92,13 +92,12 @@ MODULE qs_tddft_theory
 ! **************************************************************************************************
    ABSTRACT INTERFACE
       !> Allocate any theory-specific working arrays, buffers, etc.
-      SUBROUTINE allocate_theory_iface(this, qs_env, tddft_env, blacs_env)
+      SUBROUTINE allocate_theory_iface(this, qs_env, tddft_env)
          IMPORT :: tddft_theory_type, tddft_info_type, cp_blacs_env_type,&
                    qs_environment_type
          CLASS(tddft_theory_type), INTENT(INOUT) :: this
          TYPE(qs_environment_type), POINTER :: qs_env
          TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
-         TYPE(cp_blacs_env_type), POINTER                :: blacs_env
       END SUBROUTINE
       !> Set up initial guess vectors (theory-specific, e.g. SF, MRSF, ...)
       SUBROUTINE init_guess_iface(this, qs_env, tddft_env, gs_mos, &

@@ -364,7 +364,7 @@ CONTAINS
 
       t1 = m_walltime()
 
-      CALL theory_handler%allocate_theory_data(qs_env, tddft_env, blacs_env)
+      CALL theory_handler%allocate_theory_data(qs_env, tddft_env)
 
       niters = tddfpt_control%niters
       IF (niters > 0) THEN

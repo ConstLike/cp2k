@@ -192,12 +192,10 @@ MODULE qs_tddft_theory_mrsf
       !-------------------------------
       ! KERNELs related
       !-------------------------------
+
       !> [XC kernel] NO NAME
-      TYPE(qs_rho_type), POINTER :: gs_rho_xc_struct => NULL()
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: A_ia_munu_sub
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: A_ia_rspace_sub => NULL()
       TYPE(qs_rho_type), POINTER :: rho_orb_struct_sub => NULL()
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: rho_ia_ao
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: rho_fm_ao
 
       !> [HFX kernel] Symmetric AO density matrices [nSpins]
@@ -212,21 +210,6 @@ MODULE qs_tddft_theory_mrsf
       !> [HFX kernel] Antisymmetric Hamiltonian-like matrices in AO space [nSpins]
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: work_hmat_asymm
 
-      !> [Coulomb kernel] Density on grid in real-space [nSpins]
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: rho_r => NULL()
-
-      !> [Coulomb kernel] Density in G-space [nSpins]
-      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER :: rho_g => NULL()
-
-      !> [.. kernel] Kinetic energy density (tau) on grid [nSpins]
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: tau_r => NULL()
-
-      !> Exchange-correlation potential v_XC(r) [nSpins]
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: work_v_xc => NULL()
-      !> tau-dependent v_XC components (meta-GGA) [nSpins]
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: work_v_xc_tau => NULL()
-
-      ! -- theory-specific fields if needed --
    CONTAINS
       PROCEDURE, PASS(this) :: allocate_theory_data     => mrsf_allocate_theory_data
       PROCEDURE, PASS(this) :: deallocate_theory_data   => mrsf_deallocate_theory_data
@@ -239,17 +222,18 @@ MODULE qs_tddft_theory_mrsf
 
 CONTAINS
 
-   SUBROUTINE mrsf_allocate_theory_data(this, qs_env, tddft_env, blacs_env)
+   SUBROUTINE mrsf_allocate_theory_data(this, qs_env, tddft_env)
       CLASS(tddft_mrsf_theory_type), INTENT(INOUT) :: this
       TYPE(qs_environment_type), POINTER :: qs_env
       TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
-      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'mrsf_allocate_theory_data'
 
-      TYPE(dbcsr_distribution_type), POINTER :: dbcsr_dist
-      TYPE(pw_env_type), POINTER :: pw_env
-      TYPE(neighbor_list_set_p_type), DIMENSION(:), POINTER :: sab_orb
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(dbcsr_distribution_type), POINTER             :: dbcsr_dist
+      TYPE(pw_env_type), POINTER                         :: pw_env
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+         POINTER                                         :: sab_orb
       TYPE(section_vals_type), POINTER                   :: tddfpt_section
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(dft_control_type), POINTER                    :: dft_control
@@ -259,7 +243,6 @@ CONTAINS
       LOGICAL                                            :: explicit
 
       CALL timeset(routineN, handle)
-
 
       NULLIFY (tddfpt_section)
       tddfpt_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT")
@@ -332,6 +315,9 @@ CONTAINS
       !--------------------
       ! ALLOCATE  FM
       !--------------------
+      !
+      CALL get_qs_env(qs_env=qs_env, &
+                      blacs_env=blacs_env)
 
       !=== hmat_ao_ao (7) [nbf, nbf] ===================
       CALL allocate_fm_matrix(matrix=this%hmat_ao_ao, &
@@ -354,13 +340,12 @@ CONTAINS
                               ncol=tddft_env%nbf, &
                               blacs_env=blacs_env)
 
-      !=== dipoles_mo(3) [nocca, nvirb] ================
+      !=== dipoles_mo (3) [nocca, nvirb] ===============
       CALL allocate_fm_matrix(matrix=this%dipoles_mo, &
                               nmat=3, &
                               nrow=tddft_env%nocca, &
                               ncol=tddft_env%nvirb, &
                               blacs_env=blacs_env)
-
 
       !=== fock (nSpins) [nbf, nvirb] ==================
       CALL allocate_fm_matrix(matrix=this%fock, &
@@ -473,15 +458,14 @@ CONTAINS
 
       !=================================================
 
-      CALL get_qs_env(qs_env=qs_env, &
-                      matrix_s=matrix_s, &
-                      dbcsr_dist=dbcsr_dist, &
-                      pw_env=pw_env, &
-                      sab_orb=sab_orb)
-
       !--------------------
       ! ALLOCATE  DBCSR
       !--------------------
+
+      CALL get_qs_env(qs_env=qs_env, &
+                      matrix_s=matrix_s, &
+                      dbcsr_dist=dbcsr_dist, &
+                      sab_orb=sab_orb)
 
       NULLIFY (this%A_ia_munu_sub)
       CALL dbcsr_allocate_matrix_set(this%A_ia_munu_sub, 1)
@@ -531,15 +515,6 @@ CONTAINS
                                           this%work_hmat_asymm(ispin)%matrix)
       END DO
 
-      NULLIFY (this%rho_ia_ao)
-      CALL dbcsr_allocate_matrix_set(this%rho_ia_ao, tddft_env%nSpins)
-      DO ispin = 1, tddft_env%nSpins
-         CALL dbcsr_init_p(this%rho_ia_ao(ispin)%matrix)
-         CALL tddfpt_dbcsr_create_by_dist(matrix=this%rho_ia_ao(ispin)%matrix, &
-                                          template=matrix_s(1)%matrix, &
-                                          dbcsr_dist=dbcsr_dist, &
-                                          sab=sab_orb)
-      END DO
       NULLIFY (this%rho_orb_struct_sub)
       ALLOCATE (this%rho_orb_struct_sub)
       CALL qs_rho_create(this%rho_orb_struct_sub)
@@ -547,37 +522,17 @@ CONTAINS
       CALL qs_rho_rebuild(this%rho_orb_struct_sub, qs_env, &
                           rebuild_ao=.FALSE., &
                           rebuild_grids=.TRUE.)
-!                         pw_env_external=pw_env)
 
       !--------------------
       ! ALLOCATE  PW
       !--------------------
-      CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
 
-      ALLOCATE (this%A_ia_rspace_sub(tddft_env%nSpins))
-      DO ispin = 1, tddft_env%nSpins
-         CALL auxbas_pw_pool%create_pw(this%A_ia_rspace_sub(ispin))
-      END DO
-      ALLOCATE (this%rho_r(tddft_env%nspins))
-      DO ispin = 1, tddft_env%nspins
-         CALL auxbas_pw_pool%create_pw(this%rho_r(ispin))
-      END DO
-      ALLOCATE (this%rho_g(tddft_env%nspins))
-      DO ispin = 1, tddft_env%nspins
-         CALL auxbas_pw_pool%create_pw(this%rho_g(ispin))
-      END DO
-      ALLOCATE (this%tau_r(tddft_env%nspins))
-      DO ispin = 1, tddft_env%nspins
-         CALL auxbas_pw_pool%create_pw(this%tau_r(ispin))
-      END DO
-      ALLOCATE (this%work_v_xc(tddft_env%nspins))
-      DO ispin = 1, tddft_env%nspins
-         CALL auxbas_pw_pool%create_pw(this%work_v_xc(ispin))
-      END DO
-      ALLOCATE (this%work_v_xc_tau(tddft_env%nspins))
-      DO ispin = 1, tddft_env%nspins
-         CALL auxbas_pw_pool%create_pw(this%work_v_xc_tau(ispin))
-      END DO
+      CALL get_qs_env(qs_env=qs_env, &
+                      pw_env=pw_env)
+
+      CALL pw_env_get(pw_env, &
+                      auxbas_pw_pool=auxbas_pw_pool)
+
       ALLOCATE(this%work_v_gspace)
       CALL auxbas_pw_pool%create_pw(this%work_v_gspace)
       ALLOCATE(this%work_v_rspace)
@@ -591,22 +546,24 @@ CONTAINS
       CLASS(tddft_mrsf_theory_type), INTENT(INOUT) :: this
       TYPE(qs_environment_type), POINTER :: qs_env
 
-      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       TYPE(pw_env_type), POINTER :: pw_env
       TYPE(pw_pool_type), POINTER :: auxbas_pw_pool
-      INTEGER :: ivec, ispin
+      INTEGER :: ivec
 
-      CALL get_qs_env(qs_env=qs_env, &
-                      blacs_env=blacs_env, &
-                      pw_env=pw_env)
+      !--------------------
+      ! DEALLOCATE  DP
+      !--------------------
 
       IF (ALLOCATED(this%spc)) THEN
          DEALLOCATE(this%spc)
       END IF
 
+      !--------------------
+      ! DEALLOCATE  FM
+      !--------------------
+
       CALL deallocate_fm_matrix(this%hmat_ao_ao)
       CALL deallocate_fm_matrix(this%evects_ao_ao)
-
       call deallocate_fm_matrix(this%fock)
       call deallocate_fm_matrix(this%focka_noc_noc)
       call deallocate_fm_matrix(this%fockb_vir_vir)
@@ -627,6 +584,10 @@ CONTAINS
       call deallocate_fm_matrix(this%work_ao_nocb)
       call deallocate_fm_matrix(this%rho_fm_ao)
       call deallocate_fm_matrix(this%dipoles_mo)
+
+      !--------------------
+      ! DEALLOCATE  DBCSR
+      !--------------------
 
       IF (ASSOCIATED(this%A_ia_munu_sub)) THEN
          DO ivec = 1, SIZE(this%A_ia_munu_sub)
@@ -659,51 +620,17 @@ CONTAINS
          END DO
          DEALLOCATE(this%work_hmat_asymm)
       END IF
-      IF (ASSOCIATED(this%rho_ia_ao)) THEN
-         DO ivec = 1, SIZE(this%rho_ia_ao)
-            CALL dbcsr_deallocate_matrix(this%rho_ia_ao(ivec)%matrix)
-         END DO
-         DEALLOCATE(this%rho_ia_ao)
-      END IF
 
-      CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
+      !--------------------
+      ! DEALLOCATE  PW
+      !--------------------
 
-      IF (ASSOCIATED(this%A_ia_rspace_sub)) THEN
-         DO ispin = 1, SIZE(this%A_ia_rspace_sub)
-            CALL auxbas_pw_pool%give_back_pw(this%A_ia_rspace_sub(ispin))
-         END DO
-         DEALLOCATE(this%A_ia_rspace_sub)
-      END IF
-      IF (ASSOCIATED(this%rho_r)) THEN
-         DO ispin = 1, SIZE(this%rho_r)
-            CALL auxbas_pw_pool%give_back_pw(this%rho_r(ispin))
-         END DO
-         DEALLOCATE(this%rho_r)
-      END IF
-      IF (ASSOCIATED(this%rho_g)) THEN
-         DO ispin = 1, SIZE(this%rho_g)
-            CALL auxbas_pw_pool%give_back_pw(this%rho_g(ispin))
-         END DO
-         DEALLOCATE(this%rho_g)
-      END IF
-      IF (ASSOCIATED(this%tau_r)) THEN
-         DO ispin = 1, SIZE(this%tau_r)
-            CALL auxbas_pw_pool%give_back_pw(this%tau_r(ispin))
-         END DO
-         DEALLOCATE(this%tau_r)
-      END IF
-      IF (ASSOCIATED(this%work_v_xc)) THEN
-         DO ispin = 1, SIZE(this%work_v_xc)
-            CALL auxbas_pw_pool%give_back_pw(this%work_v_xc(ispin))
-         END DO
-         DEALLOCATE(this%work_v_xc)
-      END IF
-      IF (ASSOCIATED(this%work_v_xc_tau)) THEN
-         DO ispin = 1, SIZE(this%work_v_xc_tau)
-            CALL auxbas_pw_pool%give_back_pw(this%work_v_xc_tau(ispin))
-         END DO
-         DEALLOCATE(this%work_v_xc_tau)
-      END IF
+      CALL get_qs_env(qs_env=qs_env, &
+                      pw_env=pw_env)
+
+      CALL pw_env_get(pw_env, &
+                      auxbas_pw_pool=auxbas_pw_pool)
+
       IF (ASSOCIATED(this%work_v_gspace)) THEN
          CALL auxbas_pw_pool%give_back_pw(this%work_v_gspace)
          DEALLOCATE(this%work_v_gspace)
@@ -1298,7 +1225,6 @@ CONTAINS
                                    qs_env=qs_env, &
                                    pw_env_external=pw_env, &
                                    task_list_external=task_list_orb)
-!                                  para_env_external=para_env)
 
             ! Get the updated grid density
             CALL qs_rho_get(this%rho_orb_struct_sub, &
