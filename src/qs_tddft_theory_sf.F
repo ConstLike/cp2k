@@ -385,7 +385,7 @@ CONTAINS
       END DO
       CALL cp_fm_struct_release(fm_struct)
       !=================================================
-      !=== dens_diff_ij [nbf, nbf] ========================
+      !=== dens_diff_ij [nbf, nbf] =====================
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
                                ncol_global=tddft_env%nbf, &
@@ -397,7 +397,7 @@ CONTAINS
       END DO
       CALL cp_fm_struct_release(fm_struct)
       !=================================================
-      !=== dens_diff_ab [nbf, nbf] ========================
+      !=== dens_diff_ab [nbf, nbf] =====================
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=tddft_env%nbf, &
                                ncol_global=tddft_env%nbf, &

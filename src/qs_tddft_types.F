@@ -218,12 +218,6 @@ MODULE qs_tddft_types
       !> Number of spin channels (1 = restricted, 2 = unrestricted)
       INTEGER :: nSpins
 
-      !> Matrix pool for MO-space matrices [nocca, nvirb]
-      TYPE(cp_fm_pool_p_type), POINTER :: fm_pool_mo => NULL()
-
-      !> Matrix pools for AO-space matrices [nbf, nbf] per spin channel
-      TYPE(cp_fm_pool_p_type), POINTER, DIMENSION(:) :: fm_pool_ao => NULL()
-
       !> Work fot properties: Dipoles
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :) :: dipole_op_mos_occ
 
@@ -361,7 +355,7 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
       TYPE(section_vals_type), POINTER                   :: hf_section
-      INTEGER                                            :: ivec, ispin, handle
+      INTEGER                                            :: ivec, handle
       INTEGER :: n_rep_hf, potential_type
       LOGICAL :: explicit
 
@@ -454,66 +448,67 @@ CONTAINS
       !--------------------
       ! ALLOCATE  FM POOL
       !--------------------
-      !---------- MO POOL [nocca, nvirb] : fm_pool_mo
-      ALLOCATE (tddft_env%fm_pool_mo)
-      NULLIFY (tddft_env%fm_pool_mo%pool)
+
+      !=== evects_mo (mxvec) [nocca, nvirb] ============
       CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nocca, &
-                               ncol_global=tddft_env%nvirb, &
-                               context=blacs_env)
-      CALL fm_pool_create(tddft_env%fm_pool_mo%pool, fm_struct)
+                            nrow_global=tddft_env%nocca, &
+                            ncol_global=tddft_env%nvirb, &
+                            context=blacs_env)
+      ALLOCATE(tddft_env%evects_mo(tddft_env%mxvec))
+      DO ivec = 1, tddft_env%mxvec
+         CALL cp_fm_create(tddft_env%evects_mo(ivec), fm_struct)
+         CALL cp_fm_set_all(tddft_env%evects_mo(ivec), 0.0_dp)
+      END DO
       CALL cp_fm_struct_release(fm_struct)
-      !---------- END MO POOL [nocca, nvirb]
-
-      ! MO POOL: evects_mo (mxvec)[nocca, nvirb]
-      ALLOCATE (tddft_env%evects_mo(tddft_env%mxvec))
+      !=================================================
+      !=== ritz_vects (nStates) [nocca, nvirb] =========
+      CALL cp_fm_struct_create(fm_struct, &
+                            nrow_global=tddft_env%nocca, &
+                            ncol_global=tddft_env%nvirb, &
+                            context=blacs_env)
+      ALLOCATE(tddft_env%ritz_vects(tddft_env%nStates))
+      DO ivec = 1, tddft_env%nStates
+         CALL cp_fm_create(tddft_env%ritz_vects(ivec), fm_struct)
+         CALL cp_fm_set_all(tddft_env%ritz_vects(ivec), 0.0_dp)
+      END DO
+      CALL cp_fm_struct_release(fm_struct)
+      !=================================================
+      !=== sigma_vecs (mxvec) [nocca, nvirb] ===========
+      CALL cp_fm_struct_create(fm_struct, &
+                            nrow_global=tddft_env%nocca, &
+                            ncol_global=tddft_env%nvirb, &
+                            context=blacs_env)
+      ALLOCATE(tddft_env%sigma_vecs(tddft_env%mxvec))
       DO ivec = 1, tddft_env%mxvec
-         CALL fm_pool_create_fm(tddft_env%fm_pool_mo%pool, &
-                                tddft_env%evects_mo(ivec))
+         CALL cp_fm_create(tddft_env%sigma_vecs(ivec), fm_struct)
+         CALL cp_fm_set_all(tddft_env%sigma_vecs(ivec), 0.0_dp)
       END DO
-      ! MO POOL: ritz_vects (nstates)[nocca, nvirb]
-      ALLOCATE (tddft_env%ritz_vects(tddft_env%nstates))
-      DO ivec = 1, tddft_env%nstates
-         CALL fm_pool_create_fm(tddft_env%fm_pool_mo%pool, &
-                                tddft_env%ritz_vects(ivec))
+      CALL cp_fm_struct_release(fm_struct)
+      !=================================================
+      !=== residual_vecs (nStates) [nocca, nvirb] ======
+      CALL cp_fm_struct_create(fm_struct, &
+                            nrow_global=tddft_env%nocca, &
+                            ncol_global=tddft_env%nvirb, &
+                            context=blacs_env)
+      ALLOCATE(tddft_env%residual_vecs(tddft_env%nStates))
+      DO ivec = 1, tddft_env%nStates
+         CALL cp_fm_create(tddft_env%residual_vecs(ivec), fm_struct)
+         CALL cp_fm_set_all(tddft_env%residual_vecs(ivec), 0.0_dp)
       END DO
-      ! MO POOL: sigma_vecs (mxvec)[nocca, nvirb]
-      ALLOCATE (tddft_env%sigma_vecs(tddft_env%mxvec))
-      DO ivec = 1, tddft_env%mxvec
-         CALL fm_pool_create_fm(tddft_env%fm_pool_mo%pool, &
-                                tddft_env%sigma_vecs(ivec))
-      END DO
-
-      ! MO POOL: ritz [nocca, nvirb]
-      ALLOCATE(tddft_env%residual_vecs(tddft_env%nstates))
-      DO ivec = 1, tddft_env%nstates
-         CALL fm_pool_create_fm(tddft_env%fm_pool_mo%pool, tddft_env%residual_vecs(ivec))
-      END DO
-
-      !---------- AO POOL [nbf, nbf] : fm_pool_ao
-      ALLOCATE (tddft_env%fm_pool_ao(tddft_env%nSpins))
-      DO ispin = 1, tddft_env%nSpins
-         NULLIFY (tddft_env%fm_pool_ao(ispin)%pool)
-
-         CALL cp_fm_struct_create(fm_struct, &
-                                  nrow_global=tddft_env%nbf, &
-                                  ncol_global=tddft_env%nbf, &
-                                  context=blacs_env)
-         CALL fm_pool_create(tddft_env%fm_pool_ao(ispin)%pool, fm_struct)
-         CALL cp_fm_struct_release(fm_struct)
-      END DO
-      !---------- END AO POOL [nbf, nbf]
-
+      CALL cp_fm_struct_release(fm_struct)
+      !=================================================
+      !=== evects (1, nVec) [nbf, nocca] ===============
       CALL cp_fm_struct_create(fm_struct, &
                             nrow_global=tddft_env%nbf, &
                             ncol_global=tddft_env%nocca, &
                             context=blacs_env)
       ALLOCATE(tddft_env%evects(1, tddft_env%nvec))
-      DO ivec = 1, tddft_env%nvec
-         CALL cp_fm_create(matrix=tddft_env%evects(1, ivec), &
-                           matrix_struct=fm_struct)
+      DO ivec = 1, tddft_env%nVec
+         CALL cp_fm_create(tddft_env%evects(1, ivec), fm_struct)
+         CALL cp_fm_set_all(tddft_env%evects(1, ivec), 0.0_dp)
       END DO
       CALL cp_fm_struct_release(fm_struct)
+      !=================================================
 
       !--------------------
       ! ALLOCATE  RHO
@@ -563,50 +558,39 @@ CONTAINS
       !--------------------
       ! DEALLOCATE  FM
       !--------------------
-      !--------------------
-      ! DEALLOCATE  FM POOL
-      !--------------------
       IF (ALLOCATED(this%evects_mo)) THEN
-         DO ivec = 1, SIZE(this%evects_mo, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
-                                      this%evects_mo(ivec))
+         DO ivec = 1, SIZE(this%evects_mo)
+            CALL cp_fm_release(this%evects_mo(ivec))
          END DO
          DEALLOCATE(this%evects_mo)
       END IF
       IF (ALLOCATED(this%ritz_vects)) THEN
-         DO ivec = 1, SIZE(this%ritz_vects, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
-                                      this%ritz_vects(ivec))
+         DO ivec = 1, SIZE(this%ritz_vects)
+            CALL cp_fm_release(this%ritz_vects(ivec))
          END DO
          DEALLOCATE(this%ritz_vects)
       END IF
       IF (ALLOCATED(this%sigma_vecs)) THEN
-         DO ivec = 1, SIZE(this%sigma_vecs, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &
-                                      this%sigma_vecs(ivec))
+         DO ivec = 1, SIZE(this%sigma_vecs)
+            CALL cp_fm_release(this%sigma_vecs(ivec))
          END DO
          DEALLOCATE(this%sigma_vecs)
       END IF
-
-      IF (ALLOCATED(this%residual_vecs))  THEN
-         DO ivec = SIZE(this%residual_vecs),1,-1
-            CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, this%residual_vecs(ivec))
+      IF (ALLOCATED(this%residual_vecs)) THEN
+         DO ivec = 1, SIZE(this%residual_vecs)
+            CALL cp_fm_release(this%residual_vecs(ivec))
          END DO
          DEALLOCATE(this%residual_vecs)
       END IF
-
-      IF (ASSOCIATED(this%fm_pool_mo)) THEN
-         CALL fm_pool_release(this%fm_pool_mo%pool)
-         DEALLOCATE(this%fm_pool_mo)
-      END IF
-
-      IF (ASSOCIATED(this%fm_pool_ao)) THEN
-         DO ispin = SIZE(this%fm_pool_ao),1,-1
-            CALL fm_pool_release(this%fm_pool_ao(ispin)%pool)
+      IF (ALLOCATED(this%evects)) THEN
+         DO ivec = 1, SIZE(this%evects, 2)
+            CALL cp_fm_release(this%evects(1, ivec))
          END DO
-         DEALLOCATE(this%fm_pool_ao)
+         DEALLOCATE(this%evects)
       END IF
-
+      !--------------------
+      ! DEALLOCATE  FM POOL
+      !--------------------
       IF (ALLOCATED(this%dipole_op_mos_occ)) THEN
          DO ivec = 1, SIZE(this%dipole_op_mos_occ, 1)
             DO ispin = 1, SIZE(this%dipole_op_mos_occ, 2)
@@ -614,12 +598,6 @@ CONTAINS
             END DO
          END DO
          DEALLOCATE(this%dipole_op_mos_occ)
-      END IF
-      IF (ALLOCATED(this%evects)) THEN
-         DO ivec = 1, SIZE(this%evects, 2)
-            CALL cp_fm_release(this%evects(1, ivec))
-         END DO
-         DEALLOCATE(this%evects)
       END IF
 
       CALL timestop(handle)
