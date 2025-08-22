@@ -697,6 +697,10 @@ list(
   qs_subsys_methods.F
   qs_subsys_types.F
   qs_tddft_types.F
+  qs_tddft_utils.F
+  qs_tddft_theory.F
+  qs_tddft_theory_sf.F
+  qs_tddft_theory_mrsf.F
   qs_tddft_methods.F
   qs_tddfpt2_assign.F
   qs_tddfpt2_densities.F
