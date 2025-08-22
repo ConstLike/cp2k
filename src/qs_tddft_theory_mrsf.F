@@ -186,7 +186,6 @@ MODULE qs_tddft_theory_mrsf
       TYPE(cp_fm_type), POINTER :: work_nocb_vira => NULL()
       TYPE(cp_fm_type), POINTER :: work_ao_nocb => NULL()
 
-      TYPE(dbcsr_p_type), POINTER :: work_coulomb
       TYPE(pw_r3d_rs_type), POINTER :: work_v_rspace
       TYPE(pw_c1d_gs_type), POINTER :: work_v_gspace
 
@@ -194,13 +193,12 @@ MODULE qs_tddft_theory_mrsf
       ! KERNELs related
       !-------------------------------
       !> [XC kernel] NO NAME
-      TYPE(cp_fm_type), POINTER :: rho_ia_ao_fm => NULL()
       TYPE(qs_rho_type), POINTER :: gs_rho_xc_struct => NULL()
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: A_ia_munu_sub
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER :: A_ia_rspace_sub => NULL()
       TYPE(qs_rho_type), POINTER :: rho_orb_struct_sub => NULL()
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: rho_ia_ao
-      TYPE(cp_fm_type), POINTER, DIMENSION(:) :: rho_fm_ao => NULL()
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: rho_fm_ao
 
       !> [HFX kernel] Symmetric AO density matrices [nSpins]
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:) :: work_rho_ao_ao_symm
@@ -252,13 +250,12 @@ CONTAINS
       TYPE(dbcsr_distribution_type), POINTER :: dbcsr_dist
       TYPE(pw_env_type), POINTER :: pw_env
       TYPE(neighbor_list_set_p_type), DIMENSION(:), POINTER :: sab_orb
-      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
       TYPE(section_vals_type), POINTER                   :: tddfpt_section
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      INTEGER                                            :: handle, ivec, ispin
+      INTEGER                                            :: handle, ispin
       LOGICAL                                            :: explicit
 
       CALL timeset(routineN, handle)
@@ -332,6 +329,10 @@ CONTAINS
          this%spc(1:6,1:2) =-this%spc(1:6,1:2)
       END SELECT
 
+      !--------------------
+      ! ALLOCATE  FM
+      !--------------------
+
       !=== hmat_ao_ao (7) [nbf, nbf] ===================
       CALL allocate_fm_matrix(matrix=this%hmat_ao_ao, &
                               nmat=7, &
@@ -342,6 +343,28 @@ CONTAINS
       !=== evects_ao_ao (7) [nbf, nbf] =================
       CALL allocate_fm_matrix(matrix=this%evects_ao_ao, &
                               nmat=7, &
+                              nrow=tddft_env%nbf, &
+                              ncol=tddft_env%nbf, &
+                              blacs_env=blacs_env)
+
+      !=== rho_fm_ao (nSpins) [nbf, nbf] ===============
+      CALL allocate_fm_matrix(matrix=this%rho_fm_ao, &
+                              nmat=tddft_env%nSpins, &
+                              nrow=tddft_env%nbf, &
+                              ncol=tddft_env%nbf, &
+                              blacs_env=blacs_env)
+
+      !=== dipoles_mo(3) [nocca, nvirb] ================
+      CALL allocate_fm_matrix(matrix=this%dipoles_mo, &
+                              nmat=3, &
+                              nrow=tddft_env%nocca, &
+                              ncol=tddft_env%nvirb, &
+                              blacs_env=blacs_env)
+
+
+      !=== fock (nSpins) [nbf, nvirb] ==================
+      CALL allocate_fm_matrix(matrix=this%fock, &
+                              nmat=tddft_env%nSpins, &
                               nrow=tddft_env%nbf, &
                               ncol=tddft_env%nbf, &
                               blacs_env=blacs_env)
@@ -358,217 +381,107 @@ CONTAINS
                               ncol=tddft_env%nvirb, &
                               blacs_env=blacs_env)
 
-      !=== fock (nSpins) [nbf, nvirb] ==================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nbf, &
-                               ncol_global=tddft_env%nbf, &
-                               context=blacs_env)
-      ALLOCATE(this%fock(tddft_env%nSpins))
-      DO ispin = 1, tddft_env%nSpins
-         CALL cp_fm_create(this%fock(ispin), fm_struct)
-         CALL cp_fm_set_all(this%fock(ispin), 0.0_dp)
-      END DO
-      CALL cp_fm_struct_release(fm_struct)
-      !=================================================
       !=== work_ao_vir [nbf, nvirb] ====================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nbf, &
-                               ncol_global=tddft_env%nvirb, &
-                               context=blacs_env)
-      ALLOCATE(this%work_ao_vir)
-      CALL cp_fm_create(this%work_ao_vir, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work_ao_vir, 0.0_dp)
-      !=================================================
+      CALL allocate_fm_matrix(matrix=this%work_ao_vir, &
+                              nrow=tddft_env%nbf, &
+                              ncol=tddft_env%nvirb, &
+                              blacs_env=blacs_env)
+
       !=== work_noc_ao [nocca, nbf] ====================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nocca, &
-                               ncol_global=tddft_env%nbf, &
-                               context=blacs_env)
-      ALLOCATE(this%work_noc_ao)
-      CALL cp_fm_create(this%work_noc_ao, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work_noc_ao, 0.0_dp)
-      !=================================================
+      CALL allocate_fm_matrix(matrix=this%work_noc_ao, &
+                              nrow=tddft_env%nocca, &
+                              ncol=tddft_env%nbf, &
+                              blacs_env=blacs_env)
+
       !=== work_noc_noc [nocca, nocca] =================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nocca, &
-                               ncol_global=tddft_env%nocca, &
-                               context=blacs_env)
-      ALLOCATE(this%work_noc_noc)
-      CALL cp_fm_create(this%work_noc_noc, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work_noc_noc, 0.0_dp)
-      !=================================================
+      CALL allocate_fm_matrix(matrix=this%work_noc_noc, &
+                              nrow=tddft_env%nocca, &
+                              ncol=tddft_env%nocca, &
+                              blacs_env=blacs_env)
+
       !=== work_ao_noc [nbf, nocca] ====================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nbf, &
-                               ncol_global=tddft_env%nocca, &
-                               context=blacs_env)
-      ALLOCATE(this%work_ao_noc)
-      CALL cp_fm_create(this%work_ao_noc, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work_ao_noc, 0.0_dp)
-      !=================================================
+      CALL allocate_fm_matrix(matrix=this%work_ao_noc, &
+                              nrow=tddft_env%nbf, &
+                              ncol=tddft_env%nocca, &
+                              blacs_env=blacs_env)
+
       !=== work_vir_vir [nvirb, nvirb] =================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nvirb, &
-                               ncol_global=tddft_env%nvirb, &
-                               context=blacs_env)
-      ALLOCATE(this%work_vir_vir)
-      CALL cp_fm_create(this%work_vir_vir, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work_vir_vir, 0.0_dp)
-      !=================================================
+      CALL allocate_fm_matrix(matrix=this%work_vir_vir, &
+                              nrow=tddft_env%nvirb, &
+                              ncol=tddft_env%nvirb, &
+                              blacs_env=blacs_env)
+
       !=== work_noc_vir [nocca, nvirb] =================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nocca, &
-                               ncol_global=tddft_env%nvirb, &
-                               context=blacs_env)
-      ALLOCATE(this%work_noc_vir)
-      CALL cp_fm_create(this%work_noc_vir, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work_noc_vir, 0.0_dp)
-      !=================================================
+      CALL allocate_fm_matrix(matrix=this%work_noc_vir, &
+                              nrow=tddft_env%nocca, &
+                              ncol=tddft_env%nvirb, &
+                              blacs_env=blacs_env)
+
       !=== work2_noc_vir [nocca, nvirb] =================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nocca, &
-                               ncol_global=tddft_env%nvirb, &
-                               context=blacs_env)
-      ALLOCATE(this%work2_noc_vir)
-      CALL cp_fm_create(this%work2_noc_vir, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work2_noc_vir, 0.0_dp)
-      !=================================================
+      CALL allocate_fm_matrix(matrix=this%work2_noc_vir, &
+                              nrow=tddft_env%nocca, &
+                              ncol=tddft_env%nvirb, &
+                              blacs_env=blacs_env)
+
       !=== work1_ao_ao [nbf, nbf] ======================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nbf, &
-                               ncol_global=tddft_env%nbf, &
-                               context=blacs_env)
-      ALLOCATE(this%work1_ao_ao)
-      CALL cp_fm_create(this%work1_ao_ao, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work1_ao_ao, 0.0_dp)
-      !=================================================
+      CALL allocate_fm_matrix(matrix=this%work1_ao_ao, &
+                              nrow=tddft_env%nbf, &
+                              ncol=tddft_env%nbf, &
+                              blacs_env=blacs_env)
+
       !=== work2_ao_ao [nbf, nbf] ======================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nbf, &
-                               ncol_global=tddft_env%nbf, &
-                               context=blacs_env)
-      ALLOCATE(this%work2_ao_ao)
-      CALL cp_fm_create(this%work2_ao_ao, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work2_ao_ao, 0.0_dp)
-      !=================================================
+      CALL allocate_fm_matrix(matrix=this%work2_ao_ao, &
+                              nrow=tddft_env%nbf, &
+                              ncol=tddft_env%nbf, &
+                              blacs_env=blacs_env)
+
       !=== work1_ao_1 [nbf, 1] =========================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nbf, &
-                               ncol_global=1, &
-                               context=blacs_env)
-      ALLOCATE(this%work1_ao_1)
-      CALL cp_fm_create(this%work1_ao_1, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work1_ao_1, 0.0_dp)
-      !=================================================
+      CALL allocate_fm_matrix(matrix=this%work1_ao_1, &
+                              nrow=tddft_env%nbf, &
+                              ncol=1, &
+                              blacs_env=blacs_env)
+
       !=== work2_ao_1 [nbf, 1] =========================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nbf, &
-                               ncol_global=1, &
-                               context=blacs_env)
-      ALLOCATE(this%work2_ao_1)
-      CALL cp_fm_create(this%work2_ao_1, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work2_ao_1, 0.0_dp)
-      !=================================================
-      !=== work_vira_1 [nvira, 1] =========================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nvira, &
-                               ncol_global=1, &
-                               context=blacs_env)
-      ALLOCATE(this%work_vira_1)
-      CALL cp_fm_create(this%work_vira_1, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work_vira_1, 0.0_dp)
-      !=================================================
-      !=== work_nocb_1 [noccb, 1] =========================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%noccb, &
-                               ncol_global=1, &
-                               context=blacs_env)
-      ALLOCATE(this%work_nocb_1)
-      CALL cp_fm_create(this%work_nocb_1, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work_nocb_1, 0.0_dp)
-      !=================================================
-      !=== work_nocb_vira [noccb, nvira] =========================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%noccb, &
-                               ncol_global=tddft_env%nvira, &
-                               context=blacs_env)
-      ALLOCATE(this%work_nocb_vira)
-      CALL cp_fm_create(this%work_nocb_vira, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work_nocb_vira, 0.0_dp)
-      !=================================================
-      !=== work_ao_nocb [nbf, noccb] ====================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nbf, &
-                               ncol_global=tddft_env%noccb, &
-                               context=blacs_env)
-      ALLOCATE(this%work_ao_nocb)
-      CALL cp_fm_create(this%work_ao_nocb, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%work_ao_nocb, 0.0_dp)
-      !=================================================
-      !=== rho_ia_ao_fm [nbf, nbf] =====================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nbf, &
-                               ncol_global=tddft_env%nbf, &
-                               context=blacs_env)
-      ALLOCATE(this%rho_ia_ao_fm)
-      CALL cp_fm_create(this%rho_ia_ao_fm, fm_struct)
-      CALL cp_fm_struct_release(fm_struct)
-      CALL cp_fm_set_all(this%rho_ia_ao_fm, 0.0_dp)
-      !=== rho_fm_ao [nbf, nbf] ========================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nbf, &
-                               ncol_global=tddft_env%nbf, &
-                               context=blacs_env)
-      ALLOCATE(this%rho_fm_ao(tddft_env%nSpins))
-      DO ispin = 1, tddft_env%nSpins
-         CALL cp_fm_create(this%rho_fm_ao(ispin), fm_struct)
-         CALL cp_fm_set_all(this%rho_fm_ao(ispin), 0.0_dp)
-      END DO
-      CALL cp_fm_struct_release(fm_struct)
-      !=================================================
-      !=== dipoles_mo(3) [nocca, nvirb] ================
-      CALL cp_fm_struct_create(fm_struct, &
-                               nrow_global=tddft_env%nocca, &
-                               ncol_global=tddft_env%nvirb, &
-                               context=blacs_env)
-      ALLOCATE(this%dipoles_mo(3))
-      DO ivec = 1, 3
-         CALL cp_fm_create(this%dipoles_mo(ivec), fm_struct)
-         CALL cp_fm_set_all(this%dipoles_mo(ivec), 0.0_dp)
-      END DO
-      CALL cp_fm_struct_release(fm_struct)
+      CALL allocate_fm_matrix(matrix=this%work2_ao_1, &
+                              nrow=tddft_env%nbf, &
+                              ncol=1, &
+                              blacs_env=blacs_env)
+
+      !=== work_vira_1 [nvira, 1] ======================
+      CALL allocate_fm_matrix(matrix=this%work_vira_1, &
+                              nrow=tddft_env%nvira, &
+                              ncol=1, &
+                              blacs_env=blacs_env)
+
+      !=== work_nocb_1 [noccb, 1] ======================
+      CALL allocate_fm_matrix(matrix=this%work_nocb_1, &
+                              nrow=tddft_env%noccb, &
+                              ncol=1, &
+                              blacs_env=blacs_env)
+
+      !=== work_nocb_vira [noccb, nvira] ===============
+      CALL allocate_fm_matrix(matrix=this%work_nocb_vira, &
+                              nrow=tddft_env%noccb, &
+                              ncol=tddft_env%nvira, &
+                              blacs_env=blacs_env)
+
+      !=== work_ao_nocb [nbf, noccb] ===================
+      CALL allocate_fm_matrix(matrix=this%work_ao_nocb, &
+                              nrow=tddft_env%nbf, &
+                              ncol=tddft_env%noccb, &
+                              blacs_env=blacs_env)
+
       !=================================================
 
-      !--------------------
-      ! ALLOCATE  DBCSR
-      !--------------------
       CALL get_qs_env(qs_env=qs_env, &
                       matrix_s=matrix_s, &
                       dbcsr_dist=dbcsr_dist, &
                       pw_env=pw_env, &
                       sab_orb=sab_orb)
 
-      NULLIFY(this%work_coulomb)
-      ALLOCATE(this%work_coulomb)
-      CALL dbcsr_init_p(this%work_coulomb%matrix)
-      CALL dbcsr_create(this%work_coulomb%matrix, &
-                        template=matrix_s(1)%matrix)
-      CALL dbcsr_set(this%work_coulomb%matrix, 0.0_dp)
+      !--------------------
+      ! ALLOCATE  DBCSR
+      !--------------------
 
       NULLIFY (this%A_ia_munu_sub)
       CALL dbcsr_allocate_matrix_set(this%A_ia_munu_sub, 1)
@@ -694,94 +607,26 @@ CONTAINS
       CALL deallocate_fm_matrix(this%hmat_ao_ao)
       CALL deallocate_fm_matrix(this%evects_ao_ao)
 
+      call deallocate_fm_matrix(this%fock)
       call deallocate_fm_matrix(this%focka_noc_noc)
       call deallocate_fm_matrix(this%fockb_vir_vir)
-
-      IF (ASSOCIATED(this%work_ao_vir)) THEN
-         CALL cp_fm_release(this%work_ao_vir)
-         DEALLOCATE(this%work_ao_vir)
-      END IF
-      IF (ASSOCIATED(this%work_noc_ao)) THEN
-         CALL cp_fm_release(this%work_noc_ao)
-         DEALLOCATE(this%work_noc_ao)
-      END IF
-      IF (ASSOCIATED(this%work_noc_noc)) THEN
-         CALL cp_fm_release(this%work_noc_noc)
-         DEALLOCATE(this%work_noc_noc)
-      END IF
-      IF (ASSOCIATED(this%work_ao_noc)) THEN
-         CALL cp_fm_release(this%work_ao_noc)
-         DEALLOCATE(this%work_ao_noc)
-      END IF
-      IF (ASSOCIATED(this%work_vir_vir)) THEN
-         CALL cp_fm_release(this%work_vir_vir)
-         DEALLOCATE(this%work_vir_vir)
-      END IF
-      IF (ASSOCIATED(this%work_noc_vir)) THEN
-         CALL cp_fm_release(this%work_noc_vir)
-         DEALLOCATE(this%work_noc_vir)
-      END IF
-      IF (ASSOCIATED(this%work2_noc_vir)) THEN
-         CALL cp_fm_release(this%work2_noc_vir)
-         DEALLOCATE(this%work2_noc_vir)
-      END IF
-      IF (ASSOCIATED(this%work1_ao_ao)) THEN
-         CALL cp_fm_release(this%work1_ao_ao)
-         DEALLOCATE(this%work1_ao_ao)
-      END IF
-      IF (ASSOCIATED(this%work2_ao_ao)) THEN
-         CALL cp_fm_release(this%work2_ao_ao)
-         DEALLOCATE(this%work2_ao_ao)
-      END IF
-      IF (ASSOCIATED(this%work1_ao_1)) THEN
-         CALL cp_fm_release(this%work1_ao_1)
-         DEALLOCATE(this%work1_ao_1)
-      END IF
-      IF (ASSOCIATED(this%work2_ao_1)) THEN
-         CALL cp_fm_release(this%work2_ao_1)
-         DEALLOCATE(this%work2_ao_1)
-      END IF
-      IF (ASSOCIATED(this%work_vira_1)) THEN
-         CALL cp_fm_release(this%work_vira_1)
-         DEALLOCATE(this%work_vira_1)
-      END IF
-      IF (ASSOCIATED(this%work_nocb_1)) THEN
-         CALL cp_fm_release(this%work_nocb_1)
-         DEALLOCATE(this%work_nocb_1)
-      END IF
-      IF (ASSOCIATED(this%work_nocb_vira)) THEN
-         CALL cp_fm_release(this%work_nocb_vira)
-         DEALLOCATE(this%work_nocb_vira)
-      END IF
-      IF (ASSOCIATED(this%work_ao_nocb)) THEN
-         CALL cp_fm_release(this%work_ao_nocb)
-         DEALLOCATE(this%work_ao_nocb)
-      END IF
-      IF (ASSOCIATED(this%rho_ia_ao_fm)) THEN
-         CALL cp_fm_release(this%rho_ia_ao_fm)
-         DEALLOCATE(this%rho_ia_ao_fm)
-      END IF
-      IF (ASSOCIATED(this%rho_fm_ao)) THEN
-         DO ispin = 1, SIZE(this%rho_fm_ao)
-            CALL cp_fm_release(this%rho_fm_ao(ispin))
-         END DO
-         DEALLOCATE(this%rho_fm_ao)
-      END IF
-      IF (ALLOCATED(this%dipoles_mo)) THEN
-         DO ivec = 1, SIZE(this%dipoles_mo)
-            CALL cp_fm_release(this%dipoles_mo(ivec))
-         END DO
-         DEALLOCATE(this%dipoles_mo)
-      END IF
-      IF (ALLOCATED(this%fock)) THEN
-         DO ispin = 1, SIZE(this%fock)
-            CALL cp_fm_release(this%fock(ispin))
-         END DO
-         DEALLOCATE(this%fock)
-      END IF
-
-      CALL dbcsr_release(this%work_coulomb%matrix)
-      DEALLOCATE(this%work_coulomb)
+      call deallocate_fm_matrix(this%work_ao_vir)
+      call deallocate_fm_matrix(this%work_noc_ao)
+      call deallocate_fm_matrix(this%work_noc_noc)
+      call deallocate_fm_matrix(this%work_ao_noc)
+      call deallocate_fm_matrix(this%work_vir_vir)
+      call deallocate_fm_matrix(this%work_noc_vir)
+      call deallocate_fm_matrix(this%work2_noc_vir)
+      call deallocate_fm_matrix(this%work1_ao_ao)
+      call deallocate_fm_matrix(this%work2_ao_ao)
+      call deallocate_fm_matrix(this%work1_ao_1)
+      call deallocate_fm_matrix(this%work2_ao_1)
+      call deallocate_fm_matrix(this%work_vira_1)
+      call deallocate_fm_matrix(this%work_nocb_1)
+      call deallocate_fm_matrix(this%work_nocb_vira)
+      call deallocate_fm_matrix(this%work_ao_nocb)
+      call deallocate_fm_matrix(this%rho_fm_ao)
+      call deallocate_fm_matrix(this%dipoles_mo)
 
       IF (ASSOCIATED(this%A_ia_munu_sub)) THEN
          DO ivec = 1, SIZE(this%A_ia_munu_sub)
@@ -813,6 +658,12 @@ CONTAINS
             CALL dbcsr_deallocate_matrix(this%work_hmat_asymm(ivec)%matrix)
          END DO
          DEALLOCATE(this%work_hmat_asymm)
+      END IF
+      IF (ASSOCIATED(this%rho_ia_ao)) THEN
+         DO ivec = 1, SIZE(this%rho_ia_ao)
+            CALL dbcsr_deallocate_matrix(this%rho_ia_ao(ivec)%matrix)
+         END DO
+         DEALLOCATE(this%rho_ia_ao)
       END IF
 
       CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool)
@@ -860,12 +711,6 @@ CONTAINS
       IF (ASSOCIATED(this%work_v_rspace)) THEN
          CALL auxbas_pw_pool%give_back_pw(this%work_v_rspace)
          DEALLOCATE(this%work_v_rspace)
-      END IF
-      IF (ASSOCIATED(this%rho_ia_ao)) THEN
-         DO ivec = 1, SIZE(this%rho_ia_ao)
-            CALL dbcsr_deallocate_matrix(this%rho_ia_ao(ivec)%matrix)
-         END DO
-         DEALLOCATE(this%rho_ia_ao)
       END IF
 
    END SUBROUTINE mrsf_deallocate_theory_data
