@@ -307,9 +307,6 @@ CONTAINS
 
          CALL tddft_initialization(tddft_env, qs_env, gs_mos, blacs_env)
 
-         CALL tddft_setup_data(tddft_env, qs_env, gs_mos, &
-                               matrix_ks, tddfpt_control)
-
          logo = theory_to_run(i)
          SELECT CASE (logo)
             CASE('    SF')
@@ -340,58 +337,6 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE tddft
-
-   SUBROUTINE tddft_setup_data(tddft_env, qs_env, gs_mos, matrix_ks, &
-                               tddfpt_control)
-      CLASS(tddft_info_type), INTENT(INOUT)              :: tddft_env
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
-      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
-         POINTER                                         :: gs_mos
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks
-
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_setup_data'
-
-      INTEGER                                            :: handle, ispin
-
-      CALL timeset(routineN, handle)
-
-      qs_env = qs_env
-      tddfpt_control = tddfpt_control
-
-      DO ispin = 1, tddft_env%nSpins
-         CALL copy_dbcsr_to_fm(matrix_ks(ispin)%matrix, tddft_env%fock(ispin))
-         ! work_ao_ao = gs_mos(1)%mos_full^T * tddft_env%fock
-         CALL parallel_gemm('T', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
-                            1.0_dp, gs_mos(ispin)%mos_full, &
-                                    tddft_env%fock(ispin), &
-                            0.0_dp, tddft_env%work_ao_ao(ispin))
-
-         ! tddft_env%fock = work_ao_ao * gs_mos(2)%mos_full
-         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
-                            1.0_dp, tddft_env%work_ao_ao(ispin), &
-                                    gs_mos(ispin)%mos_full, &
-                            0.0_dp, tddft_env%fock(ispin))
-      END DO
-
-      ! --- focka_occ = F_alpha( occ , occ )  ------------------------------------
-      CALL cp_fm_to_fm_submat(tddft_env%fock(1), tddft_env%focka_noc_noc, &
-                              nrow=tddft_env%nocca, ncol=tddft_env%nocca, &
-                              s_firstrow=1, &
-                              s_firstcol=1, &
-                              t_firstrow=1, t_firstcol=1)
-
-      ! --- fockb_vir = F_beta( vir , vir )  ------------------------------------
-      CALL cp_fm_to_fm_submat(tddft_env%fock(2), tddft_env%fockb_vir_vir, &
-                              nrow=tddft_env%nvirb, &
-                              ncol=tddft_env%nvirb, &
-                              s_firstrow=tddft_env%noccb+1, &
-                              s_firstcol=tddft_env%noccb+1, &
-                              t_firstrow=1, t_firstcol=1)
-
-      CALL timestop(handle)
-
-   END SUBROUTINE tddft_setup_data
 
    SUBROUTINE tddft_run(tddft_env, theory_handler, qs_env, tddfpt_control, logger, tddfpt_print_section, &
                         gs_mos, blacs_env, logo)

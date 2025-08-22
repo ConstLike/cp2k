@@ -149,6 +149,15 @@ MODULE qs_tddft_theory_sf
       TYPE(cp_fm_type), POINTER :: work1_ao_ao => NULL()
       TYPE(cp_fm_type), POINTER :: work2_ao_ao => NULL()
 
+      !> Per-spin AO Fock matrices (used in transformation to MO)
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: fock
+
+      !> Fock matrix for Alpha occupied orbitals block [nocca, nocca]
+      TYPE(cp_fm_type), POINTER :: Focka_noc_noc => NULL()
+
+      !> Fock matrix for Beta virtual orbitals block [nvirb, nvirb]
+      TYPE(cp_fm_type), POINTER :: Fockb_vir_vir => NULL()
+
       !-------------------------------
       ! KERNELs related
       !-------------------------------
@@ -240,6 +249,38 @@ CONTAINS
       DO ivec = 1, 1
          CALL cp_fm_create(this%evects_ao_ao(1), fm_struct)
          CALL cp_fm_set_all(this%evects_ao_ao(1), 0.0_dp)
+      END DO
+      CALL cp_fm_struct_release(fm_struct)
+      !=================================================
+      !=== focka_noc_noc [nocca, nocca] ================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nocca, &
+                               ncol_global=tddft_env%nocca, &
+                               context=blacs_env)
+      ALLOCATE(this%focka_noc_noc)
+      CALL cp_fm_create(this%focka_noc_noc, fm_struct)
+      CALL cp_fm_struct_release(fm_struct)
+      CALL cp_fm_set_all(this%focka_noc_noc, 0.0_dp)
+      !=================================================
+      !=== fockb_vir_vir [nvirb, nvirb] ================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nvirb, &
+                               ncol_global=tddft_env%nvirb, &
+                               context=blacs_env)
+      ALLOCATE(this%fockb_vir_vir)
+      CALL cp_fm_create(this%fockb_vir_vir, fm_struct)
+      CALL cp_fm_struct_release(fm_struct)
+      CALL cp_fm_set_all(this%fockb_vir_vir, 0.0_dp)
+      !=================================================
+      !=== fock (nSpins) [nbf, nvirb] ==================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nbf, &
+                               ncol_global=tddft_env%nbf, &
+                               context=blacs_env)
+      ALLOCATE(this%fock(tddft_env%nSpins))
+      DO ispin = 1, tddft_env%nSpins
+         CALL cp_fm_create(this%fock(ispin), fm_struct)
+         CALL cp_fm_set_all(this%fock(ispin), 0.0_dp)
       END DO
       CALL cp_fm_struct_release(fm_struct)
       !=================================================
@@ -567,6 +608,20 @@ CONTAINS
          END DO
          DEALLOCATE(this%rho_fm_ao)
       END IF
+      IF (ALLOCATED(this%fock)) THEN
+         DO ispin = 1, SIZE(this%fock)
+            CALL cp_fm_release(this%fock(ispin))
+         END DO
+         DEALLOCATE(this%fock)
+      END IF
+      IF (ASSOCIATED(this%focka_noc_noc)) THEN
+         CALL cp_fm_release(this%focka_noc_noc)
+         DEALLOCATE(this%Focka_noc_noc)
+      END IF
+      IF (ASSOCIATED(this%Fockb_vir_vir)) THEN
+         CALL cp_fm_release(this%Fockb_vir_vir)
+         DEALLOCATE(this%Fockb_vir_vir)
+      END IF
       IF (ALLOCATED(this%dipoles_mo)) THEN
          DO ivec = 1, SIZE(this%dipoles_mo)
             CALL cp_fm_release(this%dipoles_mo(ivec))
@@ -666,10 +721,11 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_initialize_guess_vectors'
 
       INTEGER                                            :: handle, imo_occ, imo_virt, &
-                                                            istate, &
+                                                            istate, ispin, &
                                                             nStates_selected, istate_orig
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: inds
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: e_virt_m_occ
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks
 
       CALL timeset(routineN, handle)
 
@@ -678,6 +734,39 @@ CONTAINS
          qs_env = qs_env
          NULLIFY(tddfpt_control)
       END IF
+      CALL get_qs_env(qs_env, &
+                      matrix_ks=matrix_ks)
+
+      ! FOCK
+      DO ispin = 1, tddft_env%nSpins
+         CALL copy_dbcsr_to_fm(matrix_ks(ispin)%matrix, this%fock(ispin))
+         ! work1_ao_ao = gs_mos(1)%mos_full^T * this%fock
+         CALL parallel_gemm('T', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
+                            1.0_dp, gs_mos(ispin)%mos_full, &
+                                    this%fock(ispin), &
+                            0.0_dp, this%work1_ao_ao)
+
+         ! this%fock = work_ao_ao * gs_mos(2)%mos_full
+         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
+                            1.0_dp, this%work1_ao_ao, &
+                                    gs_mos(ispin)%mos_full, &
+                            0.0_dp, this%fock(ispin))
+      END DO
+
+      ! --- focka_occ = F_alpha( occ , occ )  ------------------------------------
+      CALL cp_fm_to_fm_submat(this%fock(1), this%focka_noc_noc, &
+                              nrow=tddft_env%nocca, ncol=tddft_env%nocca, &
+                              s_firstrow=1, &
+                              s_firstcol=1, &
+                              t_firstrow=1, t_firstcol=1)
+
+      ! --- fockb_vir = F_beta( vir , vir )  ------------------------------------
+      CALL cp_fm_to_fm_submat(this%fock(2), this%fockb_vir_vir, &
+                              nrow=tddft_env%nvirb, &
+                              ncol=tddft_env%nvirb, &
+                              s_firstrow=tddft_env%noccb+1, &
+                              s_firstcol=tddft_env%noccb+1, &
+                              t_firstrow=1, t_firstcol=1)
 
       nStates_selected = gs_mos(1)%homo*(SIZE(gs_mos(2)%evals_full)-gs_mos(2)%homo)
 
@@ -949,14 +1038,14 @@ CONTAINS
          ! Sigma = X*F_b - F_a*X
          ! C[nocca,nvirb] = -1.0*A[nocca,nocca]*B[nocca,nvirb]+0.0*C[nocca,nvirb]
          CALL parallel_gemm('N','N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nocca, &
-                            -1.0_dp, tddft_env%focka_noc_noc, &
+                            -1.0_dp, this%focka_noc_noc, &
                                      tddft_env%evects_mo(ivec), &
                              0.0_dp, this%work_noc_vir)
 
          ! C[nocca,nvirb] = 1.0*A[nocca,nvirb]*B[nvirb,nvirb] + 1.0*C[nocca,nvirb]
          CALL parallel_gemm('N','N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nvirb, &
                              1.0_dp, tddft_env%evects_mo(ivec), &
-                                     tddft_env%fockb_vir_vir, &
+                                     this%fockb_vir_vir, &
                              1.0_dp, this%work_noc_vir)
 
          ! Add corrections to sigma_mo

@@ -218,23 +218,11 @@ MODULE qs_tddft_types
       !> Number of spin channels (1 = restricted, 2 = unrestricted)
       INTEGER :: nSpins
 
-      !> Fock matrix for Alpha occupied orbitals block [nocca, nocca]
-      TYPE(cp_fm_type), POINTER :: Focka_noc_noc => NULL()
-
-      !> Fock matrix for Beta virtual orbitals block [nvirb, nvirb]
-      TYPE(cp_fm_type), POINTER :: Fockb_vir_vir => NULL()
-
       !> Matrix pool for MO-space matrices [nocca, nvirb]
       TYPE(cp_fm_pool_p_type), POINTER :: fm_pool_mo => NULL()
 
       !> Matrix pools for AO-space matrices [nbf, nbf] per spin channel
       TYPE(cp_fm_pool_p_type), POINTER, DIMENSION(:) :: fm_pool_ao => NULL()
-
-      !> Per-spin AO scratch matrices for Fock transformation [nbf, nbf]
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: work_ao_ao
-
-      !> Per-spin AO Fock matrices (used in transformation to MO)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: fock
 
       !> Work fot properties: Dipoles
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :) :: dipole_op_mos_occ
@@ -461,16 +449,7 @@ CONTAINS
       !--------------------
       ! ALLOCATE  FM
       !--------------------
-      !=== focka_noc_noc [nocca, nocca]
-      CALL allocate_fm_matrix(matrix=tddft_env%focka_noc_noc, &
-                              nrow=tddft_env%nocca, &
-                              ncol=tddft_env%nocca, &
-                              blacs_env=blacs_env)
-      !=== fockb_vir_vir [nvirb, nvirb]
-      CALL allocate_fm_matrix(matrix=tddft_env%fockb_vir_vir, &
-                              nrow=tddft_env%nvirb, &
-                              ncol=tddft_env%nvirb, &
-                              blacs_env=blacs_env)
+
 
       !--------------------
       ! ALLOCATE  FM POOL
@@ -524,19 +503,6 @@ CONTAINS
          CALL cp_fm_struct_release(fm_struct)
       END DO
       !---------- END AO POOL [nbf, nbf]
-
-      ! AO POOL: Fock (nSpins)[nbf, nbf]
-      ALLOCATE (tddft_env%fock(tddft_env%nSpins))
-      DO ispin = 1, tddft_env%nSpins
-         CALL fm_pool_create_fm(tddft_env%fm_pool_ao(ispin)%pool, &
-                                tddft_env%fock(ispin))
-      END DO
-      ! AO POOL: Fock (nSpins)[nbf, nbf]
-      ALLOCATE (tddft_env%work_ao_ao(tddft_env%nSpins))
-      DO ispin = 1, tddft_env%nSpins
-         CALL fm_pool_create_fm(tddft_env%fm_pool_ao(ispin)%pool, &
-                                tddft_env%work_ao_ao(ispin))
-      END DO
 
       CALL cp_fm_struct_create(fm_struct, &
                             nrow_global=tddft_env%nbf, &
@@ -597,31 +563,9 @@ CONTAINS
       !--------------------
       ! DEALLOCATE  FM
       !--------------------
-      IF (ASSOCIATED(this%focka_noc_noc)) THEN
-         CALL cp_fm_release(this%focka_noc_noc)
-         DEALLOCATE(this%focka_noc_noc)
-      END IF
-      IF (ASSOCIATED(this%fockb_vir_vir)) THEN
-         CALL cp_fm_release(this%fockb_vir_vir)
-         DEALLOCATE(this%fockb_vir_vir)
-      END IF
       !--------------------
       ! DEALLOCATE  FM POOL
       !--------------------
-      IF (ALLOCATED(this%fock)) THEN
-         DO ispin = 1, SIZE(this%fock, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_ao(ispin)%pool, &
-                                      this%fock(ispin))
-         END DO
-         DEALLOCATE(this%fock)
-      END IF
-      IF (ALLOCATED(this%work_ao_ao)) THEN
-         DO ispin = 1, SIZE(this%work_ao_ao, 1)
-            CALL fm_pool_give_back_fm(this%fm_pool_ao(ispin)%pool, &
-                                      this%work_ao_ao(ispin))
-         END DO
-         DEALLOCATE(this%work_ao_ao)
-      END IF
       IF (ALLOCATED(this%evects_mo)) THEN
          DO ivec = 1, SIZE(this%evects_mo, 1)
             CALL fm_pool_give_back_fm(this%fm_pool_mo%pool, &

@@ -145,6 +145,15 @@ MODULE qs_tddft_theory_mrsf
 
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:,:) :: spc
 
+      !> Per-spin AO Fock matrices (used in transformation to MO)
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: fock
+
+      !> Fock matrix for Alpha occupied orbitals block [nocca, nocca]
+      TYPE(cp_fm_type), POINTER :: Focka_noc_noc => NULL()
+
+      !> Fock matrix for Beta virtual orbitals block [nvirb, nvirb]
+      TYPE(cp_fm_type), POINTER :: Fockb_vir_vir => NULL()
+
       !> Hamiltonian matrix in AO basis
       TYPE(cp_fm_type), POINTER, DIMENSION(:) :: hmat_ao_ao => NULL()
 
@@ -342,6 +351,38 @@ CONTAINS
       DO imat = 1, 7
          CALL cp_fm_create(this%evects_ao_ao(imat), fm_struct)
          CALL cp_fm_set_all(this%evects_ao_ao(imat), 0.0_dp)
+      END DO
+      CALL cp_fm_struct_release(fm_struct)
+      !=================================================
+      !=== focka_noc_noc [nocca, nocca] ================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nocca, &
+                               ncol_global=tddft_env%nocca, &
+                               context=blacs_env)
+      ALLOCATE(this%focka_noc_noc)
+      CALL cp_fm_create(this%focka_noc_noc, fm_struct)
+      CALL cp_fm_struct_release(fm_struct)
+      CALL cp_fm_set_all(this%focka_noc_noc, 0.0_dp)
+      !=================================================
+      !=== fockb_vir_vir [nvirb, nvirb] ================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nvirb, &
+                               ncol_global=tddft_env%nvirb, &
+                               context=blacs_env)
+      ALLOCATE(this%fockb_vir_vir)
+      CALL cp_fm_create(this%fockb_vir_vir, fm_struct)
+      CALL cp_fm_struct_release(fm_struct)
+      CALL cp_fm_set_all(this%fockb_vir_vir, 0.0_dp)
+      !=================================================
+      !=== fock (nSpins) [nbf, nvirb] ==================
+      CALL cp_fm_struct_create(fm_struct, &
+                               nrow_global=tddft_env%nbf, &
+                               ncol_global=tddft_env%nbf, &
+                               context=blacs_env)
+      ALLOCATE(this%fock(tddft_env%nSpins))
+      DO ispin = 1, tddft_env%nSpins
+         CALL cp_fm_create(this%fock(ispin), fm_struct)
+         CALL cp_fm_set_all(this%fock(ispin), 0.0_dp)
       END DO
       CALL cp_fm_struct_release(fm_struct)
       !=================================================
@@ -753,6 +794,20 @@ CONTAINS
          END DO
          DEALLOCATE(this%dipoles_mo)
       END IF
+      IF (ALLOCATED(this%fock)) THEN
+         DO ispin = 1, SIZE(this%fock)
+            CALL cp_fm_release(this%fock(ispin))
+         END DO
+         DEALLOCATE(this%fock)
+      END IF
+      IF (ASSOCIATED(this%focka_noc_noc)) THEN
+         CALL cp_fm_release(this%focka_noc_noc)
+         DEALLOCATE(this%Focka_noc_noc)
+      END IF
+      IF (ASSOCIATED(this%Fockb_vir_vir)) THEN
+         CALL cp_fm_release(this%Fockb_vir_vir)
+         DEALLOCATE(this%Fockb_vir_vir)
+      END IF
 
       CALL dbcsr_release(this%work_coulomb%matrix)
       DEALLOCATE(this%work_coulomb)
@@ -857,15 +912,49 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'mrsf_initialize_guess_vectors'
 
       INTEGER                                            :: handle, imo_occ, imo_virt, &
-                                                            istate, lr1, lr2, &
+                                                            istate, lr1, lr2, ispin, &
                                                             nStates_selected, istate_orig
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: inds
       LOGICAL                                             :: do_triplets
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: e_virt_m_occ
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks
 
       CALL timeset(routineN, handle)
 
       qs_env = qs_env
+      CALL get_qs_env(qs_env, &
+                      matrix_ks=matrix_ks)
+
+      ! FOCK
+      DO ispin = 1, tddft_env%nSpins
+         CALL copy_dbcsr_to_fm(matrix_ks(ispin)%matrix, this%fock(ispin))
+         ! work1_ao_ao = gs_mos(1)%mos_full^T * this%fock
+         CALL parallel_gemm('T', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
+                            1.0_dp, gs_mos(ispin)%mos_full, &
+                                    this%fock(ispin), &
+                            0.0_dp, this%work1_ao_ao)
+
+         ! this%fock = work_ao_ao * gs_mos(2)%mos_full
+         CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf, &
+                            1.0_dp, this%work1_ao_ao, &
+                                    gs_mos(ispin)%mos_full, &
+                            0.0_dp, this%fock(ispin))
+      END DO
+
+      ! --- focka_occ = F_alpha( occ , occ )  ------------------------------------
+      CALL cp_fm_to_fm_submat(this%fock(1), this%focka_noc_noc, &
+                              nrow=tddft_env%nocca, ncol=tddft_env%nocca, &
+                              s_firstrow=1, &
+                              s_firstcol=1, &
+                              t_firstrow=1, t_firstcol=1)
+
+      ! --- fockb_vir = F_beta( vir , vir )  ------------------------------------
+      CALL cp_fm_to_fm_submat(this%fock(2), this%fockb_vir_vir, &
+                              nrow=tddft_env%nvirb, &
+                              ncol=tddft_env%nvirb, &
+                              s_firstrow=tddft_env%noccb+1, &
+                              s_firstcol=tddft_env%noccb+1, &
+                              t_firstrow=1, t_firstcol=1)
 
       IF (log_unit > 0) THEN
          WRITE(log_unit, '(/,T2,A)') "-------------------------------------------------------------------------------"
@@ -1674,14 +1763,14 @@ CONTAINS
 
       ! C[nocca,nvirb] = -1.0*A[nocca,nocca]*B[nocca,nvirb]+0.0*C[nocca,nvirb]
       CALL parallel_gemm('N','N', nocca, nvirb, nocca, &
-                         -1.0_dp, tddft_env%focka_noc_noc, &
+                         -1.0_dp, this%focka_noc_noc, &
                                   this%work2_noc_vir, &
                           0.0_dp, this%work_noc_vir)
 
       ! C[nocca,nvirb] = 1.0*A[nocca,nvirb]*B[nvirb,nvirb] + 1.0*C[nocca,nvirb]
       CALL parallel_gemm('N','N', nocca, nvirb, nvirb, &
                           1.0_dp, this%work2_noc_vir, &
-                                  tddft_env%fockb_vir_vir, &
+                                  this%fockb_vir_vir, &
                           1.0_dp, this%work_noc_vir)
 
       CALL cp_fm_get_element(tddft_env%evects_mo(ivec), lr1, 1, xlr)
@@ -1689,24 +1778,24 @@ CONTAINS
       SELECT CASE (tddft_env%response_type)
       CASE(2) ! MRSF-S
          DO i = 1, nvirb
-            CALL cp_fm_get_element(tddft_env%fockb_vir_vir, i, 1, scalar)
+            CALL cp_fm_get_element(this%fockb_vir_vir, i, 1, scalar)
             CALL cp_fm_get_element(this%work_noc_vir, lr1, i, val)
             val = val + scalar * xlr / sqrt(2.0_dp)
             CALL cp_fm_set_element(this%work_noc_vir, lr1, i, val)
 
-            CALL cp_fm_get_element(tddft_env%Fockb_vir_vir,  i, 2, scalar)
+            CALL cp_fm_get_element(this%fockb_vir_vir,  i, 2, scalar)
             CALL cp_fm_get_element(this%work_noc_vir, lr2, i, val)
             val = val - scalar * xlr / sqrt(2.0_dp)
             CALL cp_fm_set_element(this%work_noc_vir, lr2, i, val)
          END DO
 
          DO i = 1, nocca
-            CALL cp_fm_get_element(tddft_env%focka_noc_noc, i, lr1, scalar)
+            CALL cp_fm_get_element(this%focka_noc_noc, i, lr1, scalar)
             CALL cp_fm_get_element(this%work_noc_vir, i, 1, val)
             val = val - scalar * xlr / sqrt(2.0_dp)
             CALL cp_fm_set_element(this%work_noc_vir, i, 1, val)
 
-            CALL cp_fm_get_element(tddft_env%focka_noc_noc, i, lr2, scalar)
+            CALL cp_fm_get_element(this%focka_noc_noc, i, lr2, scalar)
             CALL cp_fm_get_element(this%work_noc_vir, i, 2, val)
             val = val + scalar * xlr / sqrt(2.0_dp)
             CALL cp_fm_set_element(this%work_noc_vir, i, 2, val)
@@ -1714,22 +1803,22 @@ CONTAINS
 
          val2 = 0.0_dp
          DO i = 1, nocca
-            CALL cp_fm_get_element(tddft_env%focka_noc_noc, lr1, i, scalar)
+            CALL cp_fm_get_element(this%focka_noc_noc, lr1, i, scalar)
             CALL cp_fm_get_element(this%work2_noc_vir, i, 1, val)
             val2 = val2 - scalar * val
          END DO
          DO i = 1, nocca
-            CALL cp_fm_get_element(tddft_env%focka_noc_noc, lr2, i, scalar)
+            CALL cp_fm_get_element(this%focka_noc_noc, lr2, i, scalar)
             CALL cp_fm_get_element(this%work2_noc_vir, i, 2, val)
             val2 = val2 + scalar * val
          END DO
          DO i = 1, nvirb
-            CALL cp_fm_get_element(tddft_env%fockb_vir_vir, 1, i, scalar)
+            CALL cp_fm_get_element(this%fockb_vir_vir, 1, i, scalar)
             CALL cp_fm_get_element(this%work2_noc_vir, lr1, i, val)
             val2 = val2 + scalar * val
          END DO
          DO i = 1, nvirb
-            CALL cp_fm_get_element(tddft_env%fockb_vir_vir, 2, i, scalar)
+            CALL cp_fm_get_element(this%fockb_vir_vir, 2, i, scalar)
             CALL cp_fm_get_element(this%work2_noc_vir, lr2, i, val)
             val2 = val2 - scalar * val
          END DO
@@ -1737,24 +1826,24 @@ CONTAINS
 
       CASE(3) ! MRSF-T
          DO i = 1, nvirb
-            CALL cp_fm_get_element(tddft_env%fockb_vir_vir, i, 1, scalar)
+            CALL cp_fm_get_element(this%fockb_vir_vir, i, 1, scalar)
             CALL cp_fm_get_element(this%work_noc_vir, lr1, i, val)
             val = val + scalar * xlr / sqrt(2.0_dp)
             CALL cp_fm_set_element(this%work_noc_vir, lr1, i, val)
 
-            CALL cp_fm_get_element(tddft_env%Fockb_vir_vir,  i, 2, scalar)
+            CALL cp_fm_get_element(this%fockb_vir_vir,  i, 2, scalar)
             CALL cp_fm_get_element(this%work_noc_vir, lr2, i, val)
             val = val + scalar * xlr / sqrt(2.0_dp)
             CALL cp_fm_set_element(this%work_noc_vir, lr2, i, val)
          END DO
 
          DO i = 1, nocca
-            CALL cp_fm_get_element(tddft_env%focka_noc_noc, i, lr1, scalar)
+            CALL cp_fm_get_element(this%focka_noc_noc, i, lr1, scalar)
             CALL cp_fm_get_element(this%work_noc_vir, i, 1, val)
             val = val - scalar * xlr / sqrt(2.0_dp)
             CALL cp_fm_set_element(this%work_noc_vir, i, 1, val)
 
-            CALL cp_fm_get_element(tddft_env%focka_noc_noc, i, lr2, scalar)
+            CALL cp_fm_get_element(this%focka_noc_noc, i, lr2, scalar)
             CALL cp_fm_get_element(this%work_noc_vir, i, 2, val)
             val = val - scalar * xlr / sqrt(2.0_dp)
             CALL cp_fm_set_element(this%work_noc_vir, i, 2, val)
@@ -1762,35 +1851,35 @@ CONTAINS
 
          val2 = 0.0_dp
          DO i = 1, nocca
-            CALL cp_fm_get_element(tddft_env%focka_noc_noc, lr1, i, scalar)
+            CALL cp_fm_get_element(this%focka_noc_noc, lr1, i, scalar)
             CALL cp_fm_get_element(this%work2_noc_vir, i, 1, val)
             val2 = val2 - scalar * val
          END DO
          DO i = 1, nocca
-            CALL cp_fm_get_element(tddft_env%focka_noc_noc, lr2, i, scalar)
+            CALL cp_fm_get_element(this%focka_noc_noc, lr2, i, scalar)
             CALL cp_fm_get_element(this%work2_noc_vir, i, 2, val)
             val2 = val2 - scalar * val
          END DO
          DO i = 1, nvirb
-            CALL cp_fm_get_element(tddft_env%fockb_vir_vir, 1, i, scalar)
+            CALL cp_fm_get_element(this%fockb_vir_vir, 1, i, scalar)
             CALL cp_fm_get_element(this%work2_noc_vir, lr1, i, val)
             val2 = val2 + scalar * val
          END DO
          DO i = 1, nvirb
-            CALL cp_fm_get_element(tddft_env%fockb_vir_vir, 2, i, scalar)
+            CALL cp_fm_get_element(this%fockb_vir_vir, 2, i, scalar)
             CALL cp_fm_get_element(this%work2_noc_vir, lr2, i, val)
             val2 = val2 + scalar * val
          END DO
          val2 = val2 / sqrt(2.0_dp)
 
       END SELECT
-      CALL cp_fm_get_element(tddft_env%fockb_vir_vir, 1, 1, val)
+      CALL cp_fm_get_element(this%fockb_vir_vir, 1, 1, val)
       val2 = val2 + val * xlr * 0.5_dp
-      CALL cp_fm_get_element(tddft_env%fockb_vir_vir, 2, 2, val)
+      CALL cp_fm_get_element(this%fockb_vir_vir, 2, 2, val)
       val2 = val2 + val * xlr * 0.5_dp
-      CALL cp_fm_get_element(tddft_env%focka_noc_noc, lr1, lr1, val)
+      CALL cp_fm_get_element(this%focka_noc_noc, lr1, lr1, val)
       val2 = val2 - val * xlr * 0.5_dp
-      CALL cp_fm_get_element(tddft_env%focka_noc_noc, lr2, lr2, val)
+      CALL cp_fm_get_element(this%focka_noc_noc, lr2, lr2, val)
       val2 = val2 - val * xlr * 0.5_dp
 
       CALL cp_fm_set_element(this%work_noc_vir, lr1, 1, val2)
