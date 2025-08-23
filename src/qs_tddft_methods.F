@@ -422,6 +422,10 @@ CONTAINS
 
                CALL build_subspace_hamiltonian(tddft_env)
 
+               CALL diagonalize_subspace_hamiltonian(tddft_env)
+
+               CALL deallocate_fm_matrix(tddft_env%subspace)
+
                !> Run converger and expand the vectors space if needed
                tddft_env%status = run_converger(tddft_env, tddfpt_control, &
                                                 log_unit, logger, iter)
@@ -669,35 +673,24 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'converger_run'
 
-      INTEGER                                            :: handle, i, j, a, ij, ierr, iv
+      INTEGER                                            :: handle, i, j, a, ij, iv
       REAL(KIND=DP)                                      :: val, sig, scal, val2
 
       CALL timeset(routineN, handle)
 
-      ! (2) diagonalise Atilde  → omega_i & coeffs
-      ! Diagonalize subspace matrix
-      ierr = 0
-      CALL choose_eigv_solver(matrix=tddft_env%subspace, &
-                              eigenvalues=tddft_env%ritz_evals(1:tddft_env%nvec), &
-                              eigenvectors=tddft_env%subspace_evecs, &
-                              info=ierr)
-      ! Check ierr where?
-
-      CALL deallocate_fm_matrix(tddft_env%subspace)
-      ! Print
-!     print *, "KKK| ================ Energy ============== at iter=", iter
-!     DO iv = 1, tddft_env%nstates
-!        print *, "KKK| Energy (eV):", iv, tddft_env%ritz_evals(iv)*evolt
-!     END DO
-!     CALL print_mat_ao_ao(tddft_env%subspace_evecs, "subspace_evecs", logger, iter)
-
-      ! Normalization
-      CALL cp_fm_vectorsnorm(tddft_env%subspace_evecs, tddft_env%vector_norm(1:tddft_env%nvec))
-      tddft_env%vector_scal(1:tddft_env%nvec) = 1.0_dp/tddft_env%vector_norm(1:tddft_env%nvec)
-      CALL cp_fm_column_scale(tddft_env%subspace_evecs, tddft_env%vector_scal(1:tddft_env%nvec))
-
-      ! Print
-      CALL print_mat_ao_ao(tddft_env%subspace_evecs, "normed subspace_evecs", logger, iter)
+!     ! (2) diagonalise Atilde  → omega_i & coeffs
+!     ! Diagonalize subspace matrix
+!     ierr = 0
+!     CALL choose_eigv_solver(matrix=tddft_env%subspace, &
+!                             eigenvalues=tddft_env%ritz_evals(1:tddft_env%nvec), &
+!                             eigenvectors=tddft_env%subspace_evecs, &
+!                             info=ierr)
+!     CALL deallocate_fm_matrix(tddft_env%subspace)
+!
+!     ! Normalization
+!     CALL cp_fm_vectorsnorm(tddft_env%subspace_evecs, tddft_env%vector_norm(1:tddft_env%nvec))
+!     tddft_env%vector_scal(1:tddft_env%nvec) = 1.0_dp/tddft_env%vector_norm(1:tddft_env%nvec)
+!     CALL cp_fm_column_scale(tddft_env%subspace_evecs, tddft_env%vector_scal(1:tddft_env%nvec))
 
       DO iv = 1, tddft_env%nstates
          CALL cp_fm_set_all(matrix=tddft_env%ritz_vects(iv), alpha=0.0_dp)
@@ -843,89 +836,73 @@ CONTAINS
 !> \param[inout] tddft_env Davidson env
 !> \note Implements pseudocode line 12
 ! **************************************************************************************************
-SUBROUTINE build_subspace_hamiltonian(tddft_env)
-   TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
+   SUBROUTINE build_subspace_hamiltonian(tddft_env)
+      TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
 
-   CHARACTER(LEN=*), PARAMETER :: routineN = 'build_subspace_hamiltonian'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'build_subspace_hamiltonian'
 
-   REAL(KIND=dp)                                      :: val
-   INTEGER                                            :: handle, i, j
+      REAL(KIND=dp)                                      :: val
+      INTEGER                                            :: handle, i, j
 
-   CALL timeset(routineN, handle)
+      CALL timeset(routineN, handle)
 
-   ! Build subspace matrix: H_ij = <X_i | Sigma_j> (pseudocode line 12)
-   ! Could be DGEMM, but multiplication is between slices of matrix and array of matrices
-   ! H[nvec,nvec] = 1.0*(Sigma(nvec)[dim])^T*X(nvec)[dim] + 0.0*H[nvec,nvec]
-   DO i = 1, tddft_env%nvec
-      DO j = 1, i
-         CALL cp_fm_trace(matrix_a=tddft_env%evects_mo(i), &
-                          matrix_b=tddft_env%sigma_vecs(j), &
-                          trace=val)
-         CALL cp_fm_set_element(matrix=tddft_env%subspace, &
-                                irow_global=i, &
-                                icol_global=j, &
-                                alpha=val)
-         IF (i/=j) CALL cp_fm_set_element(matrix=tddft_env%subspace, &
-                                          irow_global=j, &
-                                          icol_global=i, &
-                                          alpha=val)
+      ! Build subspace matrix: H_ij = <X_i | Sigma_j> (pseudocode line 12)
+      ! Could be DGEMM, but multiplication is between slices of matrix and array of matrices
+      ! H[nvec,nvec] = 1.0*(Sigma(nvec)[dim])^T*X(nvec)[dim] + 0.0*H[nvec,nvec]
+      DO i = 1, tddft_env%nvec
+         DO j = 1, i
+            CALL cp_fm_trace(matrix_a=tddft_env%evects_mo(i), &
+                             matrix_b=tddft_env%sigma_vecs(j), &
+                             trace=val)
+            CALL cp_fm_set_element(matrix=tddft_env%subspace, &
+                                   irow_global=i, &
+                                   icol_global=j, &
+                                   alpha=val)
+            IF (i/=j) CALL cp_fm_set_element(matrix=tddft_env%subspace, &
+                                             irow_global=j, &
+                                             icol_global=i, &
+                                             alpha=val)
+         END DO
       END DO
-   END DO
 
-   CALL timestop(handle)
+      CALL timestop(handle)
 
-END SUBROUTINE build_subspace_hamiltonian
+   END SUBROUTINE build_subspace_hamiltonian
 
 ! **************************************************************************************************
 !> \brief Diagonalizes the subspace Hamiltonian
 !> \param[inout] tddft_env Davidson solver state
-!> \param[in] blacs_env BLACS environment
 !> \note Implements pseudocode lines 13-14
 ! **************************************************************************************************
-!SUBROUTINE diagonalize_subspace_hamiltonian(tddft_env, blacs_env)
-!   TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
-!   TYPE(cp_blacs_env_type), POINTER                  :: blacs_env
-!
-!   CHARACTER(LEN=*), PARAMETER :: routineN = 'diagonalize_subspace_hamiltonian'
-!
-!   INTEGER                                            :: handle, ierr, ivec
-!   REAL(KIND=dp), DIMENSION(:), ALLOCATABLE          :: eigenvalues
-!
-!   CALL timeset(routineN, handle)
-!
-!   ALLOCATE(eigenvalues(tddft_env%current_subspace_size))
-!
-!   ! Diagonalize H·C = ω·C (pseudocode line 13)
-!   ierr = 0
-!   CALL choose_eigv_solver(matrix=tddft_env%subspace_hamiltonian, &
-!                          eigenvalues=eigenvalues, &
-!                          eigenvectors=tddft_env%subspace_eigenvectors, &
-!                          info=ierr)
-!
-!   IF (ierr /= 0) THEN
-!      CPABORT("Subspace diagonalization failed")
-!   END IF
-!
-!   ! Store Ritz eigenvalues
-!   tddft_env%ritz_eigenvalues(1:tddft_env%current_subspace_size) = eigenvalues
-!
-!   ! Normalize eigenvectors
-!   CALL cp_fm_vectorsnorm(tddft_env%subspace_eigenvectors, &
-!                         tddft_env%vector_norms(1:tddft_env%current_subspace_size))
-!
-!   DO ivec = 1, tddft_env%current_subspace_size
-!      tddft_env%vector_scaling_factors(ivec) = 1.0_dp / tddft_env%vector_norms(ivec)
-!   END DO
-!
-!   CALL cp_fm_column_scale(tddft_env%subspace_eigenvectors, &
-!                          tddft_env%vector_scaling_factors(1:tddft_env%current_subspace_size))
-!
-!   DEALLOCATE(eigenvalues)
-!   CALL deallocate_fm_matrix(tddft_env%subspace_hamiltonian)
-!
-!   CALL timestop(handle)
-!
-!END SUBROUTINE diagonalize_subspace_hamiltonian
+   SUBROUTINE diagonalize_subspace_hamiltonian(tddft_env)
+      TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'diagonalize_subspace_hamiltonian'
+
+      INTEGER                                            :: handle, ierr
+
+      CALL timeset(routineN, handle)
+
+      ! Diagonalize H*C = Omega*C (pseudocode line 13)
+      ierr = 0
+      CALL choose_eigv_solver(matrix=tddft_env%subspace, &
+                              eigenvalues=tddft_env%ritz_evals(1:tddft_env%nvec), &
+                              eigenvectors=tddft_env%subspace_evecs, &
+                              info=ierr)
+
+      IF (ierr /= 0) THEN
+         CPABORT("Subspace diagonalization failed")
+      END IF
+
+      ! Normalize eigenvectors
+      CALL cp_fm_vectorsnorm(tddft_env%subspace_evecs, tddft_env%vector_norm(1:tddft_env%nvec))
+      tddft_env%vector_scal(1:tddft_env%nvec) = 1.0_dp/tddft_env%vector_norm(1:tddft_env%nvec)
+      ! Store Ritz eigenvalues
+      CALL cp_fm_column_scale(tddft_env%subspace_evecs, tddft_env%vector_scal(1:tddft_env%nvec))
+
+      CALL timestop(handle)
+
+   END SUBROUTINE diagonalize_subspace_hamiltonian
 !
 !! **************************************************************************************************
 !!> \brief Forms Ritz vectors from subspace eigenvectors
