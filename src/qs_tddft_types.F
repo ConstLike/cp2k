@@ -297,28 +297,23 @@ MODULE qs_tddft_types
 
 CONTAINS
 
-   SUBROUTINE tddft_initialization(tddft_env, qs_env, gs_mos, blacs_env)
+   SUBROUTINE tddft_initialization(tddft_env, qs_env, gs_mos)
       CLASS(tddft_info_type), INTENT(INOUT)              :: tddft_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          POINTER                                         :: gs_mos
-      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_allocate_data'
 
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       TYPE(section_vals_type), POINTER                   :: hf_section
       INTEGER                                            :: ivec, handle
       INTEGER :: n_rep_hf, potential_type
       LOGICAL :: explicit
 
       CALL timeset(routineN, handle)
-
-      CALL get_qs_env(qs_env=qs_env, &
-                      dft_control=dft_control, &
-                      matrix_s=matrix_s)
 
       ! Get number of HF sections
       hf_section => section_vals_get_subs_vals(section_vals=qs_env%input, &
@@ -364,6 +359,9 @@ CONTAINS
       CALL cp_fm_get_info(gs_mos(2)%mos_virt, ncol_global=tddft_env%nvirb)
       CALL cp_fm_get_info(gs_mos(1)%mos_occ, nrow_global=tddft_env%nbf)
 
+      CALL get_qs_env(qs_env=qs_env, &
+                      dft_control=dft_control)
+
       ! Set the reference type ROHF/UHF
       tddft_env%reference_type = 0
       IF (dft_control%roks) tddft_env%reference_type = 1
@@ -384,9 +382,13 @@ CONTAINS
          tddft_env%nStates = tddft_env%nStates_max
       END IF
 
+      CALL get_qs_env(qs_env=qs_env, &
+                      blacs_env=blacs_env)
+
       !--------------------
       ! ALLOCATE  DP
       !--------------------
+
       ALLOCATE (tddft_env%e_virt_minus_occ(tddft_env%nStates_max), source=0.0_dp)
       ALLOCATE (tddft_env%evals(tddft_env%mxvec), source=0.0_dp)
       ALLOCATE (tddft_env%ritz_evals(tddft_env%mxvec), source=0.0_dp)

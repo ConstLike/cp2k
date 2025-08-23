@@ -20,8 +20,8 @@ MODULE qs_tddft_methods
    USE kahan_sum,                       ONLY: accurate_dot_product
    USE input_constants,                 ONLY: tddfpt_dipole_berry,&
                                               tddfpt_dipole_length
-   USE qs_tddft_theory_sf,              ONLY: tddft_sf_theory_type
-   USE qs_tddft_theory_mrsf,            ONLY: tddft_mrsf_theory_type
+   USE qs_tddft_theory_sf,              ONLY: tddft_sf_type
+   USE qs_tddft_theory_mrsf,            ONLY: tddft_mrsf_type
    USE qs_tddft_theory,                 ONLY: tddft_theory_type
    USE qs_tddft_types,                  ONLY: tddft_info_type,&
                                               tddft_initialization,&
@@ -229,7 +229,7 @@ CONTAINS
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(tddft_info_type)                              :: tddft_env
-      CLASS(tddft_theory_type), ALLOCATABLE              :: theory_handler
+      CLASS(tddft_theory_type), ALLOCATABLE              :: theory
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_ks_oep
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       CHARACTER(LEN=6), DIMENSION(3)                     :: theory_to_run
@@ -246,7 +246,6 @@ CONTAINS
 
       NULLIFY (logger)
       logger => cp_get_default_logger()
-
 
       NULLIFY (tddfpt_section)
       tddfpt_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT")
@@ -305,26 +304,26 @@ CONTAINS
 
       DO i = 1, SIZE(theory_to_run)
 
-         CALL tddft_initialization(tddft_env, qs_env, gs_mos, blacs_env)
+         CALL tddft_initialization(tddft_env, qs_env, gs_mos)
 
          logo = theory_to_run(i)
          SELECT CASE (logo)
             CASE('    SF')
                tddft_env%response_type = 1 ! SF
-               ALLOCATE(tddft_sf_theory_type :: theory_handler)
+               ALLOCATE(tddft_sf_type :: theory)
             CASE('MRSF-S')
                tddft_env%response_type = 2 ! MRSF-S
-               ALLOCATE(tddft_mrsf_theory_type :: theory_handler)
+               ALLOCATE(tddft_mrsf_type :: theory)
             CASE('MRSF-T')
                tddft_env%response_type = 3 ! MRSF-T
-               ALLOCATE(tddft_mrsf_theory_type :: theory_handler)
+               ALLOCATE(tddft_mrsf_type :: theory)
           END SELECT
 
-         CALL tddft_run(tddft_env, theory_handler, qs_env, tddfpt_control, logger, &
+         CALL tddft_run(tddft_env, theory, qs_env, tddfpt_control, logger, &
                         tddfpt_print_section, gs_mos, &
                         blacs_env, logo)
 
-         DEALLOCATE(theory_handler)
+         DEALLOCATE(theory)
 
          CALL tddft_finalization(tddft_env, blacs_env)
       END DO
@@ -338,10 +337,10 @@ CONTAINS
 
    END SUBROUTINE tddft
 
-   SUBROUTINE tddft_run(tddft_env, theory_handler, qs_env, tddfpt_control, logger, tddfpt_print_section, &
+   SUBROUTINE tddft_run(tddft_env, theory_env, qs_env, tddfpt_control, logger, tddfpt_print_section, &
                         gs_mos, blacs_env, logo)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
-      CLASS(tddft_theory_type)                           :: theory_handler
+      CLASS(tddft_theory_type)                           :: theory_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -364,23 +363,32 @@ CONTAINS
 
       t1 = m_walltime()
 
-      CALL theory_handler%allocate_theory_data(qs_env, tddft_env)
+      CALL theory_env%allocate(qs_env, tddft_env)
 
       niters = tddfpt_control%niters
       IF (niters > 0) THEN
          ! Open logger
-         log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, &
-                                         "GUESS_VECTORS", extension=".tddfptLog")
+         log_unit = cp_print_key_unit_nr(logger, &
+                                         tddfpt_print_section, &
+                                         "GUESS_VECTORS", &
+                                         extension=".tddfptLog")
 
-         CALL theory_handler%initialize_guess_vectors(qs_env, tddft_env, gs_mos, &
-                                                      tddfpt_control, log_unit)
+         CALL theory_env%init_guess(qs_env, &
+                                    tddft_env, &
+                                    gs_mos, &
+                                    tddfpt_control, &
+                                    log_unit)
 
          ! Close logger
-         CALL cp_print_key_finished_output(log_unit, logger, &
-                                           tddfpt_print_section, "GUESS_VECTORS")
+         CALL cp_print_key_finished_output(log_unit, &
+                                           logger, &
+                                           tddfpt_print_section, &
+                                           "GUESS_VECTORS")
 
-         log_unit = cp_print_key_unit_nr(logger, tddfpt_print_section, &
-                                         "ITERATION_INFO", extension=".tddfptLog")
+         log_unit = cp_print_key_unit_nr(logger, &
+                                         tddfpt_print_section, &
+                                         "ITERATION_INFO", &
+                                         extension=".tddfptLog")
 
          IF (log_unit > 0) THEN
             WRITE (log_unit, '(/,A,/,A,/,A,/,A,/)') &
@@ -391,7 +399,8 @@ CONTAINS
          END IF
          IF (log_unit > 0) CALL m_flush(log_unit)
 
-         CALL cp_add_iter_level(logger%iter_info, "TDDFT_SCF")
+         CALL cp_add_iter_level(logger%iter_info, &
+                                "TDDFT_SCF")
 
          tddft_env%max_error_prev = 10.0_dp
          tddft_env%max_delta_eval_prev = 10.0_dp
@@ -408,18 +417,19 @@ CONTAINS
 
                CALL timeset(routineN//"_inner_loop", handle2)
 
-               CALL cp_iterate(logger%iter_info, iter_nr_out=iter)
+               CALL cp_iterate(logger%iter_info, &
+                               iter_nr_out=iter)
 
-               DO ivec = ist, iend
                   !> MO->AO transformation for trial vectors
-                  CALL theory_handler%mo_to_ao_transform(tddft_env, gs_mos, ivec, logger)
+                  DO ivec = ist, iend
+                  CALL theory_env%mo_to_ao(tddft_env, gs_mos, ivec, logger)
 
-                  !> Apply all operators (HFX, XC, ...), build Sigma vectors (=A*X) in AO space
-                  CALL theory_handler%apply_operator(qs_env, tddft_env, &
+                  !> Apply all operators (HFX, Coulomb, XC, ...), build Sigma vectors (=A*X) in AO space
+                  CALL theory_env%apply(qs_env, tddft_env, &
                                                      blacs_env, tddfpt_control, ivec, logger)
 
                   !> AO->MO transformation for resulting vectors
-                  CALL theory_handler%ao_to_mo_transform(tddft_env,gs_mos,ivec, logger)
+                  CALL theory_env%ao_to_mo(tddft_env,gs_mos,ivec, logger)
                END DO
 
                !> Run converger and expand the vectors space if needed
@@ -514,9 +524,10 @@ CONTAINS
                                   gs_mos, &
                                   qs_env)
 
-      CALL theory_handler%print_theory_data(qs_env, tddft_env, gs_mos, ostrength, tddfpt_control, log_unit)
+      CALL theory_env%print(qs_env, tddft_env, gs_mos, ostrength, tddfpt_control, log_unit)
 
-      CALL theory_handler%deallocate_theory_data(qs_env)
+      CALL theory_env%deallocate(qs_env)
+
       DEALLOCATE (ostrength)
 
       CALL timestop(handle)

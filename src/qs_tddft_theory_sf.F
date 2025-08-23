@@ -125,9 +125,9 @@ MODULE qs_tddft_theory_sf
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_tddft_theory_sf'
 
-   PUBLIC :: tddft_sf_theory_type
+   PUBLIC :: tddft_sf_type
 
-   TYPE, EXTENDS(tddft_theory_type) :: tddft_sf_theory_type
+   TYPE, EXTENDS(tddft_theory_type) :: tddft_sf_type
 
       !> Hamiltonian matrix in AO basis
       TYPE(cp_fm_type), POINTER :: hmat_ao_ao => NULL()
@@ -185,23 +185,23 @@ MODULE qs_tddft_theory_sf
 
       ! -- theory-specific fields if needed --
    CONTAINS
-      PROCEDURE, PASS(this) :: allocate_theory_data     => sf_allocate_theory_data
-      PROCEDURE, PASS(this) :: deallocate_theory_data   => sf_deallocate_theory_data
-      PROCEDURE, PASS(this) :: initialize_guess_vectors => sf_initialize_guess_vectors
-      PROCEDURE, PASS(this) :: mo_to_ao_transform       => sf_mo_to_ao_transform
-      PROCEDURE, PASS(this) :: apply_operator           => sf_apply_operator
-      PROCEDURE, PASS(this) :: ao_to_mo_transform       => sf_ao_to_mo_transform
-      PROCEDURE, PASS(this) :: print_theory_data        => sf_print_theory_data
+      PROCEDURE, PASS(this) :: allocate   => sf_allocate
+      PROCEDURE, PASS(this) :: init_guess => sf_init_guess
+      PROCEDURE, PASS(this) :: mo_to_ao   => sf_mo_to_ao
+      PROCEDURE, PASS(this) :: apply      => sf_apply
+      PROCEDURE, PASS(this) :: ao_to_mo   => sf_ao_to_mo
+      PROCEDURE, PASS(this) :: print      => sf_print
+      PROCEDURE, PASS(this) :: deallocate => sf_deallocate
    END TYPE
 
 CONTAINS
 
-   SUBROUTINE sf_allocate_theory_data(this, qs_env, tddft_env)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT)         :: this
+   SUBROUTINE sf_allocate(this, qs_env, tddft_env)
+      CLASS(tddft_sf_type), INTENT(INOUT)         :: this
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
 
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'sf_allocate_theory_data'
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'sf_allocate'
 
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
@@ -392,10 +392,10 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE sf_allocate_theory_data
+   END SUBROUTINE sf_allocate
 
-   SUBROUTINE sf_deallocate_theory_data(this, qs_env)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
+   SUBROUTINE sf_deallocate(this, qs_env)
+      CLASS(tddft_sf_type), INTENT(INOUT) :: this
       TYPE(qs_environment_type), POINTER :: qs_env
 
       INTEGER :: ivec
@@ -461,11 +461,11 @@ CONTAINS
          NULLIFY(this%rho_orb_struct)
       END IF
 
-   END SUBROUTINE sf_deallocate_theory_data
+   END SUBROUTINE sf_deallocate
 
-   SUBROUTINE sf_initialize_guess_vectors(this, qs_env, tddft_env, gs_mos, &
+   SUBROUTINE sf_init_guess(this, qs_env, tddft_env, gs_mos, &
                                           tddfpt_control, log_unit)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT)         :: this
+      CLASS(tddft_sf_type), INTENT(INOUT)         :: this
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
@@ -473,7 +473,7 @@ CONTAINS
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       INTEGER                                            :: log_unit
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_initialize_guess_vectors'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_init_guess'
 
       INTEGER                                            :: handle, imo_occ, imo_virt, &
                                                             istate, ispin, &
@@ -573,10 +573,10 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE sf_initialize_guess_vectors
+   END SUBROUTINE sf_init_guess
 
-   SUBROUTINE sf_mo_to_ao_transform(this, tddft_env, gs_mos, ivec, logger)
-      CLASS(tddft_sf_theory_type), TARGET, INTENT(INOUT)      :: this
+   SUBROUTINE sf_mo_to_ao(this, tddft_env, gs_mos, ivec, logger)
+      CLASS(tddft_sf_type), TARGET, INTENT(INOUT)      :: this
       TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), POINTER                        :: gs_mos
@@ -606,11 +606,11 @@ CONTAINS
       ! Print
       CALL print_mat_ao_ao(this%evects_ao_ao(1), 'evects', logger, ivec)
 
-   END SUBROUTINE sf_mo_to_ao_transform
+   END SUBROUTINE sf_mo_to_ao
 
-   SUBROUTINE sf_apply_operator(this, qs_env, tddft_env, blacs_env, &
+   SUBROUTINE sf_apply(this, qs_env, tddft_env, blacs_env, &
                                 tddfpt_control, ivec, logger)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT)      :: this
+      CLASS(tddft_sf_type), INTENT(INOUT)      :: this
       TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
       TYPE(qs_environment_type), POINTER              :: qs_env
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
@@ -718,10 +718,10 @@ CONTAINS
          CALL print_mat_ao_ao(this%hmat_ao_ao, "hmat_ao_HF_tot", logger, ivec)
       END IF
 
-   END SUBROUTINE sf_apply_operator
+   END SUBROUTINE sf_apply
 
-   SUBROUTINE sf_ao_to_mo_transform(this, tddft_env, gs_mos, ivec, logger)
-      CLASS(tddft_sf_theory_type), TARGET, INTENT(INOUT)      :: this
+   SUBROUTINE sf_ao_to_mo(this, tddft_env, gs_mos, ivec, logger)
+      CLASS(tddft_sf_type), TARGET, INTENT(INOUT)      :: this
       TYPE(tddft_info_type),    INTENT(INOUT)         :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
          DIMENSION(:), POINTER                        :: gs_mos
@@ -797,11 +797,11 @@ CONTAINS
       END SELECT
       ! Print
       CALL print_mat_ao_ao(tddft_env%sigma_vecs(ivec), 'sigma_mat', logger, ivec)
-   END SUBROUTINE sf_ao_to_mo_transform
+   END SUBROUTINE sf_ao_to_mo
 
-   SUBROUTINE sf_print_theory_data(this, qs_env, tddft_env, gs_mos, ostrength, &
+   SUBROUTINE sf_print(this, qs_env, tddft_env, gs_mos, ostrength, &
                                    tddfpt_control, log_unit)
-      CLASS(tddft_sf_theory_type), INTENT(INOUT) :: this
+      CLASS(tddft_sf_type), INTENT(INOUT) :: this
       TYPE(qs_environment_type), POINTER :: qs_env
       TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
       TYPE(tddfpt_ground_state_mos), &
@@ -812,7 +812,7 @@ CONTAINS
       TYPE(section_vals_type), POINTER                   :: tddfpt_print_section
       INTEGER :: log_unit
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_print_theory_data'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_print'
 
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
       CHARACTER(len=2)                                   :: lsd_str
@@ -1164,7 +1164,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE sf_print_theory_data
+   END SUBROUTINE sf_print
 
    SUBROUTINE print_mat_ao_ao(mat, mat_name, logger, iter)
       TYPE(cp_fm_type), INTENT(IN) :: mat

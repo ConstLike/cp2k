@@ -24,13 +24,13 @@
 !>     the driver code. No changes to the main loop are needed for additional theories.
 !>
 !> Contract (deferred procedures to implement):
-!>   - allocate_theory_data     : allocate any additional data required by this theory
-!>   - initialize_guess_vectors : set up initial guess vectors in MO space
-!>   - mo_to_ao_transform       : transform trial vectors from MO to AO basis
-!>   - apply_operator           : apply all HFX/XC/Coulomb/... operators in AO
-!>   - ao_to_mo_transform       : transform operator results back to MO basis
-!>   - print_theory_data        : print excitation analysis available for this theory
-!>   - deallocate_theory_data   : free all theory-specific resources
+!>   - allocate   : allocate any additional data required by this theory
+!>   - init_guess : set up initial guess vectors in MO space
+!>   - mo_to_ao   : transform trial vectors from MO to AO basis
+!>   - apply      : apply all HFX/Coulomb/XC... operators in AO
+!>   - ao_to_mo   : transform operator results back to MO basis
+!>   - print      : print excitation analysis available for this theory
+!>   - deallocate : free all theory-specific resources
 !>
 !> [tddft_info_type] is used to store universal Davidson/infrastructure data.
 !> Theory-specific arrays and parameters must be private fields of each implementation.
@@ -71,19 +71,19 @@ MODULE qs_tddft_theory
 
    CONTAINS
       !> Allocate any additional theory-specific data
-      PROCEDURE(allocate_theory_iface), DEFERRED :: allocate_theory_data
-      !> Deallocate all theory-specific data/arrays
-      PROCEDURE(deallocate_theory_iface), DEFERRED :: deallocate_theory_data
+      PROCEDURE(allocate_iface), DEFERRED :: allocate
       !> Set up initial guess excitation vectors (MO space)
-      PROCEDURE(init_guess_iface), DEFERRED :: initialize_guess_vectors
+      PROCEDURE(init_guess_iface), DEFERRED :: init_guess
       !> MO->AO transformation for trial vectors
-      PROCEDURE(mo_to_ao_iface), DEFERRED :: mo_to_ao_transform
+      PROCEDURE(mo_to_ao_iface), DEFERRED :: mo_to_ao
       !> Apply all operators (HFX, XC, Coulomb, ...), build sigma vectors in AO space
-      PROCEDURE(apply_op_iface), DEFERRED :: apply_operator
+      PROCEDURE(apply_op_iface), DEFERRED :: apply
       !> AO->MO back transformation for resulting vectors
-      PROCEDURE(ao_to_mo_iface), DEFERRED :: ao_to_mo_transform
+      PROCEDURE(ao_to_mo_iface), DEFERRED :: ao_to_mo
       !> Print theory-specific excitation analysis
-      PROCEDURE(print_theory_iface), DEFERRED :: print_theory_data
+      PROCEDURE(print_iface), DEFERRED :: print
+      !> Deallocate all theory-specific data/arrays
+      PROCEDURE(deallocate_iface), DEFERRED :: deallocate
    END TYPE tddft_theory_type
 
 ! **************************************************************************************************
@@ -92,7 +92,7 @@ MODULE qs_tddft_theory
 ! **************************************************************************************************
    ABSTRACT INTERFACE
       !> Allocate any theory-specific working arrays, buffers, etc.
-      SUBROUTINE allocate_theory_iface(this, qs_env, tddft_env)
+      SUBROUTINE allocate_iface(this, qs_env, tddft_env)
          IMPORT :: tddft_theory_type, tddft_info_type, cp_blacs_env_type,&
                    qs_environment_type
          CLASS(tddft_theory_type), INTENT(INOUT) :: this
@@ -160,7 +160,7 @@ MODULE qs_tddft_theory
          TYPE(cp_logger_type), POINTER                   :: logger
       END SUBROUTINE
       !> Print theory-specific excitation analysis
-      SUBROUTINE print_theory_iface(this, qs_env, tddft_env, gs_mos, ostrength, tddfpt_control, log_unit)
+      SUBROUTINE print_iface(this, qs_env, tddft_env, gs_mos, ostrength, tddfpt_control, log_unit)
          IMPORT :: tddft_theory_type, tddft_info_type, tddfpt2_control_type, &
                    tddfpt_ground_state_mos, qs_environment_type, dp
          CLASS(tddft_theory_type), INTENT(INOUT) :: this
@@ -173,7 +173,7 @@ MODULE qs_tddft_theory
          INTEGER                                         :: log_unit
       END SUBROUTINE
       !> Deallocate/free any theory-specific resources
-      SUBROUTINE deallocate_theory_iface(this, qs_env)
+      SUBROUTINE deallocate_iface(this, qs_env)
          IMPORT :: tddft_theory_type, qs_environment_type
          TYPE(qs_environment_type), POINTER :: qs_env
          CLASS(tddft_theory_type), INTENT(INOUT) :: this
@@ -183,17 +183,17 @@ MODULE qs_tddft_theory
 ! **************************************************************************************************
 !> \par How to implement a new theory:
 !>   1. Create a new module, e.g. qs_tddft_theory_sf, with
-!>      TYPE, EXTENDS(tddft_theory_type) :: tddft_sf_theory_type
+!>      TYPE, EXTENDS(tddft_theory_type) :: tddft_sf_type
 !>   2. Implement all deferred methods for your theory.
 !>   3. Add any additional fields for theory-specific working arrays, if needed.
 !>   4. Select and allocate your handler in the main TDDFT driver, e.g.
 !>        SELECT CASE (theory_kind)
 !>          CASE('SF')
-!>            ALLOCATE(tddft_sf_theory_type :: theory_handler)
+!>            ALLOCATE(tddft_sf_type :: theory)
 !>          CASE('MRSF')
-!>            ALLOCATE(tddft_mrsf_theory_type :: theory_handler)
+!>            ALLOCATE(tddft_mrsf_type :: theory)
 !>        END SELECT
-!>   5. Use only theory_handler%initialize_guess_vectors(...) in all driver routines.
+!>   5. Use only theory%init_guess(...) in all driver routines.
 ! **************************************************************************************************
 
 END MODULE qs_tddft_theory
