@@ -424,11 +424,16 @@ CONTAINS
 
                CALL diagonalize_subspace_hamiltonian(tddft_env)
 
+               CALL form_ritz_vectors(tddft_env)
+
+               CALL compute_davidson_residuals(tddft_env)
+
                CALL deallocate_fm_matrix(tddft_env%subspace)
+               CALL deallocate_fm_matrix(tddft_env%subspace_evecs)
 
                !> Run converger and expand the vectors space if needed
                tddft_env%status = run_converger(tddft_env, tddfpt_control, &
-                                                log_unit, logger, iter)
+                                                log_unit, iter)
 
                !> Print iteration time and max_error
                t2 = m_walltime()
@@ -527,11 +532,10 @@ CONTAINS
       CALL timestop(handle)
    END SUBROUTINE tddft_run
 
-   FUNCTION run_converger(tddft_env, tddfpt_control, log_unit, logger, iter) RESULT(status)
+   FUNCTION run_converger(tddft_env, tddfpt_control, log_unit,iter) RESULT(status)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       INTEGER                                            :: log_unit
-      TYPE(cp_logger_type), POINTER                      :: logger
       INTEGER                                            :: iter
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'run_converger'
@@ -546,9 +550,8 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      CALL converger_run(tddft_env, log_unit, logger, iter)
+      CALL converger_run(tddft_env, log_unit)
 
-      tddft_env%max_error = maxval(tddft_env%residual_norms)
       ! Compute max energy difference between this and previous iteration
       tddft_env%max_delta_eval = maxval(abs(tddft_env%ritz_evals(1:tddft_env%nstates) &
                                 - tddft_env%ritz_evals_prev(1:tddft_env%nstates)))
@@ -665,108 +668,16 @@ CONTAINS
 
    END FUNCTION run_converger
 
-   SUBROUTINE converger_run(tddft_env, log_unit, logger, iter)
+   SUBROUTINE converger_run(tddft_env, log_unit)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       INTEGER                                            :: log_unit
-      TYPE(cp_logger_type), POINTER                      :: logger
-      INTEGER                                            :: iter
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'converger_run'
 
-      INTEGER                                            :: handle, i, j, a, ij, iv
       REAL(KIND=DP)                                      :: val, sig, scal, val2
+      INTEGER                                            :: handle, i, a, ij, iv
 
       CALL timeset(routineN, handle)
-
-!     ! (2) diagonalise Atilde  → omega_i & coeffs
-!     ! Diagonalize subspace matrix
-!     ierr = 0
-!     CALL choose_eigv_solver(matrix=tddft_env%subspace, &
-!                             eigenvalues=tddft_env%ritz_evals(1:tddft_env%nvec), &
-!                             eigenvectors=tddft_env%subspace_evecs, &
-!                             info=ierr)
-!     CALL deallocate_fm_matrix(tddft_env%subspace)
-!
-!     ! Normalization
-!     CALL cp_fm_vectorsnorm(tddft_env%subspace_evecs, tddft_env%vector_norm(1:tddft_env%nvec))
-!     tddft_env%vector_scal(1:tddft_env%nvec) = 1.0_dp/tddft_env%vector_norm(1:tddft_env%nvec)
-!     CALL cp_fm_column_scale(tddft_env%subspace_evecs, tddft_env%vector_scal(1:tddft_env%nvec))
-
-      DO iv = 1, tddft_env%nstates
-         CALL cp_fm_set_all(matrix=tddft_env%ritz_vects(iv), alpha=0.0_dp)
-         DO j = 1, tddft_env%nvec
-             CALL cp_fm_get_element(matrix=tddft_env%subspace_evecs, &
-                                    irow_global=j, &
-                                    icol_global=iv, &
-                                    alpha=val)
-             CALL cp_fm_scale_and_add(&
-                     alpha=1.0_dp, matrix_a=tddft_env%ritz_vects(iv), &
-                     beta=val, matrix_b=tddft_env%evects_mo(j))
-         END DO
-      END DO
-
-      ! Flag(a)
-      DO iv = 1, tddft_env%nstates
-         CALL cp_fm_set_all(matrix=tddft_env%residual_vecs(iv), &
-                            alpha=0.0_dp)
-
-         DO j = 1, tddft_env%nvec
-            CALL cp_fm_get_element(matrix=tddft_env%subspace_evecs, &
-                                   irow_global=j, &
-                                   icol_global=iv, &
-                                   alpha=val)
-            CALL cp_fm_scale_and_add( &
-                     alpha=1.0_dp, matrix_a=tddft_env%residual_vecs(iv), &
-                     beta=val,     matrix_b=tddft_env%sigma_vecs(j))
-         END DO
-      END DO
-
-      ! Print
-      DO iv = 1, tddft_env%nstates
-         CALL print_mat_ao_ao(tddft_env%residual_vecs(iv), "residual_vecs", logger, iter)
-      END DO
-
-      ! Flag(b)
-      DO i = 1, tddft_env%nstates
-         DO j = 1, tddft_env%nvec
-            CALL cp_fm_get_element(matrix=tddft_env%subspace_evecs, &
-                                   irow_global=j, &
-                                   icol_global=i, &
-                                   alpha=val)
-             val = -val*tddft_env%ritz_evals(i)
-            CALL cp_fm_set_element(matrix=tddft_env%subspace_evecs, &
-                                   irow_global=j, &
-                                   icol_global=i, &
-                                   alpha=val)
-
-         END DO
-      END DO
-
-      ! Flag(c)
-      DO iv = 1, tddft_env%nstates
-         DO j = 1, tddft_env%nvec
-            CALL cp_fm_get_element(matrix=tddft_env%subspace_evecs, &
-                                   irow_global=j, &
-                                   icol_global=iv, &
-                                   alpha=val)
-            CALL cp_fm_scale_and_add( &
-                     alpha=1.0_dp, matrix_a=tddft_env%residual_vecs(iv), &
-                     beta=val,     matrix_b=tddft_env%evects_mo(j))
-         END DO
-      END DO
-      CALL deallocate_fm_matrix(tddft_env%subspace_evecs)
-
-      ! Print
-      DO iv = 1, tddft_env%nstates
-         CALL print_mat_ao_ao(tddft_env%residual_vecs(iv), "2 residual_vecs", logger, iv)
-      END DO
-
-      ! Flag(d)
-      DO iv = 1, tddft_env%nstates
-         CALL cp_fm_trace(tddft_env%residual_vecs(iv), &
-                          tddft_env%residual_vecs(iv), val)
-         tddft_env%residual_norms(iv) = val
-      END DO
 
       DO iv = 1, tddft_env%nstates
          ij = 0
@@ -833,7 +744,7 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Builds the subspace Hamiltonian matrix H_ij = <X_i|Sigma_j>
-!> \param[inout] tddft_env Davidson env
+!> \param[inout] tddft_env Davidson solver env
 !> \note Implements pseudocode line 12
 ! **************************************************************************************************
    SUBROUTINE build_subspace_hamiltonian(tddft_env)
@@ -871,8 +782,7 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Diagonalizes the subspace Hamiltonian
-!> \param[inout] tddft_env Davidson solver state
-!> \note Implements pseudocode lines 13-14
+!> \param[inout] tddft_env Davidson solver env
 ! **************************************************************************************************
    SUBROUTINE diagonalize_subspace_hamiltonian(tddft_env)
       TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
@@ -903,89 +813,91 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE diagonalize_subspace_hamiltonian
-!
-!! **************************************************************************************************
-!!> \brief Forms Ritz vectors from subspace eigenvectors
-!!> \param[inout] tddft_env Davidson solver state
-!!> \note Implements pseudocode line 14: Z_k = Σ_j c_{jk} X_j
-!! **************************************************************************************************
-!SUBROUTINE form_ritz_vectors(tddft_env)
-!   TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
-!
-!   CHARACTER(LEN=*), PARAMETER :: routineN = 'form_ritz_vectors'
-!
-!   INTEGER                                            :: handle, istate, jvec
-!   REAL(KIND=dp)                                     :: coefficient
-!
-!   CALL timeset(routineN, handle)
-!
-!   ! Form Ritz vectors: Z_k = Σ_j c_{jk} X_j (pseudocode line 14)
-!   DO istate = 1, tddft_env%n_states
-!      CALL cp_fm_set_all(tddft_env%ritz_vectors_mo(istate), 0.0_dp)
-!
-!      DO jvec = 1, tddft_env%current_subspace_size
-!         CALL cp_fm_get_element(tddft_env%subspace_eigenvectors, jvec, istate, coefficient)
-!         CALL cp_fm_scale_and_add(alpha=1.0_dp, &
-!                                 matrix_a=tddft_env%ritz_vectors_mo(istate), &
-!                                 beta=coefficient, &
-!                                 matrix_b=tddft_env%trial_vectors_mo(jvec))
-!      END DO
-!   END DO
-!
-!   CALL timestop(handle)
-!
-!END SUBROUTINE form_ritz_vectors
-!
-!! **************************************************************************************************
-!!> \brief Computes residual vectors r_k = Σ_k - ω_k Z_k
-!!> \param[inout] tddft_env Davidson solver state
-!!> \note Implements pseudocode lines 15-17
-!! **************************************************************************************************
-!SUBROUTINE compute_davidson_residuals(tddft_env)
-!   TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
-!
-!   CHARACTER(LEN=*), PARAMETER :: routineN = 'compute_davidson_residuals'
-!
-!   INTEGER                                            :: handle, istate, jvec
-!   REAL(KIND=dp)                                     :: coefficient, norm
-!
-!   CALL timeset(routineN, handle)
-!
-!   ! Compute residuals: r_k = Σ_k - ω_k Z_k (pseudocode lines 15-16)
-!   DO istate = 1, tddft_env%n_states
-!      ! First form Σ_k = Σ_j c_{jk} Σ_j
-!      CALL cp_fm_set_all(tddft_env%residual_vectors_mo(istate), 0.0_dp)
-!
-!      DO jvec = 1, tddft_env%current_subspace_size
-!         CALL cp_fm_get_element(tddft_env%subspace_eigenvectors, jvec, istate, coefficient)
-!         CALL cp_fm_scale_and_add(alpha=1.0_dp, &
-!                                 matrix_a=tddft_env%residual_vectors_mo(istate), &
-!                                 beta=coefficient, &
-!                                 matrix_b=tddft_env%operator_applied_vectors_mo(jvec))
-!      END DO
-!
-!      ! Subtract ω_k Z_k
-!      CALL cp_fm_scale_and_add(alpha=1.0_dp, &
-!                              matrix_a=tddft_env%residual_vectors_mo(istate), &
-!                              beta=-tddft_env%ritz_eigenvalues(istate), &
-!                              matrix_b=tddft_env%ritz_vectors_mo(istate))
-!
-!      ! Compute residual norm (line 17)
-!      CALL cp_fm_trace(tddft_env%residual_vectors_mo(istate), &
-!                      tddft_env%residual_vectors_mo(istate), &
-!                      norm)
-!      tddft_env%residual_norms(istate) = SQRT(norm)
-!   END DO
-!
-!   ! Update maximum residual
-!   tddft_env%max_residual = MAXVAL(tddft_env%residual_norms(1:tddft_env%n_states))
-!
-!   CALL deallocate_fm_matrix(tddft_env%subspace_eigenvectors)
-!
-!   CALL timestop(handle)
-!
-!END SUBROUTINE compute_davidson_residuals
-!
+
+! **************************************************************************************************
+!> \brief Forms Ritz vectors from subspace eigenvectors
+!> \param[inout] tddft_env Davidson solver env
+! **************************************************************************************************
+   SUBROUTINE form_ritz_vectors(tddft_env)
+      TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'form_ritz_vectors'
+
+      REAL(KIND=dp)                                      :: val
+      INTEGER                                            :: handle, istate, jvec
+
+      CALL timeset(routineN, handle)
+
+      ! Form Ritz vectors: Z_k = Sigma_j c_{jk} X_j (pseudocode line 14)
+      DO istate = 1, tddft_env%nstates
+         CALL cp_fm_set_all(matrix=tddft_env%ritz_vects(istate), alpha=0.0_dp)
+         DO jvec = 1, tddft_env%nvec
+             CALL cp_fm_get_element(matrix=tddft_env%subspace_evecs, &
+                                    irow_global=jvec, &
+                                    icol_global=istate, &
+                                    alpha=val)
+             CALL cp_fm_scale_and_add(&
+                     alpha=1.0_dp, matrix_a=tddft_env%ritz_vects(istate), &
+                     beta=val, matrix_b=tddft_env%evects_mo(jvec))
+         END DO
+      END DO
+
+      CALL timestop(handle)
+
+   END SUBROUTINE form_ritz_vectors
+
+! **************************************************************************************************
+!> \brief Computes residual vectors r_k = Sigma_k - Omega_k Z_k
+!> \param[inout] tddft_env Davidson solver env
+! **************************************************************************************************
+   SUBROUTINE compute_davidson_residuals(tddft_env)
+      TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
+ 
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'compute_davidson_residuals'
+ 
+      REAL(KIND=dp)                                      :: val
+      INTEGER                                            :: handle, istate, jvec
+ 
+      CALL timeset(routineN, handle)
+ 
+      ! Compute residuals: r_k = Sigma_k - Omega_k Z_k (pseudocode lines 15-16)
+      DO istate = 1, tddft_env%nstates
+         ! Initialize residual to zero
+         CALL cp_fm_set_all(matrix=tddft_env%residual_vecs(istate), alpha=0.0_dp)
+
+         ! Form Sigma_k = Sigma_j c_{jk} Sigma_j
+         DO jvec = 1, tddft_env%nvec
+            ! Get coefficient c_{jk}
+            CALL cp_fm_get_element(matrix=tddft_env%subspace_evecs, &
+                                   irow_global=jvec, &
+                                   icol_global=istate, &
+                                   alpha=val)
+
+            ! Add c_{jk} * Sigma_j
+            CALL cp_fm_scale_and_add( &
+                     alpha=1.0_dp, matrix_a=tddft_env%residual_vecs(istate), &
+                     beta=val,   matrix_b=tddft_env%sigma_vecs(jvec))
+
+            ! Subtract Omega_k*Z_k
+            CALL cp_fm_scale_and_add( &
+                     alpha=1.0_dp, matrix_a=tddft_env%residual_vecs(istate), &
+                     beta=-val*tddft_env%ritz_evals(istate), &
+                     matrix_b=tddft_env%evects_mo(jvec))
+         END DO
+
+         ! Compute residual norm (line 17)
+         CALL cp_fm_trace(tddft_env%residual_vecs(istate), &
+                          tddft_env%residual_vecs(istate), val)
+         tddft_env%residual_norms(istate) = val
+      END DO
+ 
+      ! Update maximum residual
+      tddft_env%max_error = MAXVAL(tddft_env%residual_norms(1:tddft_env%nStates))
+ 
+      CALL timestop(handle)
+ 
+   END SUBROUTINE compute_davidson_residuals
+
 !! **************************************************************************************************
 !!> \brief Checks convergence criteria
 !!> \param[in] tddft_env Davidson solver state
