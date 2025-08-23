@@ -355,7 +355,7 @@ CONTAINS
       CHARACTER(len=20)                                  :: nStates_str
       INTEGER                                            :: handle, handle2, log_unit, &
          iter, niters, iend, ist, ivec, &
-         iv
+         iv, istate
       REAL(kind=dp)                                      :: t1, t2
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: ostrength
 
@@ -431,9 +431,21 @@ CONTAINS
                CALL deallocate_fm_matrix(tddft_env%subspace)
                CALL deallocate_fm_matrix(tddft_env%subspace_evecs)
 
+               CALL apply_davidson_preconditioner(tddft_env)
+
+               IF (log_unit > 0) THEN
+                  WRITE (log_unit, '(/,4X,A,T14,A,T36,A)') "State", "Exc. energy (eV)", "Convergence (eV)"
+                  DO istate = 1, tddft_env%nstates
+                     WRITE (log_unit, '(1X,I8,T12,F14.7,T38,ES11.4)') istate, &
+                        tddft_env%ritz_evals(istate)*evolt, tddft_env%residual_norms(istate)
+                  END DO
+                  WRITE (log_unit, *)
+                  CALL m_flush(log_unit)
+               END IF
+
                !> Run converger and expand the vectors space if needed
                tddft_env%status = run_converger(tddft_env, tddfpt_control, &
-                                                log_unit, iter)
+                                                iter)
 
                !> Print iteration time and max_error
                t2 = m_walltime()
@@ -532,10 +544,9 @@ CONTAINS
       CALL timestop(handle)
    END SUBROUTINE tddft_run
 
-   FUNCTION run_converger(tddft_env, tddfpt_control, log_unit,iter) RESULT(status)
+   FUNCTION run_converger(tddft_env, tddfpt_control,iter) RESULT(status)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
-      INTEGER                                            :: log_unit
       INTEGER                                            :: iter
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'run_converger'
@@ -549,8 +560,6 @@ CONTAINS
       LOGICAL, DIMENSION(2) :: status
 
       CALL timeset(routineN, handle)
-
-      CALL converger_run(tddft_env, log_unit)
 
       ! Compute max energy difference between this and previous iteration
       tddft_env%max_delta_eval = maxval(abs(tddft_env%ritz_evals(1:tddft_env%nstates) &
@@ -594,12 +603,6 @@ CONTAINS
          ELSE
             tddft_env%stall_count = 0
          END IF
-         ! Print for monitoring
-!        IF (log_unit > 0) THEN
-!           WRITE (log_unit, '(A,I5,A,I3,2(A,ES12.5))') ' Iter:', iter, 'stall_count:',tddft_env%stall_count, &
-!                                                  '  rel_error_change=', rel_error_change, &
-!                                                  '  rel_delta_eval_change=', rel_delta_eval_change
-!        END IF
       END IF
       tddft_env%max_error_prev = tddft_env%max_error
       tddft_env%max_delta_eval_prev = tddft_env%max_delta_eval
@@ -668,48 +671,49 @@ CONTAINS
 
    END FUNCTION run_converger
 
-   SUBROUTINE converger_run(tddft_env, log_unit)
+! **************************************************************************************************
+!> \brief Applies diagonal preconditioning to Davidson residuals to accelerate convergence.
+!>        The preconditioner is P^{-1} where P_{ia} = ω_k - (ε_a - ε_i), with regularization
+!>        for small denominators to ensure numerical stability.
+!> \param[inout] tddft_env Davidson solver env
+! **************************************************************************************************
+   SUBROUTINE apply_davidson_preconditioner(tddft_env)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
-      INTEGER                                            :: log_unit
 
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'converger_run'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'apply_davidson_preconditioner'
 
-      REAL(KIND=DP)                                      :: val, sig, scal, val2
-      INTEGER                                            :: handle, i, a, ij, iv
+      REAL(KIND=DP)                                      :: denom, scal
+      INTEGER                                            :: handle, i, a, ij, istate
 
       CALL timeset(routineN, handle)
 
-      DO iv = 1, tddft_env%nstates
+      DO istate = 1, tddft_env%nstates
          ij = 0
          DO a = 1, tddft_env%nvirb
             DO i = 1, tddft_env%nocca
                ij = ij + 1
-               val = tddft_env%ritz_evals(iv)-tddft_env%e_virt_minus_occ(ij)
-               val2 = abs(val)
-               IF (val2 < 1.e-12_dp) THEN
-                  val = 1.e-5_dp
-               ELSE IF (val2< 1.e-5_dp) THEN
-                  sig = val2/val
-                  val = sig*1.e-5_dp
+
+               ! Calculate the denominator of the preconditioner
+               denom = tddft_env%ritz_evals(istate) - tddft_env%e_virt_minus_occ(ij)
+
+               ! Regularization for numerical stability
+               IF (ABS(denom) < 1.e-12_dp) THEN
+                  denom = 1.e-5_dp
+               ELSE IF (ABS(denom) < 1.e-5_dp) THEN
+                  denom = SIGN(1.e-5_dp, denom)  ! Keep sign
                END IF
-               CALL cp_fm_get_element(tddft_env%residual_vecs(iv), i, a, scal)
-               scal = scal/val
-               CALL cp_fm_set_element(tddft_env%residual_vecs(iv), i, a, scal)
+
+               ! Apply the preconditioner
+               CALL cp_fm_get_element(tddft_env%residual_vecs(istate), i, a, scal)
+               scal = scal / denom
+               CALL cp_fm_set_element(tddft_env%residual_vecs(istate), i, a, scal)
             END DO
          END DO
       END DO
-      IF (log_unit > 0) THEN
-         WRITE (log_unit, '(/,4X,A,T14,A,T36,A)') "State", "Exc. energy (eV)", "Convergence (eV)"
-         DO iv = 1, tddft_env%nstates
-            WRITE (log_unit, '(1X,I8,T12,F14.7,T38,ES11.4)') iv, &
-               tddft_env%ritz_evals(iv)*evolt, tddft_env%residual_norms(iv)
-         END DO
-         WRITE (log_unit, *)
-         CALL m_flush(log_unit)
-      END IF
 
       CALL timestop(handle)
-   END SUBROUTINE converger_run
+
+   END SUBROUTINE apply_davidson_preconditioner
 
    SUBROUTINE print_mat_ao_ao(mat, mat_name, logger, iter)
       TYPE(cp_fm_type), INTENT(IN) :: mat
@@ -745,7 +749,6 @@ CONTAINS
 ! **************************************************************************************************
 !> \brief Builds the subspace Hamiltonian matrix H_ij = <X_i|Sigma_j>
 !> \param[inout] tddft_env Davidson solver env
-!> \note Implements pseudocode line 12
 ! **************************************************************************************************
    SUBROUTINE build_subspace_hamiltonian(tddft_env)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
@@ -852,14 +855,14 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE compute_davidson_residuals(tddft_env)
       TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
- 
+
       CHARACTER(LEN=*), PARAMETER :: routineN = 'compute_davidson_residuals'
- 
+
       REAL(KIND=dp)                                      :: val
       INTEGER                                            :: handle, istate, jvec
- 
+
       CALL timeset(routineN, handle)
- 
+
       ! Compute residuals: r_k = Sigma_k - Omega_k Z_k (pseudocode lines 15-16)
       DO istate = 1, tddft_env%nstates
          ! Initialize residual to zero
@@ -890,21 +893,21 @@ CONTAINS
                           tddft_env%residual_vecs(istate), val)
          tddft_env%residual_norms(istate) = val
       END DO
- 
+
       ! Update maximum residual
       tddft_env%max_error = MAXVAL(tddft_env%residual_norms(1:tddft_env%nStates))
- 
+
       CALL timestop(handle)
- 
+
    END SUBROUTINE compute_davidson_residuals
 
-!! **************************************************************************************************
-!!> \brief Checks convergence criteria
-!!> \param[in] tddft_env Davidson solver state
-!!> \param[in] tddfpt_control Control parameters
-!!> \param[out] is_converged Convergence flag
-!!> \note Implements pseudocode lines 18-19
-!! **************************************************************************************************
+! **************************************************************************************************
+!> \brief Checks convergence criteria
+!> \param[in] tddft_env Davidson solver state
+!> \param[in] tddfpt_control Control parameters
+!> \param[out] is_converged Convergence flag
+!> \note Implements pseudocode lines 18-19
+! **************************************************************************************************
 !SUBROUTINE check_davidson_convergence(tddft_env, tddfpt_control, is_converged)
 !   TYPE(tddft_info_type), INTENT(IN)                 :: tddft_env
 !   TYPE(tddfpt2_control_type), POINTER               :: tddfpt_control
