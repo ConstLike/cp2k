@@ -6,9 +6,10 @@
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
-!> \brief Implements the Davidson eigensolver for TDDFT excitations
-!> \author Konstantin Komarov (constlike@gmail.com)
-!> \date Aug 2025
+!> \brief   Davidson iterative solver for TDDFT excited states.
+!>          Theory-agnostic implementation following Algorithm 1 from MRSF paper.
+!> \author  Konstantin Komarov (constlike@gmail.com)
+!> \date    Aug 2025
 ! **************************************************************************************************
 MODULE qs_tddft_methods
    USE qs_tddfpt2_methods,              ONLY: kernel_info, &
@@ -420,13 +421,13 @@ CONTAINS
                CALL allocate_fm_matrix(tddft_env%subspace, tddft_env%nvec, tddft_env%nvec, blacs_env)
                CALL allocate_fm_matrix(tddft_env%subspace_evecs, tddft_env%nvec, tddft_env%nvec, blacs_env)
 
-               CALL build_subspace_hamiltonian(tddft_env)
+               CALL build_subspace(tddft_env)
 
-               CALL diagonalize_subspace_hamiltonian(tddft_env)
+               CALL diagonalize_subspace(tddft_env)
 
                CALL form_ritz_vectors(tddft_env)
 
-               CALL compute_davidson_residuals(tddft_env)
+               CALL compute_residuals(tddft_env)
 
                CALL deallocate_fm_matrix(tddft_env%subspace)
                CALL deallocate_fm_matrix(tddft_env%subspace_evecs)
@@ -443,7 +444,7 @@ CONTAINS
                   CALL m_flush(log_unit)
                END IF
 
-               CALL check_davidson_convergence(tddft_env, tddfpt_control, iter, tddft_env%status)
+               CALL check_convergence(tddft_env, tddfpt_control, iter, tddft_env%status)
 
                !> Print iteration time and max_error
                t2 = m_walltime()
@@ -622,10 +623,10 @@ CONTAINS
 !> \brief Builds the subspace Hamiltonian matrix H_ij = <X_i|Sigma_j>
 !> \param[inout] tddft_env Davidson solver env
 ! **************************************************************************************************
-   SUBROUTINE build_subspace_hamiltonian(tddft_env)
+   SUBROUTINE build_subspace(tddft_env)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'build_subspace_hamiltonian'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'build_subspace'
 
       REAL(KIND=dp)                                      :: val
       INTEGER                                            :: handle, i, j
@@ -640,31 +641,34 @@ CONTAINS
             CALL cp_fm_trace(matrix_a=tddft_env%evects_mo(i), &
                              matrix_b=tddft_env%sigma_vecs(j), &
                              trace=val)
+            ! Store in subspace matrix (symmetric)
             CALL cp_fm_set_element(matrix=tddft_env%subspace, &
                                    irow_global=i, &
                                    icol_global=j, &
                                    alpha=val)
-            IF (i/=j) CALL cp_fm_set_element(matrix=tddft_env%subspace, &
-                                             irow_global=j, &
-                                             icol_global=i, &
-                                             alpha=val)
+            IF (i/=j) THEN
+               CALL cp_fm_set_element(matrix=tddft_env%subspace, &
+                                      irow_global=j, &
+                                      icol_global=i, &
+                                      alpha=val)
+            END IF
          END DO
       END DO
 
       CALL timestop(handle)
 
-   END SUBROUTINE build_subspace_hamiltonian
+   END SUBROUTINE build_subspace
 
 ! **************************************************************************************************
 !> \brief Diagonalizes the subspace Hamiltonian
 !> \param[inout] tddft_env Davidson solver env
 ! **************************************************************************************************
-   SUBROUTINE diagonalize_subspace_hamiltonian(tddft_env)
+   SUBROUTINE diagonalize_subspace(tddft_env)
       TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'diagonalize_subspace_hamiltonian'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'diagonalize_subspace'
 
-      INTEGER                                            :: handle, ierr
+      INTEGER                                            :: handle, ierr, ivec
 
       CALL timeset(routineN, handle)
 
@@ -681,13 +685,19 @@ CONTAINS
 
       ! Normalize eigenvectors
       CALL cp_fm_vectorsnorm(tddft_env%subspace_evecs, tddft_env%vector_norm(1:tddft_env%nvec))
-      tddft_env%vector_scal(1:tddft_env%nvec) = 1.0_dp/tddft_env%vector_norm(1:tddft_env%nvec)
+      DO ivec = 1, tddft_env%nvec
+         IF (tddft_env%vector_norm(ivec) > 1.0E-10_dp) THEN
+            tddft_env%vector_scal(ivec) = 1.0_dp / tddft_env%vector_norm(ivec)
+         ELSE
+            tddft_env%vector_scal(ivec) = 0.0_dp
+         END IF
+      END DO
       ! Store Ritz eigenvalues
       CALL cp_fm_column_scale(tddft_env%subspace_evecs, tddft_env%vector_scal(1:tddft_env%nvec))
 
       CALL timestop(handle)
 
-   END SUBROUTINE diagonalize_subspace_hamiltonian
+   END SUBROUTINE diagonalize_subspace
 
 ! **************************************************************************************************
 !> \brief Forms Ritz vectors from subspace eigenvectors
@@ -711,6 +721,7 @@ CONTAINS
                                     irow_global=jvec, &
                                     icol_global=istate, &
                                     alpha=val)
+            ! Z_k += c_jk * X_j
              CALL cp_fm_scale_and_add(&
                      alpha=1.0_dp, matrix_a=tddft_env%ritz_vects(istate), &
                      beta=val, matrix_b=tddft_env%evects_mo(jvec))
@@ -725,10 +736,10 @@ CONTAINS
 !> \brief Computes residual vectors r_k = Sigma_k - Omega_k Z_k
 !> \param[inout] tddft_env Davidson solver env
 ! **************************************************************************************************
-   SUBROUTINE compute_davidson_residuals(tddft_env)
+   SUBROUTINE compute_residuals(tddft_env)
       TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'compute_davidson_residuals'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'compute_residuals'
 
       REAL(KIND=dp)                                      :: val
       INTEGER                                            :: handle, istate, jvec
@@ -771,7 +782,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE compute_davidson_residuals
+   END SUBROUTINE compute_residuals
 
 ! **************************************************************************************************
 !> \brief Checks convergence criteria
@@ -779,13 +790,13 @@ CONTAINS
 !> \param[in] tddfpt_control Control parameters
 !> \param[out] is_converged Convergence flag
 ! **************************************************************************************************
-   SUBROUTINE check_davidson_convergence(tddft_env, tddfpt_control, iter, status)
+   SUBROUTINE check_convergence(tddft_env, tddfpt_control, iter, status)
       TYPE(tddft_info_type)                             :: tddft_env
       TYPE(tddfpt2_control_type), POINTER               :: tddfpt_control
       INTEGER, INTENT(IN)                               :: iter
       LOGICAL, DIMENSION(2), INTENT(OUT)                :: status
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'check_davidson_convergence'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'check_convergence'
 
       REAL(kind=dp)                                     :: val, rel_error_change, rel_delta_eval_change
       REAL(KIND=DP)                                     :: scal
@@ -898,100 +909,6 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE check_davidson_convergence
-!
-!! **************************************************************************************************
-!!> \brief Expands Davidson subspace with preconditioned residuals or restarts
-!!> \param[inout] tddft_env Davidson solver state
-!!> \param[inout] theory_handler Theory handler
-!!> \param[in] gs_mos Ground state MOs
-!!> \param[in] tddfpt_control Control parameters
-!!> \param[in] logger Logger
-!!> \param[out] need_restart Restart flag
-!!> \note Implements pseudocode lines 20-26
-!! **************************************************************************************************
-!SUBROUTINE expand_davidson_subspace(tddft_env, theory_handler, gs_mos, tddfpt_control, &
-!                                   logger, need_restart)
-!   TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
-!   CLASS(tddft_theory_type), INTENT(INOUT)           :: theory_handler
-!   TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
-!      POINTER                                         :: gs_mos
-!   TYPE(tddfpt2_control_type), POINTER               :: tddfpt_control
-!   TYPE(cp_logger_type), POINTER                     :: logger
-!   LOGICAL, INTENT(OUT)                              :: need_restart
-!
-!   CHARACTER(LEN=*), PARAMETER :: routineN = 'expand_davidson_subspace'
-!
-!   INTEGER                                            :: handle, istate, new_vector_index
-!   REAL(KIND=dp)                                     :: rel_error_change, rel_eval_change
-!   LOGICAL                                            :: is_stalled
-!
-!   CALL timeset(routineN, handle)
-!
-!   ! Check for stall (pseudocode line 21)
-!   rel_error_change = ABS(tddft_env%max_residual_prev - tddft_env%max_residual) / &
-!                      MAX(ABS(tddft_env%max_residual_prev), 1.0E-12_dp)
-!   rel_eval_change = ABS(tddft_env%max_eigenvalue_change_prev - tddft_env%max_eigenvalue_change) / &
-!                     MAX(ABS(tddft_env%max_eigenvalue_change_prev), 1.0E-12_dp)
-!
-!   IF (rel_error_change < 5.0E-2_dp .OR. rel_eval_change < 5.0E-2_dp) THEN
-!      tddft_env%stall_counter = tddft_env%stall_counter + 1
-!   ELSE
-!      tddft_env%stall_counter = 0
-!   END IF
-!
-!   is_stalled = (tddft_env%stall_counter >= 4)
-!
-!   ! Update previous values
-!   tddft_env%max_residual_prev = tddft_env%max_residual
-!   tddft_env%max_eigenvalue_change_prev = tddft_env%max_eigenvalue_change
-!
-!   ! Check if restart is needed (pseudocode line 21)
-!   need_restart = is_stalled .OR. &
-!                  (tddft_env%current_subspace_size + tddft_env%n_states > tddft_env%max_subspace_size)
-!
-!   IF (need_restart) THEN
-!      ! Restart: X_j = Z_j for j ≤ n_states (pseudocode line 22)
-!      DO istate = 1, tddft_env%n_states
-!         CALL cp_fm_to_fm(tddft_env%ritz_vectors_mo(istate), &
-!                         tddft_env%trial_vectors_mo(istate))
-!         tddft_env%excitation_energies(istate) = tddft_env%ritz_eigenvalues(istate)
-!      END DO
-!
-!      tddft_env%current_subspace_size = tddft_env%n_states
-!      tddft_env%n_old_vectors = tddft_env%n_states
-!      tddft_env%stall_counter = 0
-!   ELSE
-!      ! Expand subspace with preconditioned residuals (pseudocode lines 24-26)
-!      DO istate = 1, tddft_env%n_states
-!         ! Apply preconditioning: P^{-1} r_k (line 24)
-!         CALL precondition_residual_vector(tddft_env%residual_vectors_mo(istate), &
-!                                          gs_mos(2)%eigenvalues_virtual, &
-!                                          gs_mos(1)%eigenvalues_occupied, &
-!                                          tddft_env%ritz_eigenvalues(istate), &
-!                                          tddft_env%n_occupied_alpha, &
-!                                          tddft_env%n_virtual_beta)
-!
-!         ! Check if we can add more vectors
-!         IF (tddft_env%current_subspace_size >= tddft_env%max_subspace_size) EXIT
-!
-!         new_vector_index = tddft_env%current_subspace_size + 1
-!
-!         ! Copy preconditioned residual to new trial vector
-!         CALL cp_fm_to_fm(tddft_env%residual_vectors_mo(istate), &
-!                         tddft_env%trial_vectors_mo(new_vector_index))
-!
-!         ! Orthogonalize against existing vectors (line 25)
-!         CALL orthogonalize_trial_vectors(tddft_env%trial_vectors_mo(new_vector_index), &
-!                                         tddft_env%trial_vectors_mo, &
-!                                         tddft_env%current_subspace_size)
-!
-!         tddft_env%current_subspace_size = new_vector_index
-!      END DO
-!   END IF
-!
-!   CALL timestop(handle)
-!
-!END SUBROUTINE expand_davidson_subspace
+   END SUBROUTINE check_convergence
 
 END MODULE qs_tddft_methods
