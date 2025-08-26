@@ -320,7 +320,7 @@ CONTAINS
                ALLOCATE(tddft_mrsf_type :: theory)
           END SELECT
 
-         CALL tddft_run(tddft_env, theory, qs_env, tddfpt_control, logger, &
+         CALL davidson_solver(tddft_env, theory, qs_env, tddfpt_control, logger, &
                         tddfpt_print_section, gs_mos, &
                         blacs_env, logo)
 
@@ -338,7 +338,7 @@ CONTAINS
 
    END SUBROUTINE tddft
 
-   SUBROUTINE tddft_run(tddft_env, theory_env, qs_env, tddfpt_control, logger, tddfpt_print_section, &
+   SUBROUTINE davidson_solver(tddft_env, theory_env, qs_env, tddfpt_control, logger, tddfpt_print_section, &
                         gs_mos, blacs_env, logo)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       CLASS(tddft_theory_type)                           :: theory_env
@@ -351,7 +351,7 @@ CONTAINS
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       CHARACTER(LEN=6)                                   :: logo
 
-      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_run'
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'davidson_solver'
 
       CHARACTER(len=20)                                  :: nStates_str
       INTEGER                                            :: handle, handle2, log_unit, &
@@ -432,7 +432,7 @@ CONTAINS
                CALL deallocate_fm_matrix(tddft_env%subspace)
                CALL deallocate_fm_matrix(tddft_env%subspace_evecs)
 
-               CALL apply_davidson_preconditioner(tddft_env)
+               CALL apply_preconditioner(tddft_env)
 
                IF (log_unit > 0) THEN
                   WRITE (log_unit, '(/,4X,A,T14,A,T36,A)') "State", "Exc. energy (eV)", "Convergence (eV)"
@@ -542,7 +542,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE tddft_run
+   END SUBROUTINE davidson_solver
 
 ! **************************************************************************************************
 !> \brief Applies diagonal preconditioning to Davidson residuals to accelerate convergence.
@@ -550,10 +550,10 @@ CONTAINS
 !>        for small denominators to ensure numerical stability.
 !> \param[inout] tddft_env Davidson solver env
 ! **************************************************************************************************
-   SUBROUTINE apply_davidson_preconditioner(tddft_env)
+   SUBROUTINE apply_preconditioner(tddft_env)
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'apply_davidson_preconditioner'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'apply_preconditioner'
 
       REAL(KIND=DP)                                      :: denom, scal
       INTEGER                                            :: handle, i, a, ij, istate
@@ -586,38 +586,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE apply_davidson_preconditioner
-
-   SUBROUTINE print_mat_ao_ao(mat, mat_name, logger, iter)
-      TYPE(cp_fm_type), INTENT(IN) :: mat
-      TYPE(cp_logger_type), POINTER      :: logger
-      INTEGER                             :: iter
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'print_hmat_ao_ao'
-      CHARACTER(LEN=*) :: mat_name
-      INTEGER :: handle, i, j, unit_nr
-      REAL(KIND=dp), DIMENSION(5,5) :: submatrix
-
-      CALL timeset(routineN, handle)
-
-      unit_nr = cp_logger_get_default_io_unit(logger)
-
-      CALL cp_fm_get_submatrix(mat, submatrix, &
-                               start_row=1, start_col=1, &
-                               n_rows=5, n_cols=5)
-      IF (.FALSE.) THEN
-         IF (unit_nr > 0) THEN
-            WRITE(unit_nr, '(A,A,A,I0,A)') "First 5x5 elements of ",TRIM(mat_name)," at iter ",iter,":"
-            DO i = 1, 5
-               WRITE(unit_nr, '(5F12.6)') (submatrix(i,j), j=1,5)
-            END DO
-            WRITE(unit_nr, '(A)') ""
-            CALL m_flush(unit_nr)
-         END IF
-      END IF
-
-      CALL timestop(handle)
-   END SUBROUTINE print_mat_ao_ao
+   END SUBROUTINE apply_preconditioner
 
 ! **************************************************************************************************
 !> \brief Builds the subspace Hamiltonian matrix H_ij = <X_i|Sigma_j>
