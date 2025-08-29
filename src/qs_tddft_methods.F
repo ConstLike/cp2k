@@ -356,7 +356,7 @@ CONTAINS
       CHARACTER(len=20)                                  :: nStates_str
       INTEGER                                            :: handle, handle2, log_unit, &
          iter, niters, iend, ist, ivec, &
-         iv, istate
+         istate
       REAL(kind=dp)                                      :: t1, t2
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: ostrength
 
@@ -432,8 +432,6 @@ CONTAINS
                CALL deallocate_fm_matrix(tddft_env%subspace)
                CALL deallocate_fm_matrix(tddft_env%subspace_evecs)
 
-               CALL apply_preconditioner(tddft_env)
-
                IF (log_unit > 0) THEN
                   WRITE (log_unit, '(/,4X,A,T14,A,T36,A)') "State", "Exc. energy (eV)", "Convergence (a.u.)"
                   DO istate = 1, tddft_env%nstates
@@ -448,13 +446,7 @@ CONTAINS
 
                IF (tddft_env%status(1)) THEN
 
-                  ! Update guess vectors to latest Ritz vectors and eigenvalues
-                  DO iv = 1, tddft_env%nstates
-                     CALL cp_fm_to_fm(source=tddft_env%ritz_vects(iv), &
-                                      destination=tddft_env%evects_mo(iv))
-
-                     tddft_env%evals(iv) = tddft_env%ritz_evals(iv)
-                  END DO
+                  CALL commit_ritz_solution(tddft_env)
 
                ELSE
 
@@ -467,8 +459,11 @@ CONTAINS
                   tddft_env%status(2) = needs_restart(tddft_env)
 
                   IF (.NOT. tddft_env%status(2)) THEN
+
                      ! if (nvec => maxvec) => restart_davidson
+                     CALL apply_preconditioner(tddft_env)
                      CALL expand_krylov_space(tddft_env)
+
                   END IF
 
                   IF (tddft_env%status(2)) THEN
@@ -768,6 +763,33 @@ CONTAINS
    END SUBROUTINE compute_residuals
 
 ! **************************************************************************************************
+!> \brief Commit converged Ritz data into working MO trial vectors and eigenvalues.
+!>        Called both on convergence and before a restart.
+!> \param[inout] tddft_env Davidson solver env
+! **************************************************************************************************
+   SUBROUTINE commit_ritz_solution(tddft_env)
+      TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'commit_ritz_solution'
+
+      INTEGER :: iv, handle
+
+      CALL timeset(routineN, handle)
+
+      ! Update guess vectors to latest Ritz vectors and eigenvalues
+      DO iv = 1, tddft_env%nstates
+         CALL cp_fm_to_fm(source=tddft_env%ritz_vects(iv), &
+                          destination=tddft_env%evects_mo(iv))
+
+         tddft_env%evals(iv) = tddft_env%ritz_evals(iv)
+      END DO
+
+      CALL timestop(handle)
+
+   END SUBROUTINE commit_ritz_solution
+
+
+! **************************************************************************************************
 !> \brief Checks if the solver has converged (pseudocode line 18).
 !> \param tddft_env Davidson state
 !> \param tddfpt_control Control parameters
@@ -826,12 +848,8 @@ CONTAINS
       CALL timeset(routineN, handle)
 
       ! Prepare to restart Davidson
-      ! Update guess vectors to latest Ritz vectors and eigenvalues
-      DO iv = 1, tddft_env%nstates
-         CALL cp_fm_to_fm(source=tddft_env%ritz_vects(iv), &
-                          destination=tddft_env%evects_mo(iv))
-         tddft_env%evals(iv) = tddft_env%ritz_evals(iv)
-      END DO
+
+      CALL commit_ritz_solution(tddft_env)
 
       tddft_env%nvec = tddft_env%nstates  ! Start with nstates vectors
       tddft_env%novec = tddft_env%nvec  ! Reset to 0 to force operator re-application
