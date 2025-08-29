@@ -435,7 +435,7 @@ CONTAINS
                CALL apply_preconditioner(tddft_env)
 
                IF (log_unit > 0) THEN
-                  WRITE (log_unit, '(/,4X,A,T14,A,T36,A)') "State", "Exc. energy (eV)", "Convergence (eV)"
+                  WRITE (log_unit, '(/,4X,A,T14,A,T36,A)') "State", "Exc. energy (eV)", "Convergence (a.u.)"
                   DO istate = 1, tddft_env%nstates
                      WRITE (log_unit, '(1X,I8,T12,F14.7,T38,ES11.4)') istate, &
                         tddft_env%ritz_evals(istate)*evolt, tddft_env%residual_norms(istate)
@@ -444,7 +444,39 @@ CONTAINS
                   CALL m_flush(log_unit)
                END IF
 
-               CALL check_convergence(tddft_env, tddfpt_control, iter, tddft_env%status)
+               tddft_env%status(1) = is_converged(tddft_env, tddfpt_control)
+
+               IF (tddft_env%status(1)) THEN
+
+                  ! Update guess vectors to latest Ritz vectors and eigenvalues
+                  DO iv = 1, tddft_env%nstates
+                     CALL cp_fm_to_fm(source=tddft_env%ritz_vects(iv), &
+                                      destination=tddft_env%evects_mo(iv))
+
+                     tddft_env%evals(iv) = tddft_env%ritz_evals(iv)
+                  END DO
+
+               ELSE
+
+                  CALL detect_stall(tddft_env, iter)
+
+                  ! Prepare for next iteration:
+                  tddft_env%novec = tddft_env%nvec
+                  tddft_env%ritz_evals_prev(1:tddft_env%nstates) = tddft_env%ritz_evals(1:tddft_env%nstates)
+
+                  tddft_env%status(2) = needs_restart(tddft_env)
+
+                  IF (.NOT. tddft_env%status(2)) THEN
+                     ! if (nvec => maxvec) => restart_davidson
+                     CALL expand_krylov_space(tddft_env)
+                  END IF
+
+                  IF (tddft_env%status(2)) THEN
+
+                     CALL restart_davidson(tddft_env)
+
+                  END IF
+               END IF
 
                !> Print iteration time and max_error
                t2 = m_walltime()
@@ -457,28 +489,9 @@ CONTAINS
                CALL timestop(handle2)
 
                ! Check convergence status
-               IF (tddft_env%status(1)) THEN
-                  ! Update guess vectors to latest Ritz vectors and eigenvalues
-                  DO iv = 1, tddft_env%nstates
-                     CALL cp_fm_to_fm(source=tddft_env%ritz_vects(iv), &
-                                      destination=tddft_env%evects_mo(iv))
-
-                     tddft_env%evals(iv) = tddft_env%ritz_evals(iv)
-                  END DO
-
+               IF (tddft_env%status(1) .OR. tddft_env%status(2)) THEN
                   EXIT    ! Exit Davidson loop
                END IF
-               ! Exit to restart Davidson iterations
-               IF (tddft_env%status(2)) THEN
-                  ! Update guess vectors to latest Ritz vectors and eigenvalues
-                  DO iv = 1, tddft_env%nstates
-                     CALL cp_fm_to_fm(source=tddft_env%ritz_vects(iv), &
-                                      destination=tddft_env%evects_mo(iv))
-
-                     tddft_env%evals(iv) = tddft_env%ritz_evals(iv)
-                  END DO
-                  EXIT      ! Exit to restart Davidson iterations
-                END IF
 
                ist = tddft_env%novec+1
                iend = tddft_env%nvec
@@ -499,6 +512,7 @@ CONTAINS
                WRITE (log_unit, '(1X,25("-"),1X,A,1X,25("-"))') "Restart Davidson iterations"
                CALL m_flush(log_unit)
             END IF
+
          END DO davidson_outer_loop ! Outer loop for managing restarts
 
          CALL cp_rm_iter_level(logger%iter_info, "TDDFT_SCF")
@@ -754,94 +768,98 @@ CONTAINS
    END SUBROUTINE compute_residuals
 
 ! **************************************************************************************************
-!> \brief Checks convergence criteria
-!> \param[in] tddft_env Davidson solver state
-!> \param[in] tddfpt_control Control parameters
-!> \param[out] is_converged Convergence flag
+!> \brief Checks if the solver has converged (pseudocode line 18).
+!> \param tddft_env Davidson state
+!> \param tddfpt_control Control parameters
+!> \return .TRUE. if converged
 ! **************************************************************************************************
-   SUBROUTINE check_convergence(tddft_env, tddfpt_control, iter, status)
-      TYPE(tddft_info_type)                             :: tddft_env
+   FUNCTION is_converged(tddft_env, tddfpt_control) RESULT(converged)
+      TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
       TYPE(tddfpt2_control_type), POINTER               :: tddfpt_control
-      INTEGER, INTENT(IN)                               :: iter
-      LOGICAL, DIMENSION(2), INTENT(OUT)                :: status
+      LOGICAL                                           :: converged
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'check_convergence'
+      CHARACTER(LEN=*), PARAMETER                       :: routineN = 'is_converged'
 
-      REAL(kind=dp)                                     :: val, rel_error_change, rel_delta_eval_change
-      REAL(KIND=DP)                                     :: scal
-      LOGICAL                                           :: is_converged, need_restart
-      INTEGER                                           :: handle, ms, k , iv
+      INTEGER                                           :: handle
 
       CALL timeset(routineN, handle)
 
       ! Compute max energy difference between this and previous iteration
-      tddft_env%max_delta_eval = maxval(abs(tddft_env%ritz_evals(1:tddft_env%nstates) &
-                                - tddft_env%ritz_evals_prev(1:tddft_env%nstates)))
-      tddft_env%ritz_evals_prev(1:tddft_env%nstates) = tddft_env%ritz_evals(1:tddft_env%nstates)
+      tddft_env%max_delta_eval = &
+         maxval(abs(tddft_env%ritz_evals(1:tddft_env%nstates) &
+                  - tddft_env%ritz_evals_prev(1:tddft_env%nstates)))
 
-      ! Check convergence criteria (pseudocode lines 18-19)
-      ! max_k ||r_k|| < threshold AND max_k |Delta Omega_k| < threshold/10.0
-      is_converged = ((tddft_env%max_error < tddfpt_control%conv) .OR. &
-                      (tddft_env%max_delta_eval < tddfpt_control%conv*1.e-1_dp))
+      ! Check convergence criteria (pseudocode lines 18)
+      ! max_k ||r_k|| < threshold OR max_k |Delta Omega_k| < threshold/10.0
+      converged = (tddft_env%max_error < tddfpt_control%conv) .OR. &
+                  (tddft_env%max_delta_eval < tddfpt_control%conv*0.1_dp)
 
-      status(1) = is_converged
+      CALL timestop(handle)
 
-      IF (is_converged) THEN
-         status(2) = .FALSE.
+   END FUNCTION is_converged
 
-         CALL timestop(handle)
+! **************************************************************************************************
+!> \brief Checks if restart is needed (pseudocode line 19).
+!> \param tddft_env Davidson state
+!> \param tddfpt_control Control parameters
+!> \return .TRUE. if restart needed
+! **************************************************************************************************
+   FUNCTION needs_restart(tddft_env) RESULT(yes)
+      TYPE(tddft_info_type), INTENT(IN)                 :: tddft_env
+      LOGICAL                                           :: yes
 
-         RETURN
-      END IF
+      yes = (tddft_env%stall_count >= 4) .OR. (tddft_env%nvec >= tddft_env%mxvec)
 
-      ! Prepare for next iteration: update previous error
-      tddft_env%novec = tddft_env%nvec
+   END FUNCTION needs_restart
 
-      ! --- Stall detection: check if residual error stagnates ---
-      ! Compute relative changes for stall detection and logging
-      rel_error_change      = &
-         ABS(tddft_env%max_error_prev - tddft_env%max_error) / MAX(ABS(tddft_env%max_error_prev), &
-         1.0E-12_dp)
-      rel_delta_eval_change = &
-         ABS(tddft_env%max_delta_eval_prev - tddft_env%max_delta_eval) / MAX(ABS(tddft_env%max_delta_eval_prev), &
-         1.0E-12_dp)
-      ! Stall detection: both error and eigenvalue change must be small
-      IF (iter > 1) THEN
-         IF (rel_error_change < 5.0E-2 .OR. rel_delta_eval_change < 5.0E-2) THEN
-            tddft_env%stall_count = tddft_env%stall_count + 1
-         ELSE
-            tddft_env%stall_count = 0
-         END IF
-      END IF
-      tddft_env%max_error_prev = tddft_env%max_error
-      tddft_env%max_delta_eval_prev = tddft_env%max_delta_eval
+! **************************************************************************************************
+!> \brief Restarts the Davidson iteration (pseudocode line 20).
+!> \param tddft_env Davidson state
+! **************************************************************************************************
+   SUBROUTINE restart_davidson(tddft_env)
+      TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
 
-      need_restart = tddft_env%stall_count >= 4 .OR. tddft_env%nvec >= tddft_env%mxvec
-      status(2) = need_restart
+      CHARACTER(LEN=*), PARAMETER                       :: routineN = 'restart_davidson'
 
-      ! --- Handle stall, exhausted Krylov space, or too many iterations ---
-      IF (need_restart) THEN
-         ! Prepare to restart Davidson
-         ! Update guess vectors to latest Ritz vectors and eigenvalues
-         DO iv = 1, tddft_env%nstates
-            CALL cp_fm_to_fm(source=tddft_env%ritz_vects(iv), &
-                             destination=tddft_env%evects_mo(iv))
-            tddft_env%evals(iv) = tddft_env%ritz_evals(iv)
-         END DO
+      INTEGER                                           :: iv, handle
 
-         tddft_env%nvec = tddft_env%nstates  ! Start with nstates vectors
-         tddft_env%novec = tddft_env%nvec
-         tddft_env%stall_count = 0
+      CALL timeset(routineN, handle)
 
-         ! Reset residuals
-         DO iv = 1, tddft_env%nstates
-            CALL cp_fm_set_all(matrix=tddft_env%residual_vecs(iv), alpha=0.0_dp)
-         END DO
+      ! Prepare to restart Davidson
+      ! Update guess vectors to latest Ritz vectors and eigenvalues
+      DO iv = 1, tddft_env%nstates
+         CALL cp_fm_to_fm(source=tddft_env%ritz_vects(iv), &
+                          destination=tddft_env%evects_mo(iv))
+         tddft_env%evals(iv) = tddft_env%ritz_evals(iv)
+      END DO
 
-         CALL timestop(handle)
+      tddft_env%nvec = tddft_env%nstates  ! Start with nstates vectors
+      tddft_env%novec = tddft_env%nvec  ! Reset to 0 to force operator re-application
+      tddft_env%stall_count = 0
 
-         RETURN
-      END IF
+      ! Reset residuals
+      DO iv = 1, tddft_env%nstates
+         CALL cp_fm_set_all(matrix=tddft_env%residual_vecs(iv), alpha=0.0_dp)
+      END DO
+
+      CALL timestop(handle)
+
+   END SUBROUTINE restart_davidson
+
+
+! **************************************************************************************************
+!> \brief Expands the Krylov space with preconditioned residuals (pseudocode lines 21-24).
+!> \param tddft_env Davidson state
+! **************************************************************************************************
+   SUBROUTINE expand_krylov_space(tddft_env)
+      TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
+
+      CHARACTER(LEN=*), PARAMETER                       :: routineN = 'expand_krylov_space'
+
+      REAL(KIND=dp)                                     :: val, scal
+      INTEGER                                           :: handle, k, iv
+
+      CALL timeset(routineN, handle)
 
       ! --- Krylov Expansion (only if not exiting) ---
       DO k = 1, tddft_env%nstates
@@ -859,25 +877,68 @@ CONTAINS
 
          IF (scal<1.e-9_dp) CYCLE
 
+         tddft_env%nvec = tddft_env%nvec + 1
+
          IF (tddft_env%nvec == tddft_env%mxvec) THEN
-            status(2) = .TRUE.
 
+            tddft_env%status(2) = .TRUE.
             CALL timestop(handle)
-
             RETURN
+
          END IF
 
-         tddft_env%nvec = tddft_env%nvec + 1
          CALL cp_fm_scale_and_add( &
                   alpha=0._dp,     matrix_a=tddft_env%evects_mo(tddft_env%nvec), &
                   beta=1._dp/scal, matrix_b=tddft_env%residual_vecs(k))
       END DO
 
-      ms = tddft_env%nvec - tddft_env%novec
-      IF (ms == 0) status(2) = .TRUE.
+      IF ((tddft_env%nvec - tddft_env%novec) == 0) THEN
+         tddft_env%status(2) = .TRUE.
+      END IF
 
       CALL timestop(handle)
 
-   END SUBROUTINE check_convergence
+   END SUBROUTINE expand_krylov_space
+
+! **************************************************************************************************
+!> \brief Detects stall based on relative changes (preserved from original).
+!> \param tddft_env Davidson state
+!> \param iter Current iteration
+! **************************************************************************************************
+   SUBROUTINE detect_stall(tddft_env, iter)
+      TYPE(tddft_info_type), INTENT(INOUT)              :: tddft_env
+      INTEGER, INTENT(IN)                               :: iter
+
+      CHARACTER(LEN=*), PARAMETER                       :: routineN = 'detect_stall'
+
+      REAL(KIND=dp)                                     :: rel_error_change, rel_delta_eval_change
+      INTEGER                                           :: handle
+
+      CALL timeset(routineN, handle)
+
+      ! --- Stall detection: check if residual error stagnates ---
+      ! Compute relative changes for stall detection and logging
+      rel_error_change      = &
+         ABS(tddft_env%max_error_prev - tddft_env%max_error) / MAX(ABS(tddft_env%max_error_prev), &
+         1.0E-12_dp)
+      rel_delta_eval_change = &
+         ABS(tddft_env%max_delta_eval_prev - tddft_env%max_delta_eval) / MAX(ABS(tddft_env%max_delta_eval_prev), &
+         1.0E-12_dp)
+      ! Stall detection: both error and eigenvalue change must be small
+      IF (iter > 1) THEN
+         IF (rel_error_change < 5.0E-2 .OR. rel_delta_eval_change < 5.0E-2) THEN
+            tddft_env%stall_count = tddft_env%stall_count + 1
+         ELSE
+            tddft_env%stall_count = 0
+         END IF
+      END IF
+
+      ! Save for next iter
+      tddft_env%max_error_prev = tddft_env%max_error
+      tddft_env%max_delta_eval_prev = tddft_env%max_delta_eval
+
+      CALL timestop(handle)
+
+   END SUBROUTINE detect_stall
 
 END MODULE qs_tddft_methods
