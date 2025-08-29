@@ -355,8 +355,7 @@ CONTAINS
 
       CHARACTER(len=20)                                  :: nStates_str
       INTEGER                                            :: handle, handle2, log_unit, &
-         iter, niters, iend, ist, ivec, &
-         istate
+         iter, niters, iend, ist, ivec
       REAL(kind=dp)                                      :: t1, t2
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: ostrength
 
@@ -432,15 +431,7 @@ CONTAINS
                CALL deallocate_fm_matrix(tddft_env%subspace)
                CALL deallocate_fm_matrix(tddft_env%subspace_evecs)
 
-               IF (log_unit > 0) THEN
-                  WRITE (log_unit, '(/,4X,A,T14,A,T36,A)') "State", "Exc. energy (eV)", "Convergence (a.u.)"
-                  DO istate = 1, tddft_env%nstates
-                     WRITE (log_unit, '(1X,I8,T12,F14.7,T38,ES11.4)') istate, &
-                        tddft_env%ritz_evals(istate)*evolt, tddft_env%residual_norms(istate)
-                  END DO
-                  WRITE (log_unit, *)
-                  CALL m_flush(log_unit)
-               END IF
+               CALL log_ritz_status(tddft_env, log_unit)
 
                tddft_env%status(1) = is_converged(tddft_env, tddfpt_control)
 
@@ -452,16 +443,12 @@ CONTAINS
 
                   CALL detect_stall(tddft_env, iter)
 
-                  ! Prepare for next iteration:
-                  tddft_env%novec = tddft_env%nvec
-                  tddft_env%ritz_evals_prev(1:tddft_env%nstates) = tddft_env%ritz_evals(1:tddft_env%nstates)
-
                   tddft_env%status(2) = needs_restart(tddft_env)
 
                   IF (.NOT. tddft_env%status(2)) THEN
 
-                     ! if (nvec => maxvec) => restart_davidson
                      CALL apply_preconditioner(tddft_env)
+                     ! if (nvec => maxvec) => restart_davidson
                      CALL expand_krylov_space(tddft_env)
 
                   END IF
@@ -568,6 +555,9 @@ CONTAINS
       INTEGER                                            :: handle, i, a, ij, istate
 
       CALL timeset(routineN, handle)
+
+      ! Save for next iteration round:
+      tddft_env%ritz_evals_prev(1:tddft_env%nstates) = tddft_env%ritz_evals(1:tddft_env%nstates)
 
       DO istate = 1, tddft_env%nstates
          ij = 0
@@ -879,6 +869,9 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+      ! Save for next iteration round
+      tddft_env%novec = tddft_env%nvec
+
       ! --- Krylov Expansion (only if not exiting) ---
       DO k = 1, tddft_env%nstates
          DO iv = 1, tddft_env%nvec
@@ -958,5 +951,29 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE detect_stall
+
+! **************************************************************************************************
+!> \brief
+!> \param tddft_env
+!> \param log_unit
+! **************************************************************************************************
+   SUBROUTINE log_ritz_status(tddft_env, log_unit)
+      TYPE(tddft_info_type), INTENT(IN) :: tddft_env
+      INTEGER,               INTENT(IN) :: log_unit
+
+      INTEGER :: istate
+
+      IF (log_unit <= 0) RETURN
+
+      WRITE (log_unit, '(/,4X,A,T14,A,T36,A)') "State", "Exc. energy (eV)", "Convergence (a.u.)"
+      DO istate = 1, tddft_env%nstates
+         WRITE (log_unit, '(1X,I8,T12,F14.7,T38,ES11.4)') istate, &
+            tddft_env%ritz_evals(istate)*evolt, tddft_env%residual_norms(istate)
+      END DO
+      WRITE (log_unit, *)
+      CALL m_flush(log_unit)
+
+   END SUBROUTINE log_ritz_status
+
 
 END MODULE qs_tddft_methods
