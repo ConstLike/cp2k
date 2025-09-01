@@ -4,11 +4,11 @@
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
-!
+
 ! **************************************************************************************************
 !> \brief   TDDFT theory abstraction interface.
 !> \author  Konstantin Komarov (constlike@gmail.com)
-!> \date    2025-05-16
+!> \date    Aug 2025
 !>
 !> This module defines the abstract type [tddft_theory_type] for TDDFT-based excited-state solvers.
 !> The interface provides a unified contract for all theory-specific implementations (e.g. SF-TDDFT,
@@ -32,6 +32,22 @@
 !>   - print      : print excitation analysis available for this theory
 !>   - deallocate : free all theory-specific resources
 !>
+!> \par How to implement a NEW theory:
+!>   1. Create a new module, e.g. qs_tddft_theory_NEW, with
+!>      TYPE, EXTENDS(tddft_theory_type) :: tddft_NEW_type
+!>   2. Implement all deferred methods for your theory.
+!>   3. Add any additional fields for theory-specific working arrays, if needed.
+!>   4. Select and allocate your handler in the main TDDFT driver, e.g.
+!>        SELECT CASE (theory_kind)
+!>          CASE('SF')
+!>            ALLOCATE(tddft_SF_type :: theory)
+!>          CASE('MRSF')
+!>            ALLOCATE(tddft_MRSF_type :: theory)
+!>          CASE('NEW')
+!>            ALLOCATE(tddft_NEW_type :: theory)
+!>        END SELECT
+!>   5. Use only theory%init_guess(...) in all driver routines.
+!>
 !> [tddft_info_type] is used to store universal Davidson/infrastructure data.
 !> Theory-specific arrays and parameters must be private fields of each implementation.
 ! **************************************************************************************************
@@ -39,15 +55,12 @@ MODULE qs_tddft_theory
 
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: tddfpt2_control_type
-   USE cp_log_handling,                 ONLY: cp_logger_type
-   USE qs_environment_types,            ONLY: qs_environment_type
-   USE qs_kernel_types,                 ONLY: kernel_env_type
-   USE qs_tddfpt2_subgroups,            ONLY: tddfpt_subgroup_env_type
-   USE qs_tddfpt2_types,                ONLY: tddfpt_ground_state_mos
-   USE qs_tddft_types,                  ONLY: tddft_info_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE cp_fm_types,                     ONLY: cp_fm_type
    USE kinds,                           ONLY: dp
-
+   USE qs_environment_types,            ONLY: qs_environment_type
+   USE qs_tddfpt2_types,                ONLY: tddfpt_ground_state_mos
+   USE qs_tddft_types,                  ONLY: tddft_info_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -63,27 +76,63 @@ MODULE qs_tddft_theory
 !>        (Each derived type provides theory-specific logic for all main TDDFT steps.)
 ! **************************************************************************************************
    TYPE, ABSTRACT :: tddft_theory_type
-      INTEGER :: unused = 0
-      ! Theory-specific data should be defined in child types (see SF, MRSF, etc.)
-      !
+      ! Dummy
+      INTEGER                                            :: unused = 0
+
+      !---------------------------------------------------------------------------
+      ! Theory-specific data MUST be defined in child types (see SF, MRSF, etc.)
+      !---------------------------------------------------------------------------
+
+      !----------------------------------------------------
+      ! General data cross all theories in Davidson solver:
+      !----------------------------------------------------
+      !> Per-spin AO Fock matrices (used in transformation to MO)
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: fock
+
+      !> Fock matrix for Alpha occupied orbitals block [nocca, nocca]
+      TYPE(cp_fm_type), POINTER                          :: Focka_noc_noc => NULL()
+
+      !> Fock matrix for Beta virtual orbitals block [nvirb, nvirb]
+      TYPE(cp_fm_type), POINTER                          :: Fockb_vir_vir => NULL()
+
+      !> Hamiltonian matrix in AO basis
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: hmat_ao_ao
+
+      !> AO trial vectors
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: evects_ao_ao
+
+      !> [HFX kernel] Symmetric AO density matrices [nSpins]
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_ao_ao_symm
+
+      !> [HFX kernel] Antisymmetric AO density matrices [nSpins]
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_ao_ao_asymm
+
+      !> [HFX kernel] Symmetric Hamiltonian-like matrices in AO space [nSpins]
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_symm
+
+      !> [HFX kernel] Antisymmetric Hamiltonian-like matrices in AO space [nSpins]
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_asymm
+
       !> Dipoles (x,y,z) [nocca, nvirb]
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: dipoles_mo
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: dipoles_mo
 
    CONTAINS
+
       !> Allocate any additional theory-specific data
-      PROCEDURE(allocate_iface), DEFERRED :: allocate
+      PROCEDURE(allocate_iface), DEFERRED                :: allocate
       !> Set up initial guess excitation vectors (MO space)
-      PROCEDURE(init_guess_iface), DEFERRED :: init_guess
+      PROCEDURE(init_guess_iface), DEFERRED              :: init_guess
       !> MO->AO transformation for trial vectors
-      PROCEDURE(mo_to_ao_iface), DEFERRED :: mo_to_ao
+      PROCEDURE(mo_to_ao_iface), DEFERRED                :: mo_to_ao
       !> Apply all operators (HFX, XC, Coulomb, ...), build sigma vectors in AO space
-      PROCEDURE(apply_op_iface), DEFERRED :: apply
+      PROCEDURE(apply_op_iface), DEFERRED                :: apply
       !> AO->MO back transformation for resulting vectors
-      PROCEDURE(ao_to_mo_iface), DEFERRED :: ao_to_mo
+      PROCEDURE(ao_to_mo_iface), DEFERRED                :: ao_to_mo
       !> Print theory-specific excitation analysis
-      PROCEDURE(print_iface), DEFERRED :: print
+      PROCEDURE(print_iface), DEFERRED                   :: print
       !> Deallocate all theory-specific data/arrays
-      PROCEDURE(deallocate_iface), DEFERRED :: deallocate
+      PROCEDURE(deallocate_iface), DEFERRED              :: deallocate
+
    END TYPE tddft_theory_type
 
 ! **************************************************************************************************
@@ -91,109 +140,144 @@ MODULE qs_tddft_theory
 !>        Each derived theory type (SF, MRSF, ...) must implement these.
 ! **************************************************************************************************
    ABSTRACT INTERFACE
-      !> Allocate any theory-specific working arrays, buffers, etc.
+
+! **************************************************************************************************
+!> \brief Allocate any theory-specific working arrays, buffers, etc.
+!> \param[inout] this ...
+!> \param qs_env ...
+!> \param[inout] tddft_env ...
+! **************************************************************************************************
       SUBROUTINE allocate_iface(this, qs_env, tddft_env)
-         IMPORT :: tddft_theory_type, tddft_info_type, cp_blacs_env_type,&
-                   qs_environment_type
-         CLASS(tddft_theory_type), INTENT(INOUT) :: this
-         TYPE(qs_environment_type), POINTER :: qs_env
-         TYPE(tddft_info_type), INTENT(INOUT) :: tddft_env
-      END SUBROUTINE
-      !> Set up initial guess vectors (theory-specific, e.g. SF, MRSF, ...)
-      SUBROUTINE init_guess_iface(this, qs_env, tddft_env, gs_mos, &
-                                  tddfpt_control, log_unit)
-         IMPORT                                          :: tddft_theory_type, &
-                                                            tddft_info_type, &
-                                                            tddfpt_ground_state_mos, &
+         IMPORT                                          :: cp_blacs_env_type, &
                                                             qs_environment_type, &
-                                                            cp_logger_type, &
-                                                            tddfpt2_control_type
+                                                            tddft_info_type, &
+                                                            tddft_theory_type
          CLASS(tddft_theory_type), INTENT(INOUT)         :: this
-         TYPE(qs_environment_type), POINTER :: qs_env
+         TYPE(qs_environment_type), POINTER              :: qs_env
          TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
-         TYPE(tddfpt_ground_state_mos), &
-            DIMENSION(:), POINTER                        :: gs_mos
-         TYPE(tddfpt2_control_type), POINTER             :: tddfpt_control
-         INTEGER                                         :: log_unit
+
       END SUBROUTINE
-      !> Transform a given trial vector from MO to AO basis
-      SUBROUTINE mo_to_ao_iface(this, tddft_env, gs_mos, ivec, logger)
-         IMPORT                                          :: tddft_theory_type, &
+
+! **************************************************************************************************
+!> \brief Set up initial guess vectors (theory-specific, e.g. SF, MRSF, ...)
+!> \param[inout] this ...
+!> \param qs_env ...
+!> \param[inout] tddft_env ...
+!> \param[in] gs_mos ...
+!> \param[in] log_unit ...
+! **************************************************************************************************
+      SUBROUTINE init_guess_iface(this, qs_env, tddft_env, gs_mos, log_unit)
+         IMPORT                                          :: qs_environment_type, &
+                                                            tddfpt_ground_state_mos, &
                                                             tddft_info_type, &
-                                                            cp_logger_type, &
-                                                            tddfpt_ground_state_mos
-         CLASS(tddft_theory_type), TARGET, INTENT(INOUT)         :: this
+                                                            tddft_theory_type
+         CLASS(tddft_theory_type), INTENT(INOUT)         :: this
+         TYPE(qs_environment_type), POINTER              :: qs_env
          TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
-         TYPE(tddfpt_ground_state_mos), &
-            DIMENSION(:), POINTER                        :: gs_mos
+         TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+            POINTER, INTENT(IN)                          :: gs_mos
+         INTEGER, INTENT(IN)                             :: log_unit
+
+      END SUBROUTINE
+
+! **************************************************************************************************
+!> \brief Transform a given trial vector from MO to AO basis
+!> \param[inout] this ...
+!> \param[inout] tddft_env ...
+!> \param[in] gs_mos ...
+!> \param[in] ivec ...
+! **************************************************************************************************
+      SUBROUTINE mo_to_ao_iface(this, tddft_env, gs_mos, ivec)
+         IMPORT                                          :: tddfpt_ground_state_mos, &
+                                                            tddft_info_type, &
+                                                            tddft_theory_type
+         CLASS(tddft_theory_type), INTENT(INOUT)         :: this
+         TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
+         TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+            POINTER, INTENT(IN)                          :: gs_mos
          INTEGER, INTENT(IN)                             :: ivec
-         TYPE(cp_logger_type), POINTER                   :: logger
+
       END SUBROUTINE
-      !> Apply all HFX/XC/Coulomb/... operators for this theory, in AO basis
-      SUBROUTINE apply_op_iface(this, qs_env, tddft_env, blacs_env, &
-                                tddfpt_control, ivec, logger)
-         IMPORT                                          :: tddft_theory_type, &
+
+! **************************************************************************************************
+!> \brief Apply all HFX/XC/Coulomb/... operators for this theory, in AO basis
+!> \param[inout] this ...
+!> \param qs_env ...
+!> \param[input] tddft_env ...
+!> \param[in] tddfpt_control ...
+! **************************************************************************************************
+      SUBROUTINE apply_op_iface(this, qs_env, tddft_env, tddfpt_control)
+         IMPORT                                          :: qs_environment_type, &
                                                             tddft_info_type, &
-                                                            qs_environment_type, &
-                                                            cp_logger_type, &
-                                                            cp_blacs_env_type, &
+                                                            tddft_theory_type, &
                                                             tddfpt2_control_type
          CLASS(tddft_theory_type), INTENT(INOUT)         :: this
          TYPE(qs_environment_type), POINTER              :: qs_env
          TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
-         TYPE(cp_blacs_env_type), POINTER                :: blacs_env
-         TYPE(tddfpt2_control_type), POINTER             :: tddfpt_control
-         INTEGER, INTENT(IN)                             :: ivec
-         TYPE(cp_logger_type), POINTER                   :: logger
+         TYPE(tddfpt2_control_type), POINTER, INTENT(IN) :: tddfpt_control
+
       END SUBROUTINE
-      !> Transform operator results from AO back to MO basis
-      SUBROUTINE ao_to_mo_iface(this, tddft_env, gs_mos, ivec, logger)
-         IMPORT                                          :: tddft_theory_type, &
-                                                            cp_logger_type, &
-                                                            tddft_info_type, &
-                                                            tddfpt_ground_state_mos
-         CLASS(tddft_theory_type), TARGET, INTENT(INOUT)         :: this
-         TYPE(tddft_info_type),    INTENT(INOUT)         :: tddft_env
-         TYPE(tddfpt_ground_state_mos), &
-            DIMENSION(:), POINTER                        :: gs_mos
-         INTEGER, INTENT(IN)                             :: ivec
-         TYPE(cp_logger_type), POINTER                   :: logger
-      END SUBROUTINE
-      !> Print theory-specific excitation analysis
-      SUBROUTINE print_iface(this, qs_env, tddft_env, gs_mos, ostrength, tddfpt_control, log_unit)
-         IMPORT :: tddft_theory_type, tddft_info_type, tddfpt2_control_type, &
-                   tddfpt_ground_state_mos, qs_environment_type, dp
-         CLASS(tddft_theory_type), INTENT(INOUT) :: this
-         TYPE(qs_environment_type), POINTER :: qs_env
-         TYPE(tddft_info_type),    INTENT(INOUT) :: tddft_env
-         TYPE(tddfpt_ground_state_mos), &
-            DIMENSION(:), POINTER                        :: gs_mos
-         REAL(kind=dp), DIMENSION(:)                     :: ostrength
-         TYPE(tddfpt2_control_type), POINTER             :: tddfpt_control
-         INTEGER                                         :: log_unit
-      END SUBROUTINE
-      !> Deallocate/free any theory-specific resources
-      SUBROUTINE deallocate_iface(this, qs_env)
-         IMPORT :: tddft_theory_type, qs_environment_type
-         TYPE(qs_environment_type), POINTER :: qs_env
-         CLASS(tddft_theory_type), INTENT(INOUT) :: this
-      END SUBROUTINE
-   END INTERFACE
 
 ! **************************************************************************************************
-!> \par How to implement a new theory:
-!>   1. Create a new module, e.g. qs_tddft_theory_sf, with
-!>      TYPE, EXTENDS(tddft_theory_type) :: tddft_sf_type
-!>   2. Implement all deferred methods for your theory.
-!>   3. Add any additional fields for theory-specific working arrays, if needed.
-!>   4. Select and allocate your handler in the main TDDFT driver, e.g.
-!>        SELECT CASE (theory_kind)
-!>          CASE('SF')
-!>            ALLOCATE(tddft_sf_type :: theory)
-!>          CASE('MRSF')
-!>            ALLOCATE(tddft_mrsf_type :: theory)
-!>        END SELECT
-!>   5. Use only theory%init_guess(...) in all driver routines.
+!> \brief Transform operator results from AO back to MO basis
+!> \param[inout] this ...
+!> \param[inout] tddft_env ...
+!> \param[in] gs_mos ...
+!> \param[in] ivec ...
 ! **************************************************************************************************
+      SUBROUTINE ao_to_mo_iface(this, tddft_env, gs_mos, ivec)
+         IMPORT                                          :: tddfpt_ground_state_mos, &
+                                                            tddft_info_type, &
+                                                            tddft_theory_type
+         CLASS(tddft_theory_type), INTENT(INOUT)         :: this
+         TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
+         TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+            POINTER, INTENT(IN)                          :: gs_mos
+         INTEGER, INTENT(IN)                             :: ivec
+
+      END SUBROUTINE
+
+! **************************************************************************************************
+!> \brief Print theory-specific excitation analysis
+!> \param[inout] this ...
+!> \param qs_env ...
+!> \param[inout] tddft_env ...
+!> \param[out] ostrength ...
+!> \param[in] gs_mos ...
+!> \param[in] tddfpt_control ...
+!> \param[in] log_unit ...
+! **************************************************************************************************
+      SUBROUTINE print_iface(this, qs_env, tddft_env, ostrength, gs_mos, tddfpt_control, log_unit)
+         IMPORT                                          :: qs_environment_type, &
+                                                            tddfpt2_control_type, &
+                                                            tddfpt_ground_state_mos, &
+                                                            tddft_info_type, &
+                                                            tddft_theory_type, &
+                                                            dp
+         CLASS(tddft_theory_type), INTENT(INOUT)         :: this
+         TYPE(qs_environment_type), POINTER              :: qs_env
+         TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
+         TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+            POINTER, INTENT(IN)                          :: gs_mos
+         REAL(kind=dp), DIMENSION(:), INTENT(OUT)        :: ostrength
+         TYPE(tddfpt2_control_type), POINTER, INTENT(IN) :: tddfpt_control
+         INTEGER, INTENT(IN)                             :: log_unit
+
+      END SUBROUTINE
+
+! **************************************************************************************************
+!> \brief Deallocate/free any theory-specific resources
+!> \param this ...
+!> \param qs_env ...
+! **************************************************************************************************
+      SUBROUTINE deallocate_iface(this, qs_env)
+         IMPORT                                          :: qs_environment_type, &
+                                                            tddft_theory_type
+         CLASS(tddft_theory_type), INTENT(INOUT)         :: this
+         TYPE(qs_environment_type), POINTER              :: qs_env
+
+      END SUBROUTINE
+
+   END INTERFACE
 
 END MODULE qs_tddft_theory
