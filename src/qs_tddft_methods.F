@@ -270,7 +270,7 @@ CONTAINS
 !>
 !> \param[inout] tddft_env         TDDFT environment containing Davidson data structures
 !> \param[inout] theory_env        Theory-specific handler for operator applications
-!> \param        qs_env            Quantum SIESTA environment
+!> \param        qs_env            QuickStep environment
 !> \param[in]    tddfpt_control    TDDFPT control parameters
 !> \param[in]    logger            Output logger
 !> \param[in]    tddfpt_print_section  Print control section
