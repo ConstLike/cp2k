@@ -940,7 +940,7 @@ CONTAINS
          CALL cp_fm_get_element(tddft_env%evects_mo(ivec), lr1, 2, val)
          ! C[1:nbf,1:nbf] = 1.0*A[1:nbf,lr2]*(B[1:nbf,lr1])^T + 1.0*C[1:nbf,1:nbf]
          CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
-                            val, gs_mos(1)%mos_full, &   ! MOs alpha
+                               val, gs_mos(1)%mos_full, &   ! MOs alpha
                                     gs_mos(2)%mos_full, &   ! MOs beta
                             1.0_dp, this%evects_ao_ao(7), & ! ball
                             a_first_col=lr1, &
@@ -951,7 +951,7 @@ CONTAINS
          val = val/SQRT(2.0_dp)
          ! C[1:nbf,1:nbf] = 1.0*A[1:nbf,lr1]*(B[1:nbf,lr1])^T + 1.0*C[1:nbf,1:nbf]
          CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
-                            val, gs_mos(1)%mos_full, &   ! MOs alpha
+                               val, gs_mos(1)%mos_full, &   ! MOs alpha
                                     gs_mos(2)%mos_full, &   ! MOs beta
                             1.0_dp, this%evects_ao_ao(7), & ! ball
                             a_first_col=lr1, &
@@ -961,7 +961,7 @@ CONTAINS
          val = -val
          ! C[1:nbf,1:nbf] = 1.0*A[1:nbf,lr2]*(B[1:nbf,lr2])^T + 1.0*C[1:nbf,1:nbf]
          CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
-                            val, gs_mos(1)%mos_full, &
+                               val, gs_mos(1)%mos_full, &
                                     gs_mos(2)%mos_full, &
                             1.0_dp, this%evects_ao_ao(7), &
                             a_first_col=lr2, &
@@ -973,14 +973,14 @@ CONTAINS
          val = val/SQRT(2.0_dp)
          ! C[1:nbf,1:nbf] = 1.0*A[1:nbf,lr1]*(B[1:nbf,lr1])^T + 1.0*C[1:nbf,1:nbf]
          CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
-                            val, gs_mos(1)%mos_full, &
+                               val, gs_mos(1)%mos_full, &
                                     gs_mos(2)%mos_full, &
                             1.0_dp, this%evects_ao_ao(7), &
                             a_first_col=lr1, &
                             b_first_col=lr1)
          ! C[1:nbf,1:nbf] = 1.0*A[1:nbf,lr2]*(B[1:nbf,lr2])^T + 1.0*C[1:nbf,1:nbf]
          CALL parallel_gemm('N', 'T', nbf, nbf, 1, &
-                            val, gs_mos(1)%mos_full, &
+                               val, gs_mos(1)%mos_full, &
                                     gs_mos(2)%mos_full, &
                             1.0_dp, this%evects_ao_ao(7), &
                             a_first_col=lr2, &
@@ -1833,7 +1833,7 @@ CONTAINS
                           destination=this%work_noc_vir)
          CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nocca, tddft_env%nvirb, &
                             1.0_dp, gs_mos(2)%mos_virt, &
-                            this%work_noc_vir, &
+                                    this%work_noc_vir, &
                             0.0_dp, tddft_env%evects(1, istate))
 
       END DO

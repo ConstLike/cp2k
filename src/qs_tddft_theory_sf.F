@@ -1089,7 +1089,7 @@ CONTAINS
                           destination=this%work_noc_vir)
          CALL parallel_gemm('N', 'T', tddft_env%nbf, tddft_env%nocca, tddft_env%nvirb, &
                             1.0_dp, gs_mos(2)%mos_virt, &
-                            this%work_noc_vir, &
+                                    this%work_noc_vir, &
                             0.0_dp, tddft_env%evects(1, istate))
 
       END DO
