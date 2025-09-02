@@ -1686,7 +1686,7 @@ CONTAINS
 
       DO istate = 1, tddft_env%nstates
          IF (log_unit > 0) &
-            WRITE (log_unit, '(T7,I8,F10.5,A)') istate, tddft_env%evals(istate)*evolt, " eV"
+            WRITE (log_unit, '(T7,I8,F10.5,A)') istate, (tddft_env%evals(istate)-tddft_env%evals(1))*evolt, " eV"
          n_amplitudes = 0
          DO a = 1, tddft_env%nvirb
             DO i = 1, tddft_env%nocca
