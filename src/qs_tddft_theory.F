@@ -40,15 +40,15 @@
 !> \par Usage Pattern
 !>      The polymorphic interface enables theory-agnostic driver code:
 !>      \code{.F}
-!>      CLASS(tddft_theory_type), ALLOCATABLE :: theory
-!>      SELECT CASE (theory_name)
-!>        CASE('SF')
-!>          ALLOCATE(tddft_sf_type :: theory)
-!>        CASE('MRSF')
-!>          ALLOCATE(tddft_mrsf_type :: theory)
-!>      END SELECT
-!>      CALL theory%init_guess(...)
-!>      CALL theory%apply(...)
+!>        CLASS(tddft_theory_type), ALLOCATABLE :: theory
+!>        SELECT CASE (theory_name)
+!>          CASE('SF')
+!>            ALLOCATE(tddft_sf_type :: theory)
+!>          CASE('MRSF')
+!>            ALLOCATE(tddft_mrsf_type :: theory)
+!>        END SELECT
+!>        CALL theory%init_guess(...)
+!>        CALL theory%apply(...)
 !>      \endcode
 !>
 !> \par Extension Guidelines

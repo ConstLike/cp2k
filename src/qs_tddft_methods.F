@@ -513,16 +513,16 @@ CONTAINS
 !> \brief Constructs the subspace Hamiltonian matrix for Davidson diagonalization
 !>
 !> \details Builds the projected Hamiltonian matrix H_ij = <X_i|Sigma_j> where X_i are
-!>          trial vectors and Sigma_j = A*X_j are their images under the orbital Hessian.
-!>          The matrix is symmetric due to the Hermitian nature of the TDDFT Hamiltonian,
-!>          so only the lower triangle is computed and mirrored.
+!>          trial vectors and Sigma_j = H*X_j are their images under the TDDFT Hamiltonian.
+!>          The matrix is Hermitian due to the self-adjoint nature of the TDDFT operator,
+!>          so only the lower triangle is computed and mirrored to the upper triangle.
 !>
 !> \param[inout] tddft_env  TDDFT environment containing trial and sigma vectors
 !>
-!> \par Implementation Notes
-!>      The subspace matrix elements are computed as inner products between trial vectors
-!>      and sigma vectors. For efficiency, only the lower triangular part is calculated
-!>      and the upper triangle is filled by symmetry.
+!> \par Implementation Details
+!>      Matrix elements are computed as inner products H_ij = Tr(X_i^T * Sigma_j).
+!>      The lower triangular part is calculated explicitly and copied to the upper
+!>      triangle by symmetry to reduce computational cost by factor of two.
 !>
 !> \author  Konstantin Komarov
 !> \date    Aug 2025
@@ -537,7 +537,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      ! Construct subspace Hamiltonian: H_ij = <X_i | Sigma_j>
+      ! Construct subspace Hamiltonian: H_ij = <X_i | Sigma_j> = Tr(X_i^T * Sigma_j)
       ! Could be DGEMM, but multiplication is between slices of matrix and array of matrices
       ! H[nVec,nVec] = 1.0*(Sigma(nVec)[dim])^T*X(nVec)[dim] + 0.0*H[nVec,nVec]
       DO i = 1, tddft_env%nVec

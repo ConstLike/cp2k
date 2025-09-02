@@ -5,6 +5,21 @@
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
 
+! **************************************************************************************************
+!> \brief Spin-Flip Time-Dependent Density Functional Theory (SF-TDDFT) implementation
+!>
+!> \details This module implements the Spin-Flip TDDFT method for computing electronic excited
+!>          states from a high-spin ground state reference. SF-TDDFT uses excitations that flip
+!>          electron spins (alpha to beta transitions), providing access to states of lower spin
+!>          multiplicity from a high-spin reference configuration.
+!>
+!> \par Key features
+!>      - Support for both ROHF and UHF reference states
+!>      - Shows the same result between SF-TDDFT and SF-TDDFPT (Sternheimer approach) in CP2K.
+!>
+!> \author Konstantin Komarov (constlike@gmail.com)
+!> \date Aug 2025
+! **************************************************************************************************
 MODULE qs_tddft_theory_sf
 
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
@@ -72,38 +87,34 @@ MODULE qs_tddft_theory_sf
 
    PUBLIC :: tddft_sf_type
 
+! **************************************************************************************************
+!> \brief SF-TDDFT derived type implementing the abstract theory interface
+!>
+!> \details Contains all working arrays and procedures specific to spin-flip TDDFT calculations.
+!>          The implementation handles α→β excitations with proper spin contamination analysis.
+! **************************************************************************************************
    TYPE, EXTENDS(tddft_theory_type) :: tddft_sf_type
 
-      !-------------------------------
-      ! WORK matrices
-      !-------------------------------
-      !> AO–MO transformation buffer [nbf, nvirb]
-      TYPE(cp_fm_type), POINTER                          :: work_ao_vir => NULL()
-      !> MO–AO transformation buffer [nocca, nbf]
-      TYPE(cp_fm_type), POINTER                          :: work_noc_ao => NULL()
-      !> Work buffer [nocca, nocca]
-      TYPE(cp_fm_type), POINTER                          :: work_noc_noc => NULL()
-      !> Work buffer [nbf, nocca]
-      TYPE(cp_fm_type), POINTER                          :: work_ao_noc => NULL()
-      !> Work buffer [nbf, nocca]
-      TYPE(cp_fm_type), POINTER                          :: work_vir_vir => NULL()
-      !> Scratch matrix [nocca, nvirb], used for Fock response, dipoles, etc.
-      TYPE(cp_fm_type), POINTER                          :: work_noc_vir => NULL()
-      !> Scratch matrices used in AO contraction [nbf, nbf] (sym, asym)
-      TYPE(cp_fm_type), POINTER                          :: work1_ao_ao => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work2_ao_ao => NULL()
+      ! AO-MO transformation buffer matrices
+      TYPE(cp_fm_type), POINTER                          :: work_ao_vir => NULL()    ! [nbf, nvirb]
+      TYPE(cp_fm_type), POINTER                          :: work_noc_ao => NULL()    ! [nocca, nbf]
+      TYPE(cp_fm_type), POINTER                          :: work_noc_noc => NULL()   ! [nocca, nocca]
+      TYPE(cp_fm_type), POINTER                          :: work_ao_noc => NULL()    ! [nbf, nocca]
+      TYPE(cp_fm_type), POINTER                          :: work_vir_vir => NULL()   ! [nvirb, nvirb]
+      TYPE(cp_fm_type), POINTER                          :: work_noc_vir => NULL()   ! [nocca, nvirb]
 
-      !-------------------------------
-      ! KERNELs related
-      !-------------------------------
+      ! General AO working matrices
+      TYPE(cp_fm_type), POINTER                          :: work1_ao_ao => NULL()    ! [nbf, nbf]
+      TYPE(cp_fm_type), POINTER                          :: work2_ao_ao => NULL()    ! [nbf, nbf]
+
+      ! Density
       TYPE(qs_rho_type), POINTER                         :: rho_orb_struct => NULL()
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: rho_fm_ao
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: rho_fm_ao      ! (nSpins) [nbf, nbf]
 
-      !> Per-spin AO scratch matrices for Fock transformation [nbf, nbf]
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: dens_diff_ij
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: dens_diff_ab
+      ! Density difference matrices for electron-hole analysis
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: dens_diff_ij   ! (nStates) [nbf, nbf] hole
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: dens_diff_ab   ! (nStates) [nbf, nbf] electron
 
-      ! -- theory-specific fields if needed --
    CONTAINS
       PROCEDURE, PASS(this) :: allocate   => sf_allocate
       PROCEDURE, PASS(this) :: init_guess => sf_init_guess
@@ -117,10 +128,10 @@ MODULE qs_tddft_theory_sf
 CONTAINS
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param qs_env ...
-!> \param[inout] tddft_env ...
+!> \brief Allocate all working arrays for SF-TDDFT calculations
+!> \param[inout] this      SF theory object
+!> \param[in]    qs_env    QuickStep environment
+!> \param[inout] tddft_env TDDFT environment containing system dimensions
 ! **************************************************************************************************
    SUBROUTINE sf_allocate(this, qs_env, tddft_env)
       CLASS(tddft_sf_type), INTENT(INOUT)                :: this
@@ -138,11 +149,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      !--------------------
-      ! ALLOCATE  FM
-      !--------------------
-      CALL get_qs_env(qs_env=qs_env, &
-                      blacs_env=blacs_env)
+      CALL get_qs_env(qs_env=qs_env, blacs_env=blacs_env)
 
       !=== hmat_ao_ao (1) [nbf, nbf] =======================
       CALL allocate_fm_matrix(matrix=this%hmat_ao_ao, &
@@ -253,8 +260,6 @@ CONTAINS
                               ncol=tddft_env%nbf, &
                               blacs_env=blacs_env)
 
-      !=================================================
-
       !--------------------
       ! ALLOCATE  DBCSR
       !--------------------
@@ -303,6 +308,7 @@ CONTAINS
                                           this%work_hmat_asymm(ispin)%matrix)
       END DO
 
+      ! Create density structure for grid-based XC operations
       NULLIFY (this%rho_orb_struct)
       ALLOCATE (this%rho_orb_struct)
       CALL qs_rho_create(this%rho_orb_struct)
@@ -316,93 +322,13 @@ CONTAINS
    END SUBROUTINE sf_allocate
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param qs_env ...
-! **************************************************************************************************
-   SUBROUTINE sf_deallocate(this, qs_env)
-      CLASS(tddft_sf_type), INTENT(INOUT)                :: this
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_deallocate'
-
-      INTEGER                                            :: handle, ivec
-
-      CALL timeset(routineN, handle)
-
-      ! Unused, but keep it:
-      CALL get_qs_env(qs_env=qs_env)
-
-      !--------------------
-      ! DEALLOCATE  FM
-      !--------------------
-
-      CALL deallocate_fm_matrix(this%hmat_ao_ao)
-      CALL deallocate_fm_matrix(this%evects_ao_ao)
-      CALL deallocate_fm_matrix(this%fock)
-      CALL deallocate_fm_matrix(this%work_ao_vir)
-      CALL deallocate_fm_matrix(this%work_noc_ao)
-      CALL deallocate_fm_matrix(this%work_noc_noc)
-      CALL deallocate_fm_matrix(this%work_ao_noc)
-      CALL deallocate_fm_matrix(this%work_vir_vir)
-      CALL deallocate_fm_matrix(this%work_noc_vir)
-      CALL deallocate_fm_matrix(this%work1_ao_ao)
-      CALL deallocate_fm_matrix(this%work2_ao_ao)
-      CALL deallocate_fm_matrix(this%dens_diff_ij)
-      CALL deallocate_fm_matrix(this%dens_diff_ab)
-      CALL deallocate_fm_matrix(this%rho_fm_ao)
-      CALL deallocate_fm_matrix(this%focka_noc_noc)
-      CALL deallocate_fm_matrix(this%fockb_vir_vir)
-      CALL deallocate_fm_matrix(this%dipoles_mo)
-
-      !--------------------
-      ! DEALLOCATE  DBCSR
-      !--------------------
-
-      IF (ASSOCIATED(this%work_rho_ao_ao_symm)) THEN
-         DO ivec = 1, SIZE(this%work_rho_ao_ao_symm)
-            CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_symm(ivec)%matrix)
-         END DO
-         DEALLOCATE (this%work_rho_ao_ao_symm)
-      END IF
-      IF (ASSOCIATED(this%work_rho_ao_ao_asymm)) THEN
-         DO ivec = 1, SIZE(this%work_rho_ao_ao_asymm)
-            CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_asymm(ivec)%matrix)
-         END DO
-         DEALLOCATE (this%work_rho_ao_ao_asymm)
-      END IF
-      IF (ASSOCIATED(this%work_hmat_symm)) THEN
-         DO ivec = 1, SIZE(this%work_hmat_symm)
-            CALL dbcsr_deallocate_matrix(this%work_hmat_symm(ivec)%matrix)
-         END DO
-         DEALLOCATE (this%work_hmat_symm)
-      END IF
-      IF (ASSOCIATED(this%work_hmat_asymm)) THEN
-         DO ivec = 1, SIZE(this%work_hmat_asymm)
-            CALL dbcsr_deallocate_matrix(this%work_hmat_asymm(ivec)%matrix)
-         END DO
-         DEALLOCATE (this%work_hmat_asymm)
-      END IF
-
-      !--------------------
-      ! DEALLOCATE  PW
-      !--------------------
-
-      IF (ASSOCIATED(this%rho_orb_struct)) THEN
-         NULLIFY (this%rho_orb_struct)
-      END IF
-
-      CALL timestop(handle)
-
-   END SUBROUTINE sf_deallocate
-
-! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param qs_env ...
-!> \param[input] tddft_env ...
-!> \param[in] gs_mos ...
-!> \param[in] log_unit ...
+!> \brief Generate initial guess vectors for SF-TDDFT based on orbital energy differences
+!> \param[inout] this      SF theory object
+!> \param[in]    qs_env    QuickStep environment
+!> \param[inout] tddft_env TDDFT environment
+!> \param[in]    gs_mos    ground state molecular orbitals
+!> \param[in]    log_unit  output unit for logging
+!> \details Creates energy-ordered alpha to beta single excitations as initial trial vectors
 ! **************************************************************************************************
    SUBROUTINE sf_init_guess(this, qs_env, tddft_env, gs_mos, log_unit)
       CLASS(tddft_sf_type), INTENT(INOUT)                :: this
@@ -423,10 +349,9 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      CALL get_qs_env(qs_env, &
-                      matrix_ks=matrix_ks)
+      CALL get_qs_env(qs_env, matrix_ks=matrix_ks)
 
-      ! FOCK
+      ! Transform Fock matrices to MO basis for energy corrections
       DO ispin = 1, tddft_env%nSpins
          CALL copy_dbcsr_to_fm(matrix_ks(ispin)%matrix, this%fock(ispin))
          ! work1_ao_ao = gs_mos(1)%mos_full^T * this%fock
@@ -442,14 +367,12 @@ CONTAINS
                             0.0_dp, this%fock(ispin))
       END DO
 
-      ! --- focka_occ = F_alpha( occ , occ )  ------------------------------------
+      ! Extract Fock matrix blocks for energy corrections
       CALL cp_fm_to_fm_submat(this%fock(1), this%focka_noc_noc, &
                               nrow=tddft_env%nocca, ncol=tddft_env%nocca, &
                               s_firstrow=1, &
                               s_firstcol=1, &
                               t_firstrow=1, t_firstcol=1)
-
-      ! --- fockb_vir = F_beta( vir , vir )  ------------------------------------
       CALL cp_fm_to_fm_submat(this%fock(2), this%fockb_vir_vir, &
                               nrow=tddft_env%nvirb, &
                               ncol=tddft_env%nvirb, &
@@ -457,11 +380,13 @@ CONTAINS
                               s_firstcol=tddft_env%noccb + 1, &
                               t_firstrow=1, t_firstcol=1)
 
+      ! Create energy-ordered excitation list
       nStates_selected = gs_mos(1)%homo*(SIZE(gs_mos(2)%evals_full) - gs_mos(2)%homo)
 
       ALLOCATE (inds(nStates_selected))
       ALLOCATE (e_virt_m_occ(nStates_selected))
 
+      ! Compute alpha_occ tp beta_virt excitation energies
       istate = 0
       DO imo_virt = gs_mos(2)%homo + 1, SIZE(gs_mos(2)%evals_full)
          DO imo_occ = 1, gs_mos(1)%homo
@@ -472,6 +397,7 @@ CONTAINS
 
       e_virt_m_occ(1:nStates_selected) = tddft_env%e_virt_minus_occ(1:nStates_selected)
 
+      ! Sort excitations by energy
       CALL sort(e_virt_m_occ, nStates_selected, inds)
 
       IF (log_unit > 0) THEN
@@ -484,6 +410,7 @@ CONTAINS
          WRITE (log_unit, '(1X,79("-"))')
       END IF
 
+      ! Set up initial guess vectors as single alpha to beta xcitations
       DO istate = 1, tddft_env%nVec
          tddft_env%evals(istate) = e_virt_m_occ(istate)
          istate_orig = inds(istate)
@@ -510,11 +437,11 @@ CONTAINS
    END SUBROUTINE sf_init_guess
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param[inout] tddft_env ...
-!> \param[in] gs_mos ...
-!> \param[in] ivec ...
+!> \brief Transform trial vector from MO to AO basis
+!> \param[inout] this      SF theory object
+!> \param[inout] tddft_env TDDFT environment
+!> \param[in]    gs_mos    ground state molecular orbitals
+!> \param[in]    ivec      index of vector to transform
 ! **************************************************************************************************
    SUBROUTINE sf_mo_to_ao(this, tddft_env, gs_mos, ivec)
       CLASS(tddft_sf_type), INTENT(INOUT)                :: this
@@ -523,16 +450,12 @@ CONTAINS
          POINTER, INTENT(IN)                             :: gs_mos
       INTEGER, INTENT(IN)                                :: ivec
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'mrsf_mo_to_ao'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_mo_to_ao'
 
       INTEGER                                            :: handle
 
       CALL timeset(routineN, handle)
 
-      !--------------------------------------
-      ! Orthogonal transform: X vector to AO
-      !--------------------------------------
-      ! X_ao = C_alpha * X_mo * C_beta^T
       ! C[nbf,nvirb] = 1.0*A[nbf,nocca]*B[nocca,nvirb] + 0.0*C[nbf,nvirb]
       CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nvirb, tddft_env%nocca, &
                          1.0_dp, gs_mos(1)%mos_occ, &
@@ -549,11 +472,12 @@ CONTAINS
    END SUBROUTINE sf_mo_to_ao
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param qs_env ...
-!> \param[inout] tddft_env ...
-!> \param[in] tddfpt_control ...
+!> \brief Apply TDDFT operators to generate sigma vectors
+!> \param[inout] this            SF theory object
+!> \param[in]    qs_env          QuickStep environment
+!> \param[inout] tddft_env       TDDFT environment
+!> \param[in]    tddfpt_control  TDDFPT control parameters
+!> \details Applies HFX kernel by decomposing density into symmetric and antisymmetric parts
 ! **************************************************************************************************
    SUBROUTINE sf_apply(this, qs_env, tddft_env, tddfpt_control)
       CLASS(tddft_sf_type), INTENT(INOUT)                :: this
@@ -561,7 +485,7 @@ CONTAINS
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(tddfpt2_control_type), POINTER, INTENT(IN)    :: tddfpt_control
 
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'mrsf_apply'
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_apply'
 
       INTEGER                                            :: handle
 
@@ -616,24 +540,24 @@ CONTAINS
          CALL dbcsr_set(matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
                         alpha=0.0_dp)
 
-         ! FM to DBCSR
+         ! Convert FM to DBCSR
          CALL copy_fm_to_dbcsr(fm=this%work1_ao_ao, &
                                matrix=this%work_rho_ao_ao_asymm(1)%matrix, &
                                keep_sparsity=.TRUE.)
 
-         ! Symmetric
+         ! Apply HFX to symmetric part
          CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
          CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
                                rho_ao=this%work_rho_ao_ao_symm, &
                                qs_env=qs_env)
 
-         ! Antisymmetric
+         ! Apply HFX to antisymmetric part
          CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
          CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
                                rho_ao=this%work_rho_ao_ao_asymm, &
                                qs_env=qs_env)
 
-         ! BDCSR to FM
+         ! Convert results back to FM from DBCSR
          CALL cp_fm_set_all(matrix=this%work1_ao_ao, alpha=0.0_dp)
          CALL cp_fm_set_all(matrix=this%work2_ao_ao, alpha=0.0_dp)
 
@@ -651,8 +575,6 @@ CONTAINS
          CALL cp_fm_scale_and_add( &
             alpha=1.0_dp, matrix_a=this%hmat_ao_ao(1), &
             beta=1.0_dp, matrix_b=this%work2_ao_ao)
-         CALL cp_fm_set_all(matrix=this%work2_ao_ao, alpha=0.0_dp)
-
       END IF
 
       CALL timestop(handle)
@@ -660,11 +582,12 @@ CONTAINS
    END SUBROUTINE sf_apply
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param[inout] tddft_env ...
-!> \param[in] gs_mos ...
-!> \param[in] ivec ...
+!> \brief Transform sigma vectors back to MO basis with energy corrections
+!> \param[inout] this      SF theory object
+!> \param[inout] tddft_env TDDFT environment
+!> \param[in]    gs_mos    ground state molecular orbitals
+!> \param[in]    ivec      index of vector to transform
+!> \details Applies back-transformation and adds orbital energy difference corrections
 ! **************************************************************************************************
    SUBROUTINE sf_ao_to_mo(this, tddft_env, gs_mos, ivec)
       CLASS(tddft_sf_type), INTENT(INOUT)                :: this
@@ -680,9 +603,6 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      !-----------------------------------------------
-      ! Transform back to MO basis
-      !-----------------------------------------------
       ! C[nocca,nbf] = 1.0*(A[nbf,nocca])^T * B[nbf,nbf] + 0.0*C[nocca,nbf]
       CALL parallel_gemm('T', 'N', tddft_env%nocca, tddft_env%nbf, tddft_env%nbf, &
                          1.0_dp, gs_mos(1)%mos_occ, &
@@ -695,6 +615,7 @@ CONTAINS
                                  gs_mos(2)%mos_virt, &
                          0.0_dp, tddft_env%sigma_vecs(ivec))
 
+      ! Add reference-specific corrections based on SCF type
       SELECT CASE (tddft_env%reference_type)
       CASE (1) ! ROKS/ROHF
          ! Add ROHF corrections using Fock matrix contributions
@@ -749,14 +670,15 @@ CONTAINS
    END SUBROUTINE sf_ao_to_mo
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param qs_env ...
-!> \param[inout] tddft_env ...
-!> \param[out] ostrength ...
-!> \param[in] gs_mos ...
-!> \param[in] tddfpt_control ...
-!> \param[in] log_unit ...
+!> \brief Analyze and print SF-TDDFT excited state properties
+!> \param[inout] this            SF theory object
+!> \param[in]    qs_env          QuickStep environment
+!> \param[inout] tddft_env       TDDFT environment
+!> \param[out]   ostrength       oscillator strengths
+!> \param[in]    gs_mos          ground state molecular orbitals
+!> \param[in]    tddfpt_control  TDDFPT control parameters
+!> \param[in]    log_unit        output unit
+!> \details Computes transition properties and performs comprehensive spin contamination analysis
 ! **************************************************************************************************
    SUBROUTINE sf_print(this, qs_env, tddft_env, ostrength, gs_mos, tddfpt_control, log_unit)
       CLASS(tddft_sf_type), INTENT(INOUT)                :: this
@@ -796,7 +718,7 @@ CONTAINS
          lsd_str = ' U'
       END SELECT
 
-      ! *** summary header ***
+      ! Print header with method and dipole operator information
       CALL integer_to_string(3, mult_str)
       IF (log_unit > 0) THEN
          WRITE (log_unit, '(/,1X,A2,A,1X,A)') lsd_str, "-TDDFT states of multiplicity", TRIM(mult_str)
@@ -827,6 +749,8 @@ CONTAINS
       DO ispin = 1, nspins
          CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, nrow_global=nao, ncol_global=nmo_occ(ispin))
       END DO
+
+      ! Compute ground state density matrices for each spin
       DO ispin = 1, nspins
          CALL parallel_gemm('N', 'T', nao, nao, nmo_occ(ispin), &
                             1.0_dp, gs_mos(ispin)%mos_occ, &
@@ -834,10 +758,11 @@ CONTAINS
                             0.0_dp, this%rho_fm_ao(ispin))
       END DO
 
-      ! matrix_s to cp_fm uging tmp matrix hmat_ao_ao
+      ! Convert overlap matrix to CP_FM format for spin analysis, hmat_ao_ao is tmp matrix here
       CALL cp_fm_set_all(matrix=this%hmat_ao_ao(1), alpha=0.0_dp)
       CALL copy_dbcsr_to_fm(matrix_s(1)%matrix, this%hmat_ao_ao(1))
 
+      ! Transform dipole operators to MO basis
       DO ideriv = 1, 3
          CALL parallel_gemm('T', 'N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nbf, &
                             1.0_dp, tddft_env%dipole_op_mos_occ(ideriv, 1), &
@@ -845,15 +770,12 @@ CONTAINS
                             0.0_dp, this%dipoles_mo(ideriv))
       END DO
 
-      ! transition dipole moment
+      ! Allocate arrays for transition analysis
       ALLOCATE (trans_dipoles(tddft_env%nstates, 3), source=0.0_dp)
-      ! s2_mat
       ALLOCATE (s2_mat(tddft_env%nstates), source=0.0_dp)
 
+      ! Compute excited state properties for each state
       DO istate = 1, tddft_env%nStates
-         !--------------------------------------
-         ! Orthogonal transform: X vector to AO
-         !--------------------------------------
          ! C[nbf,nvirb] = 1.0*A[nbf,nocca]*B[nocca,nvirb] + 0.0*C[nbf,nvirb]
          CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nvirb, tddft_env%nocca, &
                             1.0_dp, gs_mos(1)%mos_occ, &
@@ -865,6 +787,7 @@ CONTAINS
                                     gs_mos(2)%mos_virt, &
                             0.0_dp, this%evects_ao_ao(1))
 
+         ! Compute density difference matrices for electron-hole analysis
          !--------------------------------------------------------------
          ! Compute AO-basis difference density matrices:
          !   dens_diff_ij = AO transform of -X X^T (occupied block)
@@ -901,7 +824,7 @@ CONTAINS
                             0.0_dp, this%dens_diff_ab(istate))
 
          !--------------------------------------------------------------
-         ! Compute transition dipoles for state istate
+         ! Compute transition dipoles for istate
          !--------------------------------------------------------------
          DO ideriv = 1, 3
             CALL cp_fm_trace(tddft_env%evects_mo(istate), &
@@ -909,15 +832,13 @@ CONTAINS
                              trans_dipoles(istate, ideriv))
          END DO
 
+         ! Compute spin expectation value <S^2> for excited state
          n_spin_imbalance = REAL(tddft_env%nocca - tddft_env%noccb, dp)
          s2_spin = 0.25_dp*n_spin_imbalance*(n_spin_imbalance - 2.0_dp)
          s2_beta_occ = REAL(tddft_env%noccb, dp) + 1.0_dp
 
          !--------------------------------------------------------------
          ! Compute S^2 expectation value for excited state:
-         ! Components:
-         ! - s2_cross, s2_anti, s2_offdiag (see formulas below)
-         !   (using the relaxed density for the alpha/beta blocks)
          !--------------------------------------------------------------
          ! Step 1
 !        !--------------------------------------------------------------
@@ -976,13 +897,14 @@ CONTAINS
          CALL cp_fm_trace(this%work2_ao_ao, this%hmat_ao_ao(1), s2_offdiag)
          s2_offdiag = s2_offdiag/2.0_dp
 
-         ! s^2 = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag^2
+         ! Total <S^2> = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag^2
          s2_mat(istate) = s2_spin + s2_beta_occ + s2_cross - s2_anti + s2_offdiag**2
       END DO
 
+      ! Apply spin-flip normalization factor to transition dipoles
       trans_dipoles(:, :) = SQRT(2.0_dp)*trans_dipoles(:, :)
 
-      ! *** summary information ***
+      ! Print summary of excited states
       DO istate = 1, tddft_env%nstates
          osc_strength = 2.0_dp/3.0_dp*tddft_env%evals(istate)* &
                         accurate_dot_product(trans_dipoles(istate, 1:3), &
@@ -996,12 +918,13 @@ CONTAINS
       END DO
       DEALLOCATE (trans_dipoles, s2_mat)
 
-      ! punch a checksum for the regs
+      ! Print checksum for regression testing
       IF (log_unit > 0) THEN
          WRITE (log_unit, '(/,T2,A,E14.6)') 'TDDFT : CheckSum  =', &
             SQRT(SUM(tddft_env%evals**2))
       END IF
 
+      ! Print detailed excitation analysis
       max_amplitudes = tddft_env%nocca*tddft_env%nvirb
       ALLOCATE (amplitudes(max_amplitudes))
       ALLOCATE (i_indices(max_amplitudes))
@@ -1094,6 +1017,7 @@ CONTAINS
 
       END DO
 
+      ! Perform natural transition orbital analysis
       suffix = TRIM("sfl-")
       tddfpt_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT")
       tddfpt_print_section => section_vals_get_subs_vals(tddfpt_section, "PRINT")
@@ -1107,5 +1031,86 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE sf_print
+
+! **************************************************************************************************
+!> \brief Clean up all SF-TDDFT allocations
+!> \param[inout] this   SF theory object
+!> \param[in]    qs_env QuickStep environment
+! **************************************************************************************************
+   SUBROUTINE sf_deallocate(this, qs_env)
+      CLASS(tddft_sf_type), INTENT(INOUT)                :: this
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_deallocate'
+
+      INTEGER                                            :: handle, ivec
+
+      CALL timeset(routineN, handle)
+
+      ! Suppress unused variable warning
+      CALL get_qs_env(qs_env=qs_env)
+
+      !--------------------
+      ! DEALLOCATE  FM
+      !--------------------
+
+      CALL deallocate_fm_matrix(this%hmat_ao_ao)
+      CALL deallocate_fm_matrix(this%evects_ao_ao)
+      CALL deallocate_fm_matrix(this%fock)
+      CALL deallocate_fm_matrix(this%work_ao_vir)
+      CALL deallocate_fm_matrix(this%work_noc_ao)
+      CALL deallocate_fm_matrix(this%work_noc_noc)
+      CALL deallocate_fm_matrix(this%work_ao_noc)
+      CALL deallocate_fm_matrix(this%work_vir_vir)
+      CALL deallocate_fm_matrix(this%work_noc_vir)
+      CALL deallocate_fm_matrix(this%work1_ao_ao)
+      CALL deallocate_fm_matrix(this%work2_ao_ao)
+      CALL deallocate_fm_matrix(this%dens_diff_ij)
+      CALL deallocate_fm_matrix(this%dens_diff_ab)
+      CALL deallocate_fm_matrix(this%rho_fm_ao)
+      CALL deallocate_fm_matrix(this%focka_noc_noc)
+      CALL deallocate_fm_matrix(this%fockb_vir_vir)
+      CALL deallocate_fm_matrix(this%dipoles_mo)
+
+      !--------------------
+      ! DEALLOCATE  DBCSR
+      !--------------------
+
+      IF (ASSOCIATED(this%work_rho_ao_ao_symm)) THEN
+         DO ivec = 1, SIZE(this%work_rho_ao_ao_symm)
+            CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_symm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_rho_ao_ao_symm)
+      END IF
+      IF (ASSOCIATED(this%work_rho_ao_ao_asymm)) THEN
+         DO ivec = 1, SIZE(this%work_rho_ao_ao_asymm)
+            CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_asymm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_rho_ao_ao_asymm)
+      END IF
+      IF (ASSOCIATED(this%work_hmat_symm)) THEN
+         DO ivec = 1, SIZE(this%work_hmat_symm)
+            CALL dbcsr_deallocate_matrix(this%work_hmat_symm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_hmat_symm)
+      END IF
+      IF (ASSOCIATED(this%work_hmat_asymm)) THEN
+         DO ivec = 1, SIZE(this%work_hmat_asymm)
+            CALL dbcsr_deallocate_matrix(this%work_hmat_asymm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_hmat_asymm)
+      END IF
+
+      !--------------------
+      ! DEALLOCATE  PW
+      !--------------------
+
+      IF (ASSOCIATED(this%rho_orb_struct)) THEN
+         NULLIFY (this%rho_orb_struct)
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE sf_deallocate
 
 END MODULE qs_tddft_theory_sf

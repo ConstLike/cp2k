@@ -5,6 +5,23 @@
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
 
+! **************************************************************************************************
+!> \brief Mixed Reference Spin-Flip TDDFT (MRSF-TDDFT) theory implementation
+!> \details This module implements the MRSF-TDDFT method for computing electronic excited states
+!>          with pure spin separation. MRSF-TDDFT addresses spin contamination issues in
+!>          conventional spin-flip TDDFT by using a multi-reference approach that yields pure
+!>          spin states (singlets and triplets) from a mixed reference configuration.
+!>
+!> \par Key features
+!>      - Pure spin states without contamination
+!>      - Balanced treatment of static and dynamic correlation
+!>      - Configurable spin-pair coupling parameters
+!>      - Support for range-separated hybrid functionals
+!>      - Comprehensive natural transition orbital analysis
+!>
+!> \author Konstantin Komarov (constlike@gmail.com) (Luber group)
+!> \date Aug 2025
+! **************************************************************************************************
 MODULE qs_tddft_theory_mrsf
 
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
@@ -90,51 +107,48 @@ MODULE qs_tddft_theory_mrsf
 
    PUBLIC :: tddft_mrsf_type
 
-   !-------------------------------
-   ! Local parameters
-   !-------------------------------
+   ! Local constants for MRSF calculations
    REAL(Kind=dp), PARAMETER, PRIVATE :: sqrt12 = 1.0_dp/SQRT(2.0_dp)
    REAL(KIND=dp), PARAMETER, PRIVATE :: threshold = 1.0E-10_dp
 
+! **************************************************************************************************
+!> \brief MRSF-TDDFT derived type implementing the abstract theory interface
+!> \details Contains all working arrays and procedures specific to mixed reference spin-flip
+!>          TDDFT calculations. The implementation handles complex multi-reference transformations
+!>          with proper spin-pair coupling parameters.
+! **************************************************************************************************
    TYPE, EXTENDS(tddft_theory_type) :: tddft_mrsf_type
 
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: spc
+      ! Theory-specific parameters
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: spc               ! [7, 2] spin-pair coupling
 
-      !-------------------------------
-      ! WORK matrices
-      !-------------------------------
-      !> AO–MO transformation buffer [nbf, nvirb]
-      TYPE(cp_fm_type), POINTER                          :: work_ao_vir => NULL()
-      !> MO–AO transformation buffer [nocca, nbf]
-      TYPE(cp_fm_type), POINTER                          :: work_noc_ao => NULL()
-      !> Work buffer [nocca, nocca]
-      TYPE(cp_fm_type), POINTER                          :: work_noc_noc => NULL()
-      !> Work buffer [nbf, nocca]
-      TYPE(cp_fm_type), POINTER                          :: work_ao_noc => NULL()
-      !> Work buffer [nbf, nocca]
-      TYPE(cp_fm_type), POINTER                          :: work_vir_vir => NULL()
-      !> Scratch matrix [nocca, nvirb], used for Fock response, dipoles, etc.
-      TYPE(cp_fm_type), POINTER                          :: work_noc_vir => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work2_noc_vir => NULL()
-      !> Scratch matrices used in AO contraction [nbf, nbf] (sym, asym)
-      TYPE(cp_fm_type), POINTER                          :: work1_ao_ao => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work2_ao_ao => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work1_ao_1  => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work2_ao_1  => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work_vira_1 => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work_nocb_1 => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work_nocb_vira => NULL()
-      TYPE(cp_fm_type), POINTER                          :: work_ao_nocb => NULL()
+      ! AO-MO transformation working matrices
+      TYPE(cp_fm_type), POINTER                          :: work_ao_vir => NULL()    ! [nbf, nvirb]
+      TYPE(cp_fm_type), POINTER                          :: work_noc_ao => NULL()    ! [nocca, nbf]
+      TYPE(cp_fm_type), POINTER                          :: work_noc_noc => NULL()   ! [nocca, nocca]
+      TYPE(cp_fm_type), POINTER                          :: work_ao_noc => NULL()    ! [nbf, nocca]
+      TYPE(cp_fm_type), POINTER                          :: work_vir_vir => NULL()   ! [nvirb, nvirb]
+      TYPE(cp_fm_type), POINTER                          :: work_noc_vir => NULL()   ! [nocca, nvirb]
+      TYPE(cp_fm_type), POINTER                          :: work2_noc_vir => NULL()  ! [nocca, nvirb]
 
-      !-------------------------------
-      ! Coulomb kernel
-      !-------------------------------
-      !> Scratch matrices used in Coulomb
-      TYPE(pw_r3d_rs_type), POINTER                      :: work_v_rspace
-      TYPE(pw_c1d_gs_type), POINTER                      :: work_v_gspace
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: A_ia_munu_sub
-      TYPE(qs_rho_type), POINTER                         :: rho_orb_struct => NULL()
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: rho_fm_ao
+      ! General AO working matrices
+      TYPE(cp_fm_type), POINTER                          :: work1_ao_ao => NULL()    ! [nbf, nbf]
+      TYPE(cp_fm_type), POINTER                          :: work2_ao_ao => NULL()    ! [nbf, nbf]
+      TYPE(cp_fm_type), POINTER                          :: work1_ao_1  => NULL()    ! [nbf, 1]
+      TYPE(cp_fm_type), POINTER                          :: work2_ao_1  => NULL()    ! [nbf, 1]
+
+      ! MRSF-specific working arrays for complex transformations
+      TYPE(cp_fm_type), POINTER                          :: work_vira_1 => NULL()    ! [nvira, 1]
+      TYPE(cp_fm_type), POINTER                          :: work_nocb_1 => NULL()    ! [noccb, 1]
+      TYPE(cp_fm_type), POINTER                          :: work_nocb_vira => NULL() ! [noccb, nvira]
+      TYPE(cp_fm_type), POINTER                          :: work_ao_nocb => NULL()   ! [nbf, noccb]
+
+      ! Coulomb kernel working arrays
+      TYPE(pw_r3d_rs_type), POINTER                      :: work_v_rspace            ! real-space potential
+      TYPE(pw_c1d_gs_type), POINTER                      :: work_v_gspace            ! reciprocal-space potential
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: A_ia_munu_sub            ! Coulomb intermediate
+      TYPE(qs_rho_type), POINTER                         :: rho_orb_struct => NULL() ! Density structure
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: rho_fm_ao                ! (nSpins) [nbf, nbf]
 
    CONTAINS
       PROCEDURE, PASS(this) :: allocate   => mrsf_allocate
@@ -149,10 +163,11 @@ MODULE qs_tddft_theory_mrsf
 CONTAINS
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param qs_env ...
-!> \param[inout] tddft_env ...
+!> \brief Allocate all working arrays for MRSF-TDDFT calculations
+!> \param[inout] this      MRSF theory object
+!> \param[in]    qs_env    QuickStep environment
+!> \param[inout] tddft_env TDDFT environment containing system dimensions
+!> \details Sets up spin-pair coupling parameters and allocates complex transformation arrays
 ! **************************************************************************************************
    SUBROUTINE mrsf_allocate(this, qs_env, tddft_env)
       CLASS(tddft_mrsf_type), INTENT(INOUT)              :: this
@@ -176,79 +191,79 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+      ! Get input sections and control parameters
       NULLIFY (tddfpt_section)
       tddfpt_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT")
 
-      CALL get_qs_env(qs_env, &
-                      dft_control=dft_control)
-
+      CALL get_qs_env(qs_env, dft_control=dft_control)
       NULLIFY (tddfpt_control)
       tddfpt_control => dft_control%tddfpt2_control
+
+      ! Initialize spin-pair coupling (SPC) parameter matrix
+      ALLOCATE (this%spc(7, 2), source=0.0_dp)
+
+      ! Extract SPC parameters from input or set defaults
       CALL section_vals_val_get(tddfpt_section, "SPIN_PAIR_COUPLING", explicit=explicit)
 
-      ALLOCATE (this%spc(7, 2), source=0.0_dp)
       IF (explicit) THEN
          IF (tddft_env%do_hfx_cam) THEN
-            ! For Short-Range (SR) in first column and Long-Range (LR) in second column
-            this%spc(1:4, 1:2) = tddfpt_control%mrsf_SPC(3)
-            this%spc(5, 1:2) = tddfpt_control%mrsf_SPC(2)
-            this%spc(6, 1:2) = tddfpt_control%mrsf_SPC(1)
+            ! Range-separated functionals: separate short-range and long-range parameters
+            this%spc(1:4, 1:2) = tddfpt_control%mrsf_SPC(3)  ! CO-OV coupling
+            this%spc(5, 1:2) = tddfpt_control%mrsf_SPC(2)    ! OV-OV coupling
+            this%spc(6, 1:2) = tddfpt_control%mrsf_SPC(1)    ! CO-CO coupling
          ELSE
-            ! Non-range-separated: use total HF fraction as in original code
+            ! Standard functionals: single parameter set
             this%spc(1:4, 1) = tddfpt_control%mrsf_SPC(3)
             this%spc(5, 1) = tddfpt_control%mrsf_SPC(2)
             this%spc(6, 1) = tddfpt_control%mrsf_SPC(1)
          END IF
       ELSE
+         ! Default coupling parameters
          IF (tddft_env%do_hfx_cam) THEN
-            ! For Short-Range (SR), Coulomb, Alpha term
             this%spc(1:6, 1:2) = 0.5_dp
          ELSE
-            ! Non-range-separated: use total HF fraction as in original code
             this%spc(1:6, 1) = 0.5_dp
          END IF
       END IF
 
+      ! Extract HF exchange scaling parameters
       CALL section_vals_val_get(tddfpt_section, "MRSF_HF", explicit=explicit)
       IF (explicit) THEN
          IF (tddft_env%do_hfx_cam) THEN
-            ! For Short-Range (SR), Alpha term
-            this%spc(7, 1) = tddfpt_control%mrsf_HF(1)
-            ! Store Long-Range (LR), Beta term scaling in second column
-            this%spc(7, 2) = tddfpt_control%mrsf_HF(2)
+            this%spc(7, 1) = tddfpt_control%mrsf_HF(1)  ! Alpha parameter
+            this%spc(7, 2) = tddfpt_control%mrsf_HF(2)  ! Beta parameter
          ELSE
-            ! Non-range-separated: use total HF fraction as in original code
             this%spc(7, 1) = tddfpt_control%mrsf_HF(1)
          END IF
       ELSE
+         ! Use functional HF fractions
          IF (tddft_env%do_hfx_cam) THEN
-            ! For Short-Range (SR), Coulomb, Alpha term
             this%spc(7, 1) = tddft_env%C_hf_alpha
             this%spc(7, 2) = tddft_env%C_hf_beta
          ELSE
-            ! Non-range-separated: use total HF fraction as in original code
             this%spc(7, 1) = tddft_env%C_hf_alpha
          END IF
       END IF
 
+      ! Apply theory-specific modifications to subspace dimensions
       SELECT CASE (tddft_env%response_type)
-      CASE (2) ! MRSF-S
+      CASE (2) ! MRSF-S: Singlet states
          tddft_env%nStates = MIN(tddft_env%nstates, tddft_env%nstates_max - 1)
          tddft_env%mxvec = MIN(tddft_env%maxvec*tddft_env%nstates, &
                                tddft_env%nstates_max - 1)
 
-      CASE (3) ! MRSF-T
+      CASE (3) ! MRSF-T: Triplet states
          tddft_env%nStates = MIN(tddft_env%nstates, tddft_env%nstates_max - 3)
          tddft_env%mxvec = MIN(tddft_env%maxvec*tddft_env%nstates, &
                                tddft_env%nstates_max - 3)
+         ! Sign flip for triplet coupling
          this%spc(1:6, 1:2) = -this%spc(1:6, 1:2)
       END SELECT
 
       !--------------------
       ! ALLOCATE  FM
       !--------------------
-      CALL get_qs_env(qs_env=qs_env, &
-                      blacs_env=blacs_env)
+      CALL get_qs_env(qs_env=qs_env, blacs_env=blacs_env)
 
       !=== hmat_ao_ao (7) [nbf, nbf] ===================
       CALL allocate_fm_matrix(matrix=this%hmat_ao_ao, &
@@ -458,11 +473,8 @@ CONTAINS
       ! ALLOCATE  PW
       !--------------------
 
-      CALL get_qs_env(qs_env=qs_env, &
-                      pw_env=pw_env)
-
-      CALL pw_env_get(pw_env, &
-                      auxbas_pw_pool=auxbas_pw_pool)
+      CALL get_qs_env(qs_env=qs_env, pw_env=pw_env)
+      CALL pw_env_get(pw_env=pw_env, auxbas_pw_pool=auxbas_pw_pool)
 
       ALLOCATE (this%work_v_gspace)
       CALL auxbas_pw_pool%create_pw(this%work_v_gspace)
@@ -474,122 +486,12 @@ CONTAINS
    END SUBROUTINE mrsf_allocate
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param qs_env ...
-! **************************************************************************************************
-   SUBROUTINE mrsf_deallocate(this, qs_env)
-      CLASS(tddft_mrsf_type), INTENT(INOUT)              :: this
-      TYPE(qs_environment_type), POINTER                 :: qs_env
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'mrsf_deallocate'
-
-      TYPE(pw_env_type), POINTER                         :: pw_env
-      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      INTEGER                                            :: handle, ivec
-
-      CALL timeset(routineN, handle)
-
-      !--------------------
-      ! DEALLOCATE  DP
-      !--------------------
-
-      IF (ALLOCATED(this%spc)) THEN
-         DEALLOCATE (this%spc)
-      END IF
-
-      !--------------------
-      ! DEALLOCATE  FM
-      !--------------------
-      CALL deallocate_fm_matrix(this%hmat_ao_ao)
-      CALL deallocate_fm_matrix(this%evects_ao_ao)
-      CALL deallocate_fm_matrix(this%fock)
-      CALL deallocate_fm_matrix(this%focka_noc_noc)
-      CALL deallocate_fm_matrix(this%fockb_vir_vir)
-      CALL deallocate_fm_matrix(this%work_ao_vir)
-      CALL deallocate_fm_matrix(this%work_noc_ao)
-      CALL deallocate_fm_matrix(this%work_noc_noc)
-      CALL deallocate_fm_matrix(this%work_ao_noc)
-      CALL deallocate_fm_matrix(this%work_vir_vir)
-      CALL deallocate_fm_matrix(this%work_noc_vir)
-      CALL deallocate_fm_matrix(this%work2_noc_vir)
-      CALL deallocate_fm_matrix(this%work1_ao_ao)
-      CALL deallocate_fm_matrix(this%work2_ao_ao)
-      CALL deallocate_fm_matrix(this%work1_ao_1)
-      CALL deallocate_fm_matrix(this%work2_ao_1)
-      CALL deallocate_fm_matrix(this%work_vira_1)
-      CALL deallocate_fm_matrix(this%work_nocb_1)
-      CALL deallocate_fm_matrix(this%work_nocb_vira)
-      CALL deallocate_fm_matrix(this%work_ao_nocb)
-      CALL deallocate_fm_matrix(this%rho_fm_ao)
-      CALL deallocate_fm_matrix(this%dipoles_mo)
-
-      !--------------------
-      ! DEALLOCATE  DBCSR
-      !--------------------
-
-      IF (ASSOCIATED(this%A_ia_munu_sub)) THEN
-         DO ivec = 1, SIZE(this%A_ia_munu_sub)
-            CALL dbcsr_deallocate_matrix(this%A_ia_munu_sub(ivec)%matrix)
-         END DO
-         DEALLOCATE (this%A_ia_munu_sub)
-      END IF
-
-      IF (ASSOCIATED(this%work_rho_ao_ao_symm)) THEN
-         DO ivec = 1, SIZE(this%work_rho_ao_ao_symm)
-            CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_symm(ivec)%matrix)
-         END DO
-         DEALLOCATE (this%work_rho_ao_ao_symm)
-      END IF
-      IF (ASSOCIATED(this%work_rho_ao_ao_asymm)) THEN
-         DO ivec = 1, SIZE(this%work_rho_ao_ao_asymm)
-            CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_asymm(ivec)%matrix)
-         END DO
-         DEALLOCATE (this%work_rho_ao_ao_asymm)
-      END IF
-      IF (ASSOCIATED(this%work_hmat_symm)) THEN
-         DO ivec = 1, SIZE(this%work_hmat_symm)
-            CALL dbcsr_deallocate_matrix(this%work_hmat_symm(ivec)%matrix)
-         END DO
-         DEALLOCATE (this%work_hmat_symm)
-      END IF
-      IF (ASSOCIATED(this%work_hmat_asymm)) THEN
-         DO ivec = 1, SIZE(this%work_hmat_asymm)
-            CALL dbcsr_deallocate_matrix(this%work_hmat_asymm(ivec)%matrix)
-         END DO
-         DEALLOCATE (this%work_hmat_asymm)
-      END IF
-
-      !--------------------
-      ! DEALLOCATE  PW
-      !--------------------
-
-      CALL get_qs_env(qs_env=qs_env, &
-                      pw_env=pw_env)
-
-      CALL pw_env_get(pw_env, &
-                      auxbas_pw_pool=auxbas_pw_pool)
-
-      IF (ASSOCIATED(this%work_v_gspace)) THEN
-         CALL auxbas_pw_pool%give_back_pw(this%work_v_gspace)
-         DEALLOCATE (this%work_v_gspace)
-      END IF
-      IF (ASSOCIATED(this%work_v_rspace)) THEN
-         CALL auxbas_pw_pool%give_back_pw(this%work_v_rspace)
-         DEALLOCATE (this%work_v_rspace)
-      END IF
-
-      CALL timestop(handle)
-
-   END SUBROUTINE mrsf_deallocate
-
-! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param qs_env ...
-!> \param[input] tddft_env ...
-!> \param[in] gs_mos ...
-!> \param[in] log_unit ...
+!> \brief Generate initial guess vectors for MRSF-TDDFT with mixed reference configurations
+!> \param[inout] this      MRSF theory object
+!> \param[in]    qs_env    QuickStep environment
+!> \param[inout] tddft_env TDDFT environment
+!> \param[in]    gs_mos    ground state molecular orbitals
+!> \param[in]    log_unit  output unit for logging
 ! **************************************************************************************************
    SUBROUTINE mrsf_init_guess(this, qs_env, tddft_env, gs_mos, log_unit)
       CLASS(tddft_mrsf_type), INTENT(INOUT)              :: this
@@ -611,12 +513,9 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      qs_env = qs_env
-      CALL get_qs_env(qs_env, &
-                      matrix_ks=matrix_ks)
+      CALL get_qs_env(qs_env, matrix_ks=matrix_ks)
 
-      ! FOCK
-
+      ! Transform Fock matrices to MO basis
       DO ispin = 1, tddft_env%nSpins
          CALL copy_dbcsr_to_fm(matrix_ks(ispin)%matrix, this%fock(ispin))
          ! work1_ao_ao = gs_mos(1)%mos_full^T * this%fock
@@ -632,14 +531,12 @@ CONTAINS
                             0.0_dp, this%fock(ispin))
       END DO
 
-      ! --- focka_occ = F_alpha( occ , occ )  ------------------------------------
+      ! Extract Fock matrix blocks
       CALL cp_fm_to_fm_submat(this%fock(1), this%focka_noc_noc, &
                               nrow=tddft_env%nocca, ncol=tddft_env%nocca, &
                               s_firstrow=1, &
                               s_firstcol=1, &
                               t_firstrow=1, t_firstcol=1)
-
-      ! --- fockb_vir = F_beta( vir , vir )  ------------------------------------
       CALL cp_fm_to_fm_submat(this%fock(2), this%fockb_vir_vir, &
                               nrow=tddft_env%nvirb, &
                               ncol=tddft_env%nvirb, &
@@ -647,10 +544,11 @@ CONTAINS
                               s_firstcol=tddft_env%noccb + 1, &
                               t_firstrow=1, t_firstcol=1)
 
+      ! Print MRSF parameter information
       IF (log_unit > 0) THEN
-         WRITE (log_unit, '(/,T2,A)') "-------------------------------------------------------------------------------"
+         WRITE (log_unit, '(/,T2,A)') REPEAT("-", 79)
          WRITE (log_unit, '(T2,A)') "-                   MRSF-TDDFT Fitting Parameters                             -"
-         WRITE (log_unit, '(T2,A)') "-------------------------------------------------------------------------------"
+         WRITE (log_unit, '(T2,A)') REPEAT("-", 79)
          IF (tddft_env%do_hfx_cam) THEN
             WRITE (log_unit, '(T14,A,F6.3)') "Fraction of short-range HF exchange (alpha) ........", &
                this%spc(7, 1)
@@ -668,31 +566,38 @@ CONTAINS
          WRITE (log_unit, '(T31,A,T41,A,T51,A)') "CO-CO  |", "OV-OV  |", "CO-OV"
          WRITE (log_unit, '(T30,F6.3,A,T40,F6.3,A,T50,F6.3)') &
             ABS(this%spc(6, 1)), "  |", ABS(this%spc(5, 1)), "  |", ABS(this%spc(1, 1))
-         WRITE (log_unit, '(T2,A)') "-------------------------------------------------------------------------------"
+         WRITE (log_unit, '(T2,A)') REPEAT("-", 79)
          WRITE (log_unit, '(T2,A)') "- Legend: CO = Closed-shell Occupied, OV = Open-shell Virtual               -"
-         WRITE (log_unit, '(T2,A)') "-------------------------------------------------------------------------------"
+         WRITE (log_unit, '(T2,A)') REPEAT("-", 79)
       END IF
 
+      ! Create energy-ordered excitation list with MRSF modifications
       nStates_selected = gs_mos(1)%homo*(SIZE(gs_mos(2)%evals_full) - gs_mos(2)%homo)
 
       ALLOCATE (inds(nStates_selected))
       ALLOCATE (e_virt_m_occ(nStates_selected))
 
-      lr1 = tddft_env%noccb + 1
-      lr2 = tddft_env%nocca
+      lr1 = tddft_env%noccb + 1   ! lowest singly occupied
+      lr2 = tddft_env%nocca       ! highest singly occupied
       do_triplets = tddft_env%response_type == 3
+
+      ! Compute excitation energies with MRSF-specific modifications
       istate = 0
       DO imo_virt = gs_mos(2)%homo + 1, SIZE(gs_mos(2)%evals_full)
          DO imo_occ = 1, gs_mos(1)%homo
             istate = (imo_virt - gs_mos(2)%homo - 1)*gs_mos(1)%homo + imo_occ
+
+            ! Special handling for critical lr1-lr1 transition
             IF (imo_occ == lr1 .AND. imo_virt == lr1) THEN
                tddft_env%e_virt_minus_occ(istate) = (gs_mos(2)%evals_full(lr1) - gs_mos(1)%evals_full(lr1) &
                                                      + gs_mos(2)%evals_full(lr2) - gs_mos(1)%evals_full(lr2))*0.5_dp
                CYCLE
             END IF
 
+            ! Standard orbital energy difference
             tddft_env%e_virt_minus_occ(istate) = gs_mos(2)%evals_full(imo_virt) - gs_mos(1)%evals_full(imo_occ)
 
+            ! Exclude problematic transitions to maintain MRSF purity
             IF (imo_occ == lr2 .AND. imo_virt == lr2) THEN
                tddft_env%e_virt_minus_occ(istate) = HUGE(1.0_dp)
             ELSE IF (do_triplets .AND. imo_occ == lr2 .AND. imo_virt == lr1) THEN
@@ -705,6 +610,7 @@ CONTAINS
 
       e_virt_m_occ(1:nStates_selected) = tddft_env%e_virt_minus_occ(1:nStates_selected)
 
+      ! Sort excitations by energy
       CALL sort(e_virt_m_occ, nStates_selected, inds)
 
       IF (log_unit > 0) THEN
@@ -717,6 +623,7 @@ CONTAINS
          WRITE (log_unit, '(1X,79("-"))')
       END IF
 
+      ! Set up initial guess vectors
       DO istate = 1, tddft_env%nVec
          tddft_env%evals(istate) = e_virt_m_occ(istate)
          istate_orig = inds(istate)
@@ -743,11 +650,13 @@ CONTAINS
    END SUBROUTINE mrsf_init_guess
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param[inout] tddft_env ...
-!> \param[in] gs_mos ...
-!> \param[in] ivec ...
+!> \brief Transform MRSF trial vectors from MO to AO basis with multi-reference expansion
+!> \param[inout] this      MRSF theory object
+!> \param[inout] tddft_env TDDFT environment
+!> \param[in]    gs_mos    ground state molecular orbitals
+!> \param[in]    ivec      index of vector to transform
+!> \details Complex multi-reference transformation handling different coupling types and
+!>          reference configurations. Creates multiple AO matrices for different excitation types.
 ! **************************************************************************************************
    SUBROUTINE mrsf_mo_to_ao(this, tddft_env, gs_mos, ivec)
       CLASS(tddft_mrsf_type), INTENT(INOUT)              :: this
@@ -764,35 +673,38 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      ! Extract dimensions from tddft_env
+      ! Extract system dimensions
       nbf = tddft_env%nbf
       nocca = tddft_env%nocca
       noccb = tddft_env%noccb
       nvira = tddft_env%nvira  ! nvira = nbf - nocca
       nvirb = tddft_env%nvirb  ! nvirb = nbf - noccb
 
-      ! Define indices
-      lr1 = nocca - 1
-      lr2 = nocca
+      ! Define critical orbital indices and shift parameter
+      lr1 = nocca - 1  ! lowest singly occupied
+      lr2 = nocca      ! highest singly occupied
       shift = nocca - noccb
 
-      ! Assign pointers from tddft_env%evects_ao_ao [nbf, nbf]
-      ! bo2v => this%evects_ao_ao(1)
-      ! bo1v => this%evects_ao_ao(2)
-      ! bco1 => this%evects_ao_ao(3)
-      ! bco2 => this%evects_ao_ao(4)
-      ! o21v => this%evects_ao_ao(5)
-      ! co12 => this%evects_ao_ao(6)
-      ! ball => this%evects_ao_ao(7)
+      ! Initialize all AO transformation matrices
+      DO i = 1, 7
+         CALL cp_fm_set_all(this%evects_ao_ao(i), 0.0_dp)
+      END DO
 
-      ! transform needed row to coulumn, not a transpose.
+      ! Transform various excitation types to AO basis
+      ! The implementation creates different AO matrices for:
+      ! evects_ao_ao(1) - bo2v: closed-shell occupied to open-shell virtual (type 1)
+      ! evects_ao_ao(2) - bo1v: closed-shell occupied to open-shell virtual (type 2)
+      ! evects_ao_ao(3) - bco1: open-shell configurations (type 1)
+      ! evects_ao_ao(4) - bco2: open-shell configurations (type 2)
+      ! evects_ao_ao(5) - o21v: cross-coupling terms
+      ! evects_ao_ao(6) - co12: cross-coupling terms
+      ! evects_ao_ao(7) - ball: combined transformation
+
+      ! Dev note, transform needed row to coulumn, not a transpose.
       ! nocca = noccb + 2
       ! noccb = nocca - 2
       ! nvira = nvirb - 2
       ! nvirb = nvira + 2
-      DO i = 1, 7
-         CALL cp_fm_set_all(this%evects_ao_ao(i), 0.0_dp)
-      END DO
 
       ! work[1:nvira, 1] => X(1:nocca, 1:nvirb) [lr2, 1+shift:nvirb]
       CALL cp_fm_set_all(this%work_vira_1, 0.0_dp)
@@ -896,7 +808,7 @@ CONTAINS
                          1.0_dp, this%evects_ao_ao(6), & ! co12
                          a_first_col=lr1)
 
-      ! Sum
+      ! Sum first four components into combined matrix
       DO i = 1, 4 ! ball += bo2v + bo1v + bco1 + bco2
          CALL cp_fm_scale_and_add( &
             alpha=1.0_dp, matrix_a=this%evects_ao_ao(7), &
@@ -923,8 +835,9 @@ CONTAINS
                                  this%work_ao_nocb, &    ! tmp
                          1.0_dp, this%evects_ao_ao(7))   ! ball
 
+      ! Apply theory-specific modifications for singlet/triplet states
       SELECT CASE (tddft_env%response_type)
-      CASE (2) ! MRSF-S
+      CASE (2) ! MRSF-S: Singlet states
          ! val = X(1:nbf,1:nbf)[lr2, lr1] or
          ! val = X(1:nocca,1:nvirb)[lr2, 1(lr1)]
          CALL cp_fm_get_element(tddft_env%evects_mo(ivec), lr2, 1, val)
@@ -966,7 +879,8 @@ CONTAINS
                             1.0_dp, this%evects_ao_ao(7), &
                             a_first_col=lr2, &
                             b_first_col=lr2)
-      CASE (3) ! MRSF-T
+
+      CASE (3) ! MRSF-T: Triplet states
          ! val = X(1:nbf,1:nbf)[lr1, lr1]/sqrt(2.0) or
          ! val = X(1:nocca,1:nvirb)[lr1, 1(lr1)]/sqrt(2.0)
          CALL cp_fm_get_element(tddft_env%evects_mo(ivec), lr1, 1, val)
@@ -992,11 +906,13 @@ CONTAINS
    END SUBROUTINE mrsf_mo_to_ao
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param[inout] this ...
-!> \param qs_env ...
-!> \param[inout] tddft_env ...
-!> \param[in] tddfpt_control ...
+!> \brief Apply MRSF-TDDFT operators
+!> \param[inout] this            MRSF theory object
+!> \param[in]    qs_env          QuickStep environment
+!> \param[inout] tddft_env       TDDFT environment
+!> \param[in]    tddfpt_control  TDDFPT control parameters
+!> \details Applies HFX and Coulomb operators with theory-specific coupling parameters for
+!>          different excitation types. Each coupling type uses different scaling factors.
 ! **************************************************************************************************
    SUBROUTINE mrsf_apply(this, qs_env, tddft_env, tddfpt_control)
       CLASS(tddft_mrsf_type), INTENT(INOUT)              :: this
@@ -1031,7 +947,9 @@ CONTAINS
       ! ERI contraction: Sigma = ERI * X [DBCSR type]
       !-----------------------------------------------
       IF (tddfpt_control%do_hfx) THEN
+         ! Loop over different coupling types (6+1 total)
          DO imat = 1, 7
+            ! Check if coupling parameter is non-zero
             IF (tddft_env%do_hfx_cam) THEN
                IF (ABS(this%spc(imat, 1)) < threshold .AND. &
                    ABS(this%spc(imat, 2)) < threshold) CYCLE
@@ -1039,6 +957,7 @@ CONTAINS
                IF (ABS(this%spc(imat, 1)) < threshold) CYCLE
             END IF
 
+            ! Set HFX scaling parameters for this coupling type
             IF (tddft_env%do_hfx_cam) THEN
                DO i_rep = 1, n_rep_hf
                   DO i_thread = 1, SIZE(hfx_data, 2)
@@ -1856,6 +1775,116 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE mrsf_print
+
+! **************************************************************************************************
+!> \brief ...
+!> \param[inout] this ...
+!> \param qs_env ...
+! **************************************************************************************************
+   SUBROUTINE mrsf_deallocate(this, qs_env)
+      CLASS(tddft_mrsf_type), INTENT(INOUT)              :: this
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'mrsf_deallocate'
+
+      TYPE(pw_env_type), POINTER                         :: pw_env
+      TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
+      INTEGER                                            :: handle, ivec
+
+      CALL timeset(routineN, handle)
+
+      !--------------------
+      ! DEALLOCATE  DP
+      !--------------------
+
+      IF (ALLOCATED(this%spc)) THEN
+         DEALLOCATE (this%spc)
+      END IF
+
+      !--------------------
+      ! DEALLOCATE  FM
+      !--------------------
+      CALL deallocate_fm_matrix(this%hmat_ao_ao)
+      CALL deallocate_fm_matrix(this%evects_ao_ao)
+      CALL deallocate_fm_matrix(this%fock)
+      CALL deallocate_fm_matrix(this%focka_noc_noc)
+      CALL deallocate_fm_matrix(this%fockb_vir_vir)
+      CALL deallocate_fm_matrix(this%work_ao_vir)
+      CALL deallocate_fm_matrix(this%work_noc_ao)
+      CALL deallocate_fm_matrix(this%work_noc_noc)
+      CALL deallocate_fm_matrix(this%work_ao_noc)
+      CALL deallocate_fm_matrix(this%work_vir_vir)
+      CALL deallocate_fm_matrix(this%work_noc_vir)
+      CALL deallocate_fm_matrix(this%work2_noc_vir)
+      CALL deallocate_fm_matrix(this%work1_ao_ao)
+      CALL deallocate_fm_matrix(this%work2_ao_ao)
+      CALL deallocate_fm_matrix(this%work1_ao_1)
+      CALL deallocate_fm_matrix(this%work2_ao_1)
+      CALL deallocate_fm_matrix(this%work_vira_1)
+      CALL deallocate_fm_matrix(this%work_nocb_1)
+      CALL deallocate_fm_matrix(this%work_nocb_vira)
+      CALL deallocate_fm_matrix(this%work_ao_nocb)
+      CALL deallocate_fm_matrix(this%rho_fm_ao)
+      CALL deallocate_fm_matrix(this%dipoles_mo)
+
+      !--------------------
+      ! DEALLOCATE  DBCSR
+      !--------------------
+
+      IF (ASSOCIATED(this%A_ia_munu_sub)) THEN
+         DO ivec = 1, SIZE(this%A_ia_munu_sub)
+            CALL dbcsr_deallocate_matrix(this%A_ia_munu_sub(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%A_ia_munu_sub)
+      END IF
+
+      IF (ASSOCIATED(this%work_rho_ao_ao_symm)) THEN
+         DO ivec = 1, SIZE(this%work_rho_ao_ao_symm)
+            CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_symm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_rho_ao_ao_symm)
+      END IF
+      IF (ASSOCIATED(this%work_rho_ao_ao_asymm)) THEN
+         DO ivec = 1, SIZE(this%work_rho_ao_ao_asymm)
+            CALL dbcsr_deallocate_matrix(this%work_rho_ao_ao_asymm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_rho_ao_ao_asymm)
+      END IF
+      IF (ASSOCIATED(this%work_hmat_symm)) THEN
+         DO ivec = 1, SIZE(this%work_hmat_symm)
+            CALL dbcsr_deallocate_matrix(this%work_hmat_symm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_hmat_symm)
+      END IF
+      IF (ASSOCIATED(this%work_hmat_asymm)) THEN
+         DO ivec = 1, SIZE(this%work_hmat_asymm)
+            CALL dbcsr_deallocate_matrix(this%work_hmat_asymm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_hmat_asymm)
+      END IF
+
+      !--------------------
+      ! DEALLOCATE  PW
+      !--------------------
+
+      CALL get_qs_env(qs_env=qs_env, &
+                      pw_env=pw_env)
+
+      CALL pw_env_get(pw_env, &
+                      auxbas_pw_pool=auxbas_pw_pool)
+
+      IF (ASSOCIATED(this%work_v_gspace)) THEN
+         CALL auxbas_pw_pool%give_back_pw(this%work_v_gspace)
+         DEALLOCATE (this%work_v_gspace)
+      END IF
+      IF (ASSOCIATED(this%work_v_rspace)) THEN
+         CALL auxbas_pw_pool%give_back_pw(this%work_v_rspace)
+         DEALLOCATE (this%work_v_rspace)
+      END IF
+
+      CALL timestop(handle)
+
+   END SUBROUTINE mrsf_deallocate
 
 ! **************************************************************************************************
 !> \brief ...
