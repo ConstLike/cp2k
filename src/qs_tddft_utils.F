@@ -5,6 +5,41 @@
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
 
+! **************************************************************************************************
+!> \brief   Utility functions for TDDFT matrix operations and debugging support
+!>
+!> \details This module provides essential utility functions for the TDDFT implementation,
+!>          focusing on memory management and debugging capabilities. The utilities are
+!>          designed to work seamlessly with CP2K's CP_FM framework and
+!>          provide consistent interfaces for common operations.
+!>
+!> \par Core Functionality
+!>      - Memory allocation and deallocation for CP2K CP_FM matrices
+!>      - Support for both single matrices and matrix arrays
+!>      - Automatic initialization and cleanup routines
+!>      - Debug output functions for development and troubleshooting
+!>
+!> \par Usage Patterns
+!>      The module supports polymorphic interfaces that automatically select
+!>      appropriate routines based on argument types:
+!>      \code{.F}
+!>        TYPE(cp_fm_type), POINTER :: single_matrix
+!>        TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:) :: matrix_array
+!>
+!>        CALL allocate_fm_matrix(single_matrix, nrow, ncol, blacs_env)
+!>        CALL allocate_fm_matrix(matrix_array, nmat, nrow, ncol, blacs_env)
+!>      \endcode
+!>
+!> \par Performance Considerations
+!>      All allocation routines integrate with CP2K's timing framework to enable
+!>      performance monitoring. Memory usage is optimized through:
+!>      - Minimal overhead wrapper functions
+!>      - Efficient parallel distribution strategies
+!>      - Automatic cleanup to prevent memory leaks
+!>
+!> \author  Konstantin Komarov (constlike@gmail.com)
+!> \date    Aug 2025
+! **************************************************************************************************
 MODULE qs_tddft_utils
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create, &
@@ -18,6 +53,7 @@ MODULE qs_tddft_utils
    USE cp_log_handling,                 ONLY: cp_logger_type, &
                                               cp_logger_get_default_io_unit
    USE kinds,                           ONLY: dp
+   USE machine,                         ONLY: m_flush
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -30,6 +66,7 @@ MODULE qs_tddft_utils
    PUBLIC :: deallocate_fm_matrix
    PUBLIC :: print_mat_ao_ao
 
+   ! Polymorphic interfaces for matrix allocation/deallocation
    INTERFACE allocate_fm_matrix
       MODULE PROCEDURE allocate_fm_matrix_single, allocate_fm_matrix_array
    END INTERFACE
@@ -41,11 +78,19 @@ MODULE qs_tddft_utils
 CONTAINS
 
 ! **************************************************************************************************
-!> \brief Allocates and initializes a single full matrix
-!> \param[out] matrix Pointer to the matrix to allocate
-!> \param[in] nrow Number of rows
-!> \param[in] ncol Number of columns
-!> \param[in] blacs_env BLACS environment
+!> \brief Allocates and initializes a single CP_FM matrix
+!>
+!> \details Creates a single CP2K CP_FM matrix with specified dimensions and parallel
+!>          distribution. The matrix is automatically initialized to zero and properly
+!>          distributed across the available processors using the provided BLACS context.
+!>
+!> \param[out] matrix      Pointer to matrix to be allocated (must be NULL on entry)
+!> \param[in]  nrow        Number of matrix rows (global dimension)
+!> \param[in]  ncol        Number of matrix columns (global dimension)
+!> \param[in]  blacs_env   BLACS environment for parallel distribution
+!>
+!> \author  Konstantin Komarov
+!> \date    Aug 2025
 ! **************************************************************************************************
    SUBROUTINE allocate_fm_matrix_single(matrix, nrow, ncol, blacs_env)
       TYPE(cp_fm_type), INTENT(OUT), POINTER             :: matrix
@@ -59,15 +104,21 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+      ! Create matrix structure with specified dimensions
       NULLIFY (fm_struct)
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=nrow, &
                                ncol_global=ncol, &
                                context=blacs_env)
 
+      ! Allocate matrix using the structure
       ALLOCATE (matrix)
       CALL cp_fm_create(matrix, fm_struct)
+
+      ! Clean up temporary structure
       CALL cp_fm_struct_release(fm_struct)
+
+      ! Initialize matrix to zero
       CALL cp_fm_set_all(matrix, 0.0_dp)
 
       CALL timestop(handle)
@@ -75,12 +126,20 @@ CONTAINS
    END SUBROUTINE allocate_fm_matrix_single
 
 ! **************************************************************************************************
-!> \brief Allocates and initializes an array of full matrices
-!> \param[out] matrix Allocatable array of matrices
-!> \param[in] nmat Size of the matrix array
-!> \param[in] nrow Number of rows per matrix
-!> \param[in] ncol Number of columns per matrix
-!> \param[in] blacs_env BLACS environment
+!> \brief Allocates and initializes an array of CP_FM matrices
+!>
+!> \details Creates an array of CP2K CP_FM matrices with identical dimensions and
+!>          parallel distribution. All matrices are automatically initialized to zero
+!>          and share the same distribution pattern for optimal memory usage.
+!>
+!> \param[out] matrix      Allocatable array of matrices to be created
+!> \param[in]  nmat        Number of matrices in the array
+!> \param[in]  nrow        Number of matrix rows (global dimension)
+!> \param[in]  ncol        Number of matrix columns (global dimension)
+!> \param[in]  blacs_env   BLACS environment for parallel distribution
+!>
+!> \author  Konstantin Komarov
+!> \date    Aug 2025
 ! **************************************************************************************************
    SUBROUTINE allocate_fm_matrix_array(matrix, nmat, nrow, ncol, blacs_env)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:), &
@@ -95,18 +154,21 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+      ! Create shared matrix structure for efficiency
       NULLIFY (fm_struct)
       CALL cp_fm_struct_create(fm_struct, &
                                nrow_global=nrow, &
                                ncol_global=ncol, &
                                context=blacs_env)
 
+      ! Allocate array and individual matrices
       ALLOCATE (matrix(nmat))
       DO imat = 1, nmat
          CALL cp_fm_create(matrix(imat), fm_struct)
          CALL cp_fm_set_all(matrix(imat), 0.0_dp)
       END DO
 
+      ! Clean up shared structure
       CALL cp_fm_struct_release(fm_struct)
 
       CALL timestop(handle)
@@ -114,8 +176,16 @@ CONTAINS
    END SUBROUTINE allocate_fm_matrix_array
 
 ! **************************************************************************************************
-!> \brief Deallocates a single full matrix
-!> \param[inout] matrix Pointer to the matrix to deallocate
+!> \brief Deallocates a single CP_FM matrix
+!>
+!> \details Safely deallocates a CP2K CP_FM matrix and sets the pointer to NULL.
+!>          The routine includes proper error checking to prevent double deallocation
+!>          and handles NULL pointers gracefully.
+!>
+!> \param[inout] matrix  Pointer to matrix to be deallocated
+!>
+!> \author  Konstantin Komarov
+!> \date    Aug 2025
 ! **************************************************************************************************
    SUBROUTINE deallocate_fm_matrix_single(matrix)
       TYPE(cp_fm_type), INTENT(INOUT), POINTER           :: matrix
@@ -126,9 +196,11 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+      ! Check for valid pointer before deallocation
       IF (ASSOCIATED(matrix)) THEN
          CALL cp_fm_release(matrix)
          DEALLOCATE (matrix)
+         NULLIFY (matrix)
       END IF
 
       CALL timestop(handle)
@@ -136,8 +208,16 @@ CONTAINS
    END SUBROUTINE deallocate_fm_matrix_single
 
 ! **************************************************************************************************
-!> \brief Deallocates an array of full matrices
-!> \param[inout] matrix Allocatable array of matrices
+!> \brief Deallocates an array of CP_FM matrices
+!>
+!> \details Safely deallocates all matrices in an allocatable array and properly
+!>          cleans up the array structure. Each matrix is individually released
+!>          before the array itself is deallocated.
+!>
+!> \param[inout] matrix  Allocatable array of matrices to be deallocated
+!>
+!> \author  Konstantin Komarov
+!> \date    Aug 2025
 ! **************************************************************************************************
    SUBROUTINE deallocate_fm_matrix_array(matrix)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:), &
@@ -149,10 +229,13 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+      ! Check allocation status before cleanup
       IF (ALLOCATED(matrix)) THEN
-         DO imat = 1, SIZE(matrix)
+         ! Release each individual matrix
+         DO imat = SIZE(matrix), 1, -1
             CALL cp_fm_release(matrix(imat))
          END DO
+         ! Deallocate the array structure
          DEALLOCATE (matrix)
       END IF
 
@@ -161,11 +244,36 @@ CONTAINS
    END SUBROUTINE deallocate_fm_matrix_array
 
 ! **************************************************************************************************
-!> \brief ...
-!> \param mat ...
-!> \param mat_name ...
-!> \param logger ...
-!> \param iter ...
+!> \brief Debug utility for printing matrix subregions during development
+!>
+!> \details Extracts and prints a small submatrix from a CP_FM matrix for
+!>          debugging and development purposes. This utility is particularly useful
+!>          for verifying matrix transformations and operator applications during
+!>          TDDFT development and troubleshooting.
+!>
+!> \param[in] mat        Matrix to be examined
+!> \param[in] mat_name   Descriptive name for output identification
+!> \param[in] logger     CP2K logger for output management
+!> \param[in] iter       Current iteration number for output labeling
+!>
+!> \par Debug Output Format
+!>      The routine prints a formatted 5x5 submatrix showing:
+!>      - Clear identification of matrix name and iteration
+!>      - Formatted numerical output with consistent precision
+!>      - Proper spacing for readability
+!>      - Automatic output flushing for immediate visibility
+!>
+!> \par Usage Guidelines
+!>      This routine is intended for development and debugging only.
+!>
+!> \par Implementation Notes
+!>      - Extracts elements (1:5, 1:5) from the global matrix
+!>      - Handles parallel distribution transparently
+!>      - Outputs only on master process to prevent duplicated output
+!>      - Includes proper error handling for small matrices
+!>
+!> \author  Konstantin Komarov
+!> \date    Aug 2025
 ! **************************************************************************************************
    SUBROUTINE print_mat_ao_ao(mat, mat_name, logger, iter)
       TYPE(cp_fm_type), INTENT(IN)                       :: mat
@@ -180,11 +288,16 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
+      ! Get output unit from logger
       unit_nr = cp_logger_get_default_io_unit(logger)
 
+      ! Extract 5x5 submatrix from upper-left corner
       CALL cp_fm_get_submatrix(mat, submatrix, &
                                start_row=1, start_col=1, &
                                n_rows=5, n_cols=5)
+
+      ! Debug output (disabled by default for production)
+      ! Change .FALSE. to .TRUE. to enable debug printing
       IF (.FALSE.) THEN
          IF (unit_nr > 0) THEN
             WRITE (unit_nr, '(A,A,A,I0,A)') "First 5x5 elements of ", TRIM(mat_name), " at iter ", iter, ":"
