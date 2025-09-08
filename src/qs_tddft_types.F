@@ -169,6 +169,8 @@ MODULE qs_tddft_types
 
       !> Number of atomic orbital basis functions
       INTEGER                                            :: nbf
+      !> Number of auxiliary atomic orbital basis functions (if ADMM)
+      INTEGER                                            :: nbf_aux
       !> Number of alpha occupied orbitals
       INTEGER                                            :: nocca
       !> Number of beta occupied orbitals
@@ -269,6 +271,8 @@ MODULE qs_tddft_types
 
       !> Flag indicating if Hartree-Fock exchange is included in the calculation
       LOGICAL                                            :: do_hfx
+      !> Flag indicating if ADMM is included in the calculation
+      LOGICAL                                            :: do_admm
       !> Flag for range-separated (CAM) hybrid functionals
       !> .TRUE. for functionals with separate short/long-range exchange treatment
       LOGICAL                                            :: do_hfx_cam

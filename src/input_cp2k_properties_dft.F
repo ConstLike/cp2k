@@ -1523,7 +1523,7 @@ CONTAINS
                           usage="MRSF COLLINEAR", &
                           enum_c_vals=s2a("NONE", "COLLINEAR", "NONCOLLINEAR"), &
                           enum_i_vals=(/no_mrsf, mrsf_col, mrsf_noncol/), &
-                          default_i_val=1)
+                          default_i_val=no_mrsf)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

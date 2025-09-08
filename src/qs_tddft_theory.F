@@ -131,27 +131,31 @@ MODULE qs_tddft_theory
 
       !> Hamiltonian matrices in AO basis [nmat]
       !> Store results of operator applications before MO transformation
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: hmat_ao_ao
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: hmat_nao_nao
 
       !> Trial vectors in AO basis [nmat]
       !> Temporary storage for AO representation of excitation vectors
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: evects_ao_ao
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: evects_nao_nao
 
       !----------------------------------------------------------------------
-      ! HFX kernel working arrays
+      ! HFX kernel working arrays (and ADMM)
       !----------------------------------------------------------------------
 
       !> Symmetric AO density matrices for HFX calculations [nSpins]
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_ao_ao_symm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_nao_nao_symm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_aux_aux_symm
 
       !> Antisymmetric AO density matrices for HFX calculations [nSpins]
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_ao_ao_asymm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_nao_nao_asymm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_aux_aux_asymm
 
       !> Symmetric Hamiltonian matrices from HFX kernel [nSpins]
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_symm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_aux_symm
 
       !> Antisymmetric Hamiltonian matrices from HFX kernel [nSpins]
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_asymm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_aux_asymm
 
       !----------------------------------------------------------------------
       ! Property calculation arrays

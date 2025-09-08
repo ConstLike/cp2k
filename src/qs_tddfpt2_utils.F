@@ -39,8 +39,7 @@ MODULE qs_tddfpt2_utils
                                               cp_logger_type
    USE input_constants,                 ONLY: &
         cholesky_dbcsr, cholesky_inverse, cholesky_off, cholesky_restore, oe_gllb, oe_lb, oe_none, &
-        oe_saop, oe_shift, no_sf_tddfpt, tddfpt_sf_col, tddfpt_sf_noncol, &
-        no_sf_tddft, tddft_sf_col, tddft_sf_noncol
+        oe_saop, oe_shift, no_sf_tddfpt,tddfpt_sf_col,tddfpt_sf_noncol
    USE input_section_types,             ONLY: section_vals_create,&
                                               section_vals_get,&
                                               section_vals_get_subs_vals,&
@@ -107,7 +106,7 @@ CONTAINS
 
       INTEGER                                            :: handle, ispin, nmo_avail, nmo_occ, &
                                                             nmo_virt, nspins
-      INTEGER, DIMENSION(2, 2)                           :: moc, mvt, mfc
+      INTEGER, DIMENSION(2, 2)                           :: moc, mvt, mfl
       LOGICAL                                            :: print_virtuals_newtonx
       REAL(kind=dp), DIMENSION(:), POINTER               :: evals_virt_spin
       TYPE(cell_type), POINTER                           :: cell
@@ -190,11 +189,11 @@ CONTAINS
 
       moc = 0
       mvt = 0
-      mfc = 0
+      mfl = 0
       DO ispin = 1, nspins
          CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, nrow_global=moc(1, ispin), ncol_global=moc(2, ispin))
          CALL cp_fm_get_info(gs_mos(ispin)%mos_virt, nrow_global=mvt(1, ispin), ncol_global=mvt(2, ispin))
-         CALL cp_fm_get_info(gs_mos(ispin)%mos_full, nrow_global=mfc(1, ispin), ncol_global=mfc(2, ispin))
+         CALL cp_fm_get_info(gs_mos(ispin)%mos_full, nrow_global=mfl(1, ispin), ncol_global=mfl(2, ispin))
       END DO
       IF (iounit > 0) THEN
          WRITE (iounit, "(T2,A,T36,A)") "TDDFPT| Molecular Orbitals:", &
@@ -770,7 +769,7 @@ CONTAINS
       nspins = SIZE(gs_mos)
 
       ! Total number of possible excitations for spin-conserving TDDFT
-      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
+      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN 
          DO ispin = 1, nspins
             nstates_total = nstates_total + &
                             SIZE(gs_mos(ispin)%evals_occ, kind=int_8)* &
@@ -1107,7 +1106,7 @@ CONTAINS
                END IF
             END IF
 
-            ! Recover index of occupied MO (imo_occ) and unoccupied MO (imo_virt)
+            ! Recover index of occupied MO (imo_occ) and unoccupied MO (imo_virt) 
             ! associated to the excited state index (ind+1)
             imo_occ = nmo_occ_avail(spin1) - ind/nmo_virt_selected(spin2)
             imo_virt = MOD(ind, nmo_virt_selected(spin2)) + 1

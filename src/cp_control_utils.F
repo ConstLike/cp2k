@@ -1659,7 +1659,8 @@ CONTAINS
       IF (t_control%enabled) THEN
          IF (t_control%sf_tddft==tddft_sf_col .or. t_control%mrsf_type==mrsf_col) THEN
             t_control%tddft_enabled = .TRUE.
-            t_control%enabled = .FALSE.
+            t_control%spinflip = 1
+!           t_control%enabled = .FALSE.
          END IF
       END IF
 

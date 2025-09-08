@@ -209,6 +209,7 @@ CONTAINS
                       cell=cell, &
                       dft_control=dft_control, &
                       matrix_ks=matrix_ks, &
+                      matrix_s=matrix_s, &
                       mos=mos, &
                       scf_env=scf_env)
       tddfpt_control => dft_control%tddfpt2_control
@@ -244,9 +245,9 @@ CONTAINS
 
       CALL tddfpt_header(log_unit)
       CALL kernel_info(log_unit, dft_control, tddfpt_control, xc_section)
-
       ! obtain occupied and virtual (unoccupied) ground-state Kohn-Sham orbitals
       NULLIFY (gs_mos)
+
       CALL tddfpt_init_mos(qs_env, gs_mos, log_unit)
 
       ! obtain smeared occupation numbers
@@ -272,7 +273,7 @@ CONTAINS
 
       nspins = SIZE(gs_mos)
       ! multiplicity of molecular system
-      IF (nspins > 1 .and. .not. do_sf) THEN
+      IF (nspins > 1) THEN
          mult = ABS(SIZE(gs_mos(1)%evals_occ) - SIZE(gs_mos(2)%evals_occ)) + 1
          IF (mult > 2) &
             CALL cp_warn(__LOCATION__, "There is a convergence issue for multiplicity >= 3")
@@ -519,7 +520,6 @@ CONTAINS
                                         "PROGRAM_BANNER")
 
       DEALLOCATE (evals, ostrength)
-
 
       IF (tddfpt_control%kernel == tddfpt_kernel_full) THEN
          IF (do_admm) CALL release_kernel_env(kernel_env%admm_kernel)
@@ -1178,7 +1178,7 @@ CONTAINS
       END IF
       ALLOCATE (ostrength(nstates))
       ostrength = 0.0_dp
-      CALL tddfpt_print_summary(log_unit, &
+      CALL tddfpt_print_summary(qs_env,log_unit, &
                                 evects, &
                                 evals, &
                                 ostrength, &

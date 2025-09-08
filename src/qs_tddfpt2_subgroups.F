@@ -175,7 +175,6 @@ CONTAINS
 !> \par History
 !>    * 01.2017 (sub)group-related code has been moved here from the main subroutine tddfpt()
 !>              [Sergey Chulkov]
-!>    * 04.2025 Added support for full orbital sets [Konstantin Komarov]
 ! **************************************************************************************************
    SUBROUTINE tddfpt_sub_env_init(sub_env, qs_env, mos_occ, kernel)
       TYPE(tddfpt_subgroup_env_type), INTENT(out)        :: sub_env
@@ -238,7 +237,6 @@ CONTAINS
          NULLIFY (fm_struct)
 
          DO ispin = 1, nspins
-            ! Handle occupied orbitals (mos_occ)
             CALL cp_fm_get_info(mos_occ(ispin), nrow_global=nao, ncol_global=nmo_occ)
             CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nmo_occ, context=sub_env%blacs_env)
             CALL cp_fm_create(sub_env%mos_occ(ispin), fm_struct)

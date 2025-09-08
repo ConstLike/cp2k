@@ -136,7 +136,7 @@ CONTAINS
       CLASS(tddft_theory_type), ALLOCATABLE              :: theory
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_ks_oep
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
-      CHARACTER(LEN=6), DIMENSION(3)                     :: theory_to_run
+      CHARACTER(LEN=6), DIMENSION(1)                     :: theory_to_run
       CHARACTER(LEN=6)                                   :: logo
       INTEGER                                            :: handle, i, log_unit
       LOGICAL                                            :: do_admm, do_exck, do_hfx, do_hfxlr, &
@@ -213,7 +213,8 @@ CONTAINS
 
       ! Define theories to execute
       ! TODO: Make this configurable via input
-      theory_to_run = ["    SF", "MRSF-S", "MRSF-T"]
+!     theory_to_run = ["    SF", "MRSF-S", "MRSF-T"]
+      theory_to_run = ["    SF"]
 
       ! Main theory loop - iterate over all requested theories
       DO i = 1, SIZE(theory_to_run)
