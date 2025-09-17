@@ -130,16 +130,16 @@ CONTAINS
 
     READ(iunit,'(A80)') cube%title1
     READ(iunit,'(A80)') cube%title2
-    READ(iunit,'(I5,3f12.6)') cube%Natom,cube%origin
-    READ(iunit,'(I5,3f12.6)') cube%npoints(1), cube%dh(1,1), cube%dh(2,1),cube%dh(3,1)
+    READ(iunit,'(I5,3f23.17)') cube%Natom,cube%origin
+    READ(iunit,'(I5,3f23.17)') cube%npoints(1), cube%dh(1,1), cube%dh(2,1),cube%dh(3,1)
     cube%h(1,1) = cube%npoints(1)*cube%dh(1,1)
     cube%h(2,1) = cube%npoints(1)*cube%dh(2,1)
     cube%h(3,1) = cube%npoints(1)*cube%dh(3,1)
-    READ(iunit,'(I5,3f12.6)') cube%npoints(2), cube%dh(1,2), cube%dh(2,2),cube%dh(3,2)
+    READ(iunit,'(I5,3f23.17)') cube%npoints(2), cube%dh(1,2), cube%dh(2,2),cube%dh(3,2)
     cube%h(1,2) = cube%npoints(2)*cube%dh(1,2)
     cube%h(2,2) = cube%npoints(2)*cube%dh(2,2)
     cube%h(3,2) = cube%npoints(2)*cube%dh(3,2)
-    READ(iunit,'(I5,3f12.6)') cube%npoints(3), cube%dh(1,3), cube%dh(2,3),cube%dh(3,3)
+    READ(iunit,'(I5,3f23.17)') cube%npoints(3), cube%dh(1,3), cube%dh(2,3),cube%dh(3,3)
     cube%h(1,3) = cube%npoints(3)*cube%dh(1,3)
     cube%h(2,3) = cube%npoints(3)*cube%dh(2,3)
     cube%h(3,3) = cube%npoints(3)*cube%dh(3,3)
@@ -150,11 +150,11 @@ CONTAINS
     ALLOCATE(cube%grid(cube%npoints(1),cube%npoints(2),cube%npoints(3)))
 
     DO I1=1,cube%Natom
-       READ(iunit,'(I5,4f12.6)') cube%Zatom(I1),cube%auxfield(I1),cube%coords(:,I1)
+       READ(iunit,'(I5,4f23.17)') cube%Zatom(I1),cube%auxfield(I1),cube%coords(:,I1)
     ENDDO
     DO I1=1,cube%npoints(1)
        DO I2=1,cube%npoints(2)
-        READ(iunit,'(6E13.5)') (cube%grid(I1,I2,I3),I3=1,cube%npoints(3))
+        READ(iunit,'(6E22.12)') (cube%grid(I1,I2,I3),I3=1,cube%npoints(3))
        ENDDO
     ENDDO
   END SUBROUTINE read_cube
@@ -366,10 +366,10 @@ MODULE command_line_tools
     CHARACTER(LEN=200) :: cube_name_subtract
     CHARACTER(LEN=200) :: cube_name_espot
     CHARACTER(LEN=200) :: xyz_name
-    LOGICAL :: do_xyz, do_center, do_fold, do_foldsmart,do_center_atom,do_center_geo, do_center_point
+    LOGICAL :: do_xyz, do_center, do_decenter, do_fold, do_foldsmart, do_center_atom
     LOGICAL :: have_input, have_output, write_help, write_version, do_subtract
     LOGICAL :: do_iso, do_slice, do_1d_profile, espot_over_iso, iso_current, have_espot_cube
-    LOGICAL :: from_top, check_atom_from_down
+    LOGICAL :: from_top, check_atom_from_down, do_center_geo, do_center_point
     INTEGER :: atom_center, stride, cube, index_profile
     REAL(KIND=dp)    :: center_point(3), slice(3), iso_level(3), iso_hmin, iso_hmax, delta_profile,&
                 mult_fact, iso_delta_grid, bwidth
@@ -383,6 +383,7 @@ CONTAINS
     ! some defaults
     input%do_xyz=.FALSE.
     input%do_center=.FALSE.
+    input%do_decenter=.FALSE.
     input%do_center_atom=.FALSE.
     input%do_center_geo=.FALSE.
     input%do_center_point=.FALSE.
@@ -428,10 +429,11 @@ CONTAINS
       write(6,'(A80)') " -xyz coords.xyz         : merge in a xyz coordinate file                      "
       write(6,'(A80)') "                              (e.g. for VMD usage)                             "
       write(6,'(A80)') " -subtract min.cube      : subtract min.cube from input.cube                   "
-      write(6,'(A80)') " -center {#|geo|point}   : #=1..Natom center the cube around atom #            "
+      write(6,'(A80)') " -center {#|geo|cp2k|point}: #=1..Natom center the cube around atom #            "
       write(6,'(A80)') "                           geo        center the cube so that the cell         "
       write(6,'(A80)') "                              boundaries are as far as possible from the       "
       write(6,'(A80)') "                              molecule                                         "
+      write(6,'(A80)') "                           cp2k       decenter to cp2k style cube file         "
       write(6,'(A80)') "                           point      center around a fixed point              "
       write(6,'(A80)') " -fold                   : fold atoms inside the box defined by the cube       "
       write(6,'(A80)') " -point x y z            : coordinates of the center point                     "
@@ -496,6 +498,9 @@ CONTAINS
         CASE("geo")
             input%do_center_geo=.TRUE.
             WRITE(6,*) "Centering around the geometric center "
+        CASE("cp2k")
+            input%do_decenter = .TRUE.
+            WRITE(6,*) "Decentering cube for CP2K alignment"
         CASE("point")
             input%do_center_point=.TRUE.
             WRITE(6,*) "Centering around a given point center "
@@ -1171,9 +1176,75 @@ CONTAINS
 
   END SUBROUTINE compute_iso_surf
 
+!-------------------------------------------------------------------------------
+! decenter the cube to align origin near (0,0,0) for CP2K compatibility
+! Assumes input cube is centered; shifts by +npoints/2 grid points (average two shifts for smoothing, especially odd n)
+! This will split a centered sphere into 8 quarters at corners (periodic wrap)
+!-------------------------------------------------------------------------------
+  SUBROUTINE decenter_cube(cube)
+    TYPE(cube_type), POINTER :: cube
+
+    INTEGER                  :: I1,I2,I3,O1,O2,O3
+    INTEGER, DIMENSION(3)    :: C1, C2
+    REAL(KIND=dp) :: h(3,3)
+    REAL(KIND=dp), DIMENSION(:,:,:), POINTER :: grid, grid1, grid2
+    ALLOCATE(grid(cube%npoints(1),cube%npoints(2),cube%npoints(3)))
+    ALLOCATE(grid1(cube%npoints(1),cube%npoints(2),cube%npoints(3)))
+    ALLOCATE(grid2(cube%npoints(1),cube%npoints(2),cube%npoints(3)))
+
+    ! h = dh (step matrix)
+    h = cube%dh
+
+    ! Shift vectors: C1 = n//2, C2 = n//2 -1 (for averaging like in Python for smooth on odd n)
+    C1 = cube%npoints / 2
+    C2 = C1 - 1
+
+    ! Debug prints
+    write(6,*) "Original origin: ", cube%origin
+    write(6,*) "Shift C1 (n//2): ", C1
+    write(6,*) "Shift C2 (n//2 -1): ", C2
+
+    ! Compute grid1 with +C1 shift (positive shift: data moves 'right', center to edge)
+    DO I3=1,cube%npoints(3)
+      O3 = MODULO(I3 - 1 + C1(3), cube%npoints(3)) + 1
+      DO I2=1,cube%npoints(2)
+        O2 = MODULO(I2 - 1 + C1(2), cube%npoints(2)) + 1
+        DO I1=1,cube%npoints(1)
+          O1 = MODULO(I1 - 1 + C1(1), cube%npoints(1)) + 1
+          grid1(I1,I2,I3) = cube%grid(O1,O2,O3)
+        ENDDO
+      ENDDO
+    ENDDO
+
+    ! Compute grid2 with +C2 shift
+    DO I3=1,cube%npoints(3)
+      O3 = MODULO(I3 - 1 + C2(3), cube%npoints(3)) + 1
+      DO I2=1,cube%npoints(2)
+        O2 = MODULO(I2 - 1 + C2(2), cube%npoints(2)) + 1
+        DO I1=1,cube%npoints(1)
+          O1 = MODULO(I1 - 1 + C2(1), cube%npoints(1)) + 1
+          grid2(I1,I2,I3) = cube%grid(O1,O2,O3)
+        ENDDO
+      ENDDO
+    ENDDO
+
+    ! Average the two grids for smooth (handles odd n as (N + N-1)/2 effective)
+    grid = 0.5_dp * (grid1 + grid2)
+
+    ! Update origin using C1 (main shift; average would be C1 - 0.5, but use C1 for integer grid alignment)
+    cube%origin(1) = cube%origin(1) + C1(1)*h(1,1) + C1(2)*h(1,2) + C1(3)*h(1,3)
+    cube%origin(2) = cube%origin(2) + C1(1)*h(2,1) + C1(2)*h(2,2) + C1(3)*h(2,3)
+    cube%origin(3) = cube%origin(3) + C1(1)*h(3,1) + C1(2)*h(3,2) + C1(3)*h(3,3)
+
+    cube%grid = grid
+    DEALLOCATE(grid1, grid2, grid)
+
+    ! Debug print after update
+    write(6,*) "New origin after decenter: ", cube%origin
+
+  END SUBROUTINE decenter_cube
 
 END MODULE cube_post_process
-
 
 PROGRAM main
    USE cubecruncher
@@ -1264,6 +1335,12 @@ PROGRAM main
         OPEN(iunit_xyz,FILE=TRIM(input%xyz_name))
         CALL read_xyz(cube,iunit_xyz)
         CLOSE(iunit_xyz)
+        write(6,*) "Done"
+     ENDIF
+
+     IF (input%do_decenter) THEN
+        write(6,FMT='(A)',ADVANCE="No") "Decentering cube for CP2K ... "
+        CALL decenter_cube(cube)
         write(6,*) "Done"
      ENDIF
 
