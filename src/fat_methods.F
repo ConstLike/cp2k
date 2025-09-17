@@ -1,3 +1,10 @@
+!--------------------------------------------------------------------------------------------------!
+!   CP2K: A general program to perform molecular dynamics simulations                              !
+!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!                                                                                                  !
+!   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
+!--------------------------------------------------------------------------------------------------!
+
 MODULE fat_methods
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind,&
@@ -82,7 +89,7 @@ MODULE fat_methods
 
    PUBLIC :: fat_embedding
 
-   LOGICAL, PRIVATE, PARAMETER :: is_debug = .True.
+   LOGICAL, PRIVATE, PARAMETER :: is_debug = .FALSE.
 
    INTEGER, SAVE :: log_counter = 0
 
@@ -558,7 +565,7 @@ CONTAINS
 
       IF (log_counter > 6) RETURN
 
-      PRINT *, "KKK| write CUBE file number:", filename
+      PRINT *, "DBG| write CUBE file number:", filename
 
       IF (PRESENT(pw_r)) THEN
          IF (unit_nr > 0) THEN
@@ -725,28 +732,28 @@ CONTAINS
          PRINT *, "KKK|   Max G^2:               ", MAXVAL(grid%gsq)
       END IF
 
-#if defined(__parallel)
-      PRINT *, "KKK|  MPI Information:"
-      PRINT *, "KKK|   MPI Mode:               ", MERGE("DISTRIBUTED", &
-                                                        "LOCAL      ", &
-                                                         grid%para%mode == PW_MODE_DISTRIBUTED)
-      PRINT *, "KKK|   MPI Group Handle:       ", grid%para%group%get_handle()
-      PRINT *, "KKK|   MPI Group Size:         ", grid%para%group_size
-      PRINT *, "KKK|   MPI Position:           ", grid%para%my_pos
-      PRINT *, "KKK|   MPI Dims:               ", grid%para%rs_dims
-      PRINT *, "KKK|   MPI Ray Distribution:   ", grid%para%ray_distribution
-      PRINT *, "KKK|   MPI Blocked:            ", grid%para%blocked
-      PRINT *, "KKK|   MPI Task Rank:          ", grid%para%rs_dims
-      PRINT *, "KKK|   Real Space Group:       ", grid%para%rs_group%get_handle()
-      PRINT *, "KKK|   Real Space Position:    ", grid%para%rs_pos
-      PRINT *, "KKK|   Real Space MPO:         ", grid%para%rs_mpo
-      PRINT *, "KKK|   Has Bounds Array:       ", ALLOCATED(grid%para%bo)
-      IF (ALLOCATED(grid%para%bo)) THEN
-         PRINT *, "KKK|   Bounds Array Shape:     ", SHAPE(grid%para%bo)
-      END IF
-      PRINT *, "KKK|   Has YZ Ray Array:       ", ALLOCATED(grid%para%yzp)
-      PRINT *, "KKK|   Has YZ Count Array:     ", ALLOCATED(grid%para%nyzray)
-#endif
+!#if defined(__parallel)
+!      PRINT *, "KKK|  MPI Information:"
+!      PRINT *, "KKK|   MPI Mode:               ", MERGE("DISTRIBUTED", &
+!                                                        "LOCAL      ", &
+!                                                         grid%para%mode == PW_MODE_DISTRIBUTED)
+!      PRINT *, "KKK|   MPI Group Handle:       ", grid%para%group%get_handle()
+!      PRINT *, "KKK|   MPI Group Size:         ", grid%para%group_size
+!      PRINT *, "KKK|   MPI Position:           ", grid%para%my_pos
+!      PRINT *, "KKK|   MPI Dims:               ", grid%para%rs_dims
+!      PRINT *, "KKK|   MPI Ray Distribution:   ", grid%para%ray_distribution
+!      PRINT *, "KKK|   MPI Blocked:            ", grid%para%blocked
+!      PRINT *, "KKK|   MPI Task Rank:          ", grid%para%rs_dims
+!      PRINT *, "KKK|   Real Space Group:       ", grid%para%rs_group%get_handle()
+!      PRINT *, "KKK|   Real Space Position:    ", grid%para%rs_pos
+!      PRINT *, "KKK|   Real Space MPO:         ", grid%para%rs_mpo
+!      PRINT *, "KKK|   Has Bounds Array:       ", ALLOCATED(grid%para%bo)
+!      IF (ALLOCATED(grid%para%bo)) THEN
+!         PRINT *, "KKK|   Bounds Array Shape:     ", SHAPE(grid%para%bo)
+!      END IF
+!      PRINT *, "KKK|   Has YZ Ray Array:       ", ALLOCATED(grid%para%yzp)
+!      PRINT *, "KKK|   Has YZ Count Array:     ", ALLOCATED(grid%para%nyzray)
+!#endif
    END SUBROUTINE print_pw_statistics
 
 ! **************************************************************************************************
@@ -798,7 +805,7 @@ CONTAINS
 
       qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
       CALL calculate_ppl_grid(v_ppl, qs_env, do_erf_term=.TRUE.)
-      IF (is_debug) CALL print_pw_statistics(v_ppl, "v_ppl", i_frag)
+!     IF (is_debug) CALL print_pw_statistics(v_ppl, "v_ppl", i_frag)
 
       CALL timestop(handle)
 
@@ -1328,6 +1335,7 @@ CONTAINS
       INTEGER                                            :: handle, output_unit
       INTEGER, POINTER                                   :: stride(:)
       TYPE(cp_logger_type), POINTER                      :: logger
+      CHARACTER(len=50)                                  :: filename
 
       CALL timeset(routineN, handle)
 
@@ -1342,7 +1350,7 @@ CONTAINS
       ! Open file only on the master process
       IF (fat_env%force_env_ref%para_env%is_source()) THEN
          CALL integer_to_string(i_frag, label)
-         CALL open_file(file_name="vemb_"//TRIM(label)//".dat", &
+         CALL open_file(file_name="vemb-cp2k_"//TRIM(label)//".dat", &
                         file_status="REPLACE", &
                         file_action="WRITE", &
                         unit_number=output_unit)
@@ -1367,6 +1375,9 @@ CONTAINS
          CALL close_file(unit_number=output_unit)
       END IF
 
+      WRITE(filename,'(A,I0,A,I0,A)') 'embedding_dat_frag', i_frag, '.cube'
+      CALL write_pw_to_cube(fat_env, pw_r=v_emb, filename=filename)
+
       DEALLOCATE(stride)
 
       ! Synchronize all processes
@@ -1378,7 +1389,6 @@ CONTAINS
 
    ! **************************************************************************************************
    !> \brief Execute external calculation script
-   !> \param label Fragment label/identifier
    ! **************************************************************************************************
    SUBROUTINE fat_run_external(fat_env, i_frag, gradient)
       TYPE(fat_env_type), POINTER                        :: fat_env
@@ -1501,6 +1511,7 @@ CONTAINS
       qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
       CALL get_qs_env(qs_env=qs_env, rho=qs_rho)
       CALL qs_rho_get(qs_rho, rho_r=rho_r, rho_g=rho_g)
+!     IF (is_debug) CALL print_pw_statistics(rho_r(1), "before", i_frag)
 
       CALL integer_to_string(i_frag, label)
       IF (fat_env%force_env_ref%para_env%is_source()) THEN
@@ -1511,6 +1522,7 @@ CONTAINS
          END IF
       END IF
       CALL cp_cube_to_pw(rho_r(1), "extern_"//TRIM(label)//".cube", 1.0_dp)
+!     IF (is_debug) CALL print_pw_statistics(rho_r(1), "after", i_frag)
 
       CALL pw_transfer(rho_r(1), rho_g(1))
 
@@ -1700,9 +1712,10 @@ CONTAINS
       REAL(dp)                                           :: e_emb_total, e_hartree_total, &
                                                             e_sub_total, e_tmp, &
                                                             e_ts_total, e_xc_total
-      LOGICAL                                            :: is_dbg
+      LOGICAL                                            :: is_dbg, is_fine
 
-      is_dbg = is_debug .AND. fat_env%force_env_ref%para_env%is_source()
+      is_fine = fat_env%force_env_ref%para_env%is_source()
+      is_dbg = is_debug .AND. is_fine
 
       IF (is_dbg) PRINT *, "DBG| ", modulen//"::"//routinen
 
@@ -1712,46 +1725,46 @@ CONTAINS
       e_sub_total = 0.0_dp
       DO i = 1, fat_env%n_frag
          e_sub_total = e_sub_total + fat_env%e_sub(i)
-         IF (is_dbg) PRINT *, "KKK| Subsystem energy (", i, "):", fat_env%e_sub(i)
+         IF (is_fine) PRINT *, "FAT| Subsystem energy (", i, "):", fat_env%e_sub(i)
       END DO
       e = e + e_sub_total
-      IF (is_dbg) PRINT *, "KKK| Total subsystem energy:", e_sub_total
+      IF (is_fine) PRINT *, "FAT| Total subsystem energy:", e_sub_total
 
       ! Embedding potential energy
       e_emb_total = 0.0_dp
       DO i = 1, fat_env%n_frag
          e_emb_total = e_emb_total + fat_env%e_emb(i)
-         IF (is_dbg) PRINT *, "KKK| Embedding energy (", i, "):", fat_env%e_emb(i)
-         IF (i > 1 .and. is_dbg) PRINT *, &
-            "KKK| Embedding energy diff (", i-1, "-", i, "):", &
+         IF (is_fine) PRINT *, "FAT| Embedding energy (", i, "):", fat_env%e_emb(i)
+         IF (i > 1 .and. is_fine) PRINT *, &
+            "FAT| Embedding energy diff (", i-1, "-", i, "):", &
             fat_env%e_emb(i) - fat_env%e_emb(i-1)
       END DO
       e = e - e_emb_total
-      IF (is_dbg) PRINT *, "KKK| Total Embedding energy:", e_emb_total
+      IF (is_fine) PRINT *, "FAT| Total Embedding energy:", e_emb_total
 
       ! Kinetic energy
       e_ts_total = 0.0_dp
       e_ts_total = fat_e_ts_ref(fat_env)
-      IF (is_dbg) PRINT *, "KKK| Reference Kin energy:", e_ts_total
+      IF (is_fine) PRINT *, "FAT| Reference Kin energy:", e_ts_total
       DO i = 1, fat_env%n_frag
          e_tmp = fat_e_ts_frag(fat_env, i)
          e_ts_total = e_ts_total - e_tmp
-         IF (is_dbg) PRINT *, "KKK| Subsystem Kin energy (", i, "):", e_tmp
+         IF (is_fine) PRINT *, "FAT| Subsystem Kin energy (", i, "):", e_tmp
       END DO
       e = e + e_ts_total
-      IF (is_dbg) PRINT *, "KKK| Total Kin energy:", e_ts_total
+      IF (is_fine) PRINT *, "FAT| Total Kin energy:", e_ts_total
 
       ! Exchange-correlation energy
       e_xc_total = 0.0_dp
       e_xc_total = fat_e_xc_ref(fat_env)
-      IF (is_dbg) PRINT *, "KKK| Reference XC energy:", e_xc_total
+      IF (is_fine) PRINT *, "FAT| Reference XC energy:", e_xc_total
       DO i = 1, fat_env%n_frag
          e_tmp = fat_e_xc_frag(fat_env, i)
          e_xc_total = e_xc_total - e_tmp
-         IF (is_dbg) PRINT *, "KKK| Subsystem XC energy (", i, "):", e_tmp
+         IF (is_fine) PRINT *, "FAT| Subsystem XC energy (", i, "):", e_tmp
       END DO
       e = e + e_xc_total
-      IF (is_dbg) PRINT *, "KKK| Total XC energy:", e_xc_total
+      IF (is_fine) PRINT *, "FAT| Total XC energy:", e_xc_total
 
       IF (fat_env%i_iter > 0) THEN
          ! Hartree electrostatic energy
@@ -1760,16 +1773,20 @@ CONTAINS
             DO j = i+1, fat_env%n_frag
                e_tmp = fat_eint_hartree(fat_env, i, j)
                e_hartree_total = e_hartree_total + e_tmp
-               IF (is_dbg) PRINT *, "KKK| Hartree interaction energy (", i, ",", j, "):", e_tmp
+               IF (is_fine) PRINT *, "FAT| Hartree interaction energy (", i, ",", j, "):", e_tmp
             END DO
          END DO
          e = e + e_hartree_total
          fat_env%ehartree = e_hartree_total
-         IF (is_dbg) PRINT *, "KKK| Total Hartree interaction energy:", e_hartree_total
+         IF (is_fine) PRINT *, "FAT| Total Hartree interaction energy:", e_hartree_total
       END IF
 
       fat_env%e_tot = e
-      IF (is_dbg) PRINT *, "KKK| Total energy:", e
+      IF (is_fine) THEN
+         PRINT *, "FAT| Total energy:", e
+         PRINT *, "FAT| FAT - Frag total energies, kcal/mol:", (fat_env%e_tot-e_sub_total)*627.5094740631121212
+         PRINT *, "FAT| Total Embedding energy kcal/mol:", e_emb_total*627.5094740631121212
+      END IF
 
    END FUNCTION fat_e_tot
 ! ************************************************************************************************
@@ -1833,7 +1850,7 @@ CONTAINS
 
       IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
          PRINT *, "DBG| ", modulen//"::"//routinen, " for frag:", i_frag
-         PRINT *, "KKK| ", modulen//"::"//routinen, " fat_env%i_iter:", fat_env%i_iter
+         PRINT *, "DBG| ", modulen//"::"//routinen, " fat_env%i_iter:", fat_env%i_iter
       END IF
 
 !     ! MPI
@@ -1871,7 +1888,7 @@ CONTAINS
       IF (fat_env%extern(i_frag)) THEN
 
          IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
-            PRINT *, "KKK| Using extern for fragment ", i_frag
+            PRINT *, "DBG| Using extern for fragment ", i_frag
          END IF
 
          CALL fat_pw_create_frag(fat_env, pw_r=weights, i_frag=i_frag)
@@ -1907,12 +1924,12 @@ CONTAINS
 !        END IF
 
          IF (is_debug .and. fat_env%force_env_ref%para_env%is_source()) &
-            PRINT *, "KKK| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
+            PRINT *, "DBG| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
 
       ELSE
 
          IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) &
-            PRINT *, "KKK| Using internal calculation for fragment ", i_frag
+            PRINT *, "DBG| Using internal calculation for fragment ", i_frag
 
          ! Perform internal DFT calculation for current fragment:
          CALL qs_calc_energy_force(qs_env=qs_env_tmp, &
@@ -1928,7 +1945,7 @@ CONTAINS
          fat_env%e_emb(i_frag) = energy%embed_corr
 
          IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) &
-            PRINT *, "KKK| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
+            PRINT *, "DBG| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
 
 !        IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
 !           ! Get electron density from internal calculation
@@ -1946,7 +1963,7 @@ CONTAINS
       END IF
 
       IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) &
-         PRINT *, "KKK| Total subsystem (", i_frag, ") energy:", fat_env%e_sub(i_frag)
+         PRINT *, "DBG| Total subsystem (", i_frag, ") energy:", fat_env%e_sub(i_frag)
 
       ! Deallocate v_emb potential
       CALL fat_pw_release_frag(fat_env, pw_r=v_emb, i_frag=i_frag)
@@ -2672,7 +2689,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_results'
 
       INTEGER                                            :: i, j
-      REAL(kind=dp)                                      :: e_tmp(fat_env%n_frag, fat_env%n_frag)
+      REAL(kind=dp)                                      :: e_tmp(fat_env%n_frag, fat_env%n_frag), tmp
 
       IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
          PRINT *, "DBG| ", modulen//"::"//routinen
@@ -2683,11 +2700,15 @@ CONTAINS
             WRITE (fat_env%output_unit, &
                    '(T2,"FAT| Tot energy fragment   ",I2,":",F26.15)') i, fat_env%e_sub(i)
          END DO
+         WRITE (fat_env%output_unit, &
+                '(T2,"FAT| Tot energy of fragments [a.u.]:",F26.15)')  sum(fat_env%e_sub)
 
          DO i = 1, fat_env%n_frag
             WRITE (fat_env%output_unit, &
                    '(T2,"FAT| Emb energy fragment    ",I2,":",F26.15)') i, fat_env%e_emb(i)
          END DO
+         WRITE (fat_env%output_unit, &
+                '(T2,"FAT| Tot Emb energy [kcal/mol]:",F26.5)')  sum(fat_env%e_emb)*627.509474063112121
 
          WRITE (fat_env%output_unit, &
                 '(T2,"FAT| Kin energy reference     :",F26.15)') fat_env%ekin_ref
@@ -2695,6 +2716,8 @@ CONTAINS
             WRITE (fat_env%output_unit, &
                    '(T2,"FAT| Kin energy fragment    ",I2,":",F26.15)') i, fat_env%ekin_sub(i)
          END DO
+         WRITE (fat_env%output_unit, &
+                '(T2,"FAT| Tot Kin energy [kcal/mol]:",F26.5)') (fat_env%ekin_ref-sum(fat_env%ekin_sub))*627.509474063112121
 
          WRITE (fat_env%output_unit, &
                 '(T2,"FAT| XC energy reference      :",F26.15)') fat_env%exc_ref
@@ -2702,11 +2725,14 @@ CONTAINS
             WRITE (fat_env%output_unit, &
                    '(T2,"FAT| XC energy fragment     ",I2,":",F26.15)') i, fat_env%exc_sub(i)
          END DO
+         WRITE (fat_env%output_unit, &
+                '(T2,"FAT| Tot xc energy [kcal/mol]:",F26.5)') (fat_env%exc_ref - sum(fat_env%exc_sub))*627.509474063112121
       END IF
 
       DO i = 1, fat_env%n_frag
          DO j = i+1, fat_env%n_frag
             e_tmp(i, j) = fat_eint_hartree(fat_env, i, j)
+            tmp = tmp + e_tmp(i, j)
          END DO
       END DO
 
@@ -2718,6 +2744,16 @@ CONTAINS
                       i, j, e_tmp(i, j)
             END DO
          END DO
+         WRITE (fat_env%output_unit, &
+                '(T2,"FAT| Tot El.static energy [kcal/mol]:",F26.5)') tmp*627.509474063112121
+      END IF
+      IF (fat_env%force_env_ref%para_env%is_source()) THEN
+         WRITE (fat_env%output_unit, &
+                '(/,T2,"FAT| Total Interaction energy [kcal/mol]: ",T55,F26.5)') &
+               (fat_env%e_tot-sum(fat_env%e_sub))*627.509474063112121
+         WRITE (fat_env%output_unit, &
+                '(/,T2,"FAT| Total Embedding energy [kcal/mol]: ",T55,F26.5)') &
+               sum(fat_env%e_emb)*627.509474063112121
       END IF
 
       IF (fat_env%force_env_ref%para_env%is_source()) THEN

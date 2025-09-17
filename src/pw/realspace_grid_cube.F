@@ -113,21 +113,21 @@ CONTAINS
                np = MIN(99999, SIZE(particles_z))
             END IF
 
-            WRITE (unit_nr, '(I5,3f12.6)') np, 0.0_dp, 0._dp, 0._dp !start of cube
+            WRITE (unit_nr, '(I5,3f23.17)') np, 0.0_dp, 0._dp, 0._dp !start of cube
 
-            WRITE (unit_nr, '(I5,3f12.6)') (pw%pw_grid%npts(1) + my_stride(1) - 1)/my_stride(1), &
+            WRITE (unit_nr, '(I5,3f23.17)') (pw%pw_grid%npts(1) + my_stride(1) - 1)/my_stride(1), &
                pw%pw_grid%dh(1, 1)*REAL(my_stride(1), dp), pw%pw_grid%dh(2, 1)*REAL(my_stride(1), dp), &
                pw%pw_grid%dh(3, 1)*REAL(my_stride(1), dp)
-            WRITE (unit_nr, '(I5,3f12.6)') (pw%pw_grid%npts(2) + my_stride(2) - 1)/my_stride(2), &
+            WRITE (unit_nr, '(I5,3f23.17)') (pw%pw_grid%npts(2) + my_stride(2) - 1)/my_stride(2), &
                pw%pw_grid%dh(1, 2)*REAL(my_stride(2), dp), pw%pw_grid%dh(2, 2)*REAL(my_stride(2), dp), &
                pw%pw_grid%dh(3, 2)*REAL(my_stride(2), dp)
-            WRITE (unit_nr, '(I5,3f12.6)') (pw%pw_grid%npts(3) + my_stride(3) - 1)/my_stride(3), &
+            WRITE (unit_nr, '(I5,3f23.17)') (pw%pw_grid%npts(3) + my_stride(3) - 1)/my_stride(3), &
                pw%pw_grid%dh(1, 3)*REAL(my_stride(3), dp), pw%pw_grid%dh(2, 3)*REAL(my_stride(3), dp), &
                pw%pw_grid%dh(3, 3)*REAL(my_stride(3), dp)
 
             IF (PRESENT(particles_z)) THEN
                DO iat = 1, np
-                  WRITE (unit_nr, '(I5,4f12.6)') particles_z(iat), 0._dp, particles_r(:, iat)
+                  WRITE (unit_nr, '(I5,4f23.17)') particles_z(iat), 0._dp, particles_r(:, iat)
                END DO
             END IF
          END IF
@@ -194,7 +194,7 @@ CONTAINS
                         IF (buf(I3) < 1.E-7_dp) buf(I3) = 0.0_dp
                      END DO
                   END IF
-                  WRITE (unit_nr, '(6E13.5)') (buf(I3), I3=L3, U3, my_stride(3))
+                  WRITE (unit_nr, '(6E22.12)') (buf(I3), I3=L3, U3, my_stride(3))
                END IF
 
                ! this double loop generates so many messages that it can overload
@@ -542,10 +542,10 @@ CONTAINS
             DO k = lbounds_local(3), ubounds_local(3)
                IF (MODULO(ientry, num_entries_line) == 0 .OR. k == ubounds_local(3)) THEN
                   ! Last value on line, dont read line break
-                  READ (tmp(pos:pos + (entry_len - 2)), '(E12.5)') buffer(k)
+                  READ (tmp(pos:pos + (entry_len - 2)), '(E22.12)') buffer(k)
                   pos = pos + (entry_len + 1)
                ELSE
-                  READ (tmp(pos:pos + (entry_len - 1)), '(E13.5)') buffer(k)
+                  READ (tmp(pos:pos + (entry_len - 1)), '(E22.12)') buffer(k)
                   pos = pos + entry_len
                END IF
                ientry = ientry + 1
@@ -785,9 +785,9 @@ CONTAINS
                counter = 0
                DO k = lbounds(3), ubounds(3), stride(3)
                   IF (zero_tails .AND. grid%cr3d(i, j, k) < 1.E-7_dp) THEN
-                     WRITE (value, '(E13.5)') 0.0_dp
+                     WRITE (value, '(E22.12)') 0.0_dp
                   ELSE
-                     WRITE (value, '(E13.5)') grid%cr3d(i, j, k)
+                     WRITE (value, '(E22.12)') grid%cr3d(i, j, k)
                   END IF
                   tmp = TRIM(tmp)//TRIM(value)
                   counter = counter + 1
@@ -957,7 +957,7 @@ CONTAINS
                       pw%pw_grid%dh(3, 3)*I3
 
                   IF (unit_nr > 0) THEN
-                     WRITE (unit_nr, '(6E13.5, 6E13.5, 6E13.5, 6E13.5)') x, y, z, buf(I3)
+                     WRITE (unit_nr, '(6E22.12, 6E22.12, 6E22.12, 6E22.12)') x, y, z, buf(I3)
                   END IF
                END DO
 
@@ -977,7 +977,7 @@ CONTAINS
                       pw%pw_grid%dh(3, 3)*I3
 
                   IF (unit_nr > 0) THEN
-                     WRITE (unit_nr, '(6E13.5, 6E13.5, 6E13.5, 6E13.5)') x, y, z, buf(I3), buf2(I3)
+                     WRITE (unit_nr, '(6E22.12, 6E22.12, 6E22.12, 6E22.12)') x, y, z, buf(I3), buf2(I3)
                   END IF
                END DO
 
