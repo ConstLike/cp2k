@@ -38,8 +38,7 @@ MODULE input_cp2k_properties_dft
       ot_precond_s_inverse, scan_x, scan_xy, scan_xyz, scan_xz, scan_y, scan_yz, scan_z, &
       tddfpt_dipole_berry, tddfpt_dipole_length, tddfpt_dipole_velocity, tddfpt_kernel_full, &
       tddfpt_kernel_none, tddfpt_kernel_stda, no_sf_tddfpt, tddfpt_sf_col, tddfpt_sf_noncol, &
-      use_mom_ref_coac, use_mom_ref_com, use_mom_ref_user, use_mom_ref_zero, &
-      no_sf_tddft, tddft_sf_col, tddft_sf_noncol, no_mrsf, mrsf_col, mrsf_noncol
+      use_mom_ref_coac, use_mom_ref_com, use_mom_ref_user, use_mom_ref_zero
    USE input_cp2k_atprop, ONLY: create_atprop_section
    USE input_cp2k_dft, ONLY: create_interp_section, &
                              create_mgrid_section
@@ -1499,40 +1498,31 @@ CONTAINS
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
-      CALL keyword_create(keyword, __LOCATION__, name="SF_TDDFT", &
-                          description="Selects the type of spin-flip TDDFT kernel", &
-                          usage="SF_TDDFT COLLINEAR", &
-                          enum_c_vals=s2a("NONE", "COLLINEAR", "NONCOLLINEAR"), &
-                          enum_i_vals=(/no_sf_tddft, tddft_sf_col, tddft_sf_noncol/), &
-                          default_i_val=no_sf_tddft)
-      CALL section_add_keyword(section, keyword)
-      CALL keyword_release(keyword)
-
-      ! Define MRSF keyword for type of MRSF calculation
-      CALL keyword_create(keyword, __LOCATION__, name="MRSF", &
-                          description="Type of Mixed-Reference Spin-Flip (MRSF)-TDDFT calculation. "// &
-                              "MRSF-TDDFT is an advanced method for studying electronic excited states "// &
-                              "in molecules, improving upon traditional SF-TDDFT by using a mixed-reference "// &
-                              "approach that combines multiple spin configurations. This reduces spin "// &
-                              "contamination, leading to more accurate optimized geometries, energies, "// &
-                              "and adiabatic excitation energies for both singlet and triplet excited "// &
-                              "states. It also provides a cleaner separation of singlet and triplet states, "// &
-                              "simplifying the location of minimum energy conical intersections. "// &
-                              "For more details, see J. Phys. Chem. Lett. 2023, 14, 39, 8896–8908 "// &
-                              "https://doi.org/10.1021/acs.jpclett.3c02296", &
-                          usage="MRSF COLLINEAR", &
-                          enum_c_vals=s2a("NONE", "COLLINEAR", "NONCOLLINEAR"), &
-                          enum_i_vals=(/no_mrsf, mrsf_col, mrsf_noncol/), &
-                          default_i_val=no_mrsf)
-      CALL section_add_keyword(section, keyword)
-      CALL keyword_release(keyword)
-
-      ! Define MRSF_MULT keyword for multiplicity
-      CALL keyword_create(keyword, __LOCATION__, name="MRSF_MULT", &
-                          description="Multiplicity for MRSF calculation (1 for singlets, 3 for triplets).", &
-                          usage="MRSF_MULT 1", &
-                          n_var=1, type_of_var=integer_t, &
-                          default_i_val=1)
+      CALL keyword_create(keyword, __LOCATION__, name="THEORY_LIST", &
+                          description="Specifies the sequence of spin-flip TDDFT theories to compute. "// &
+                          "Only COLLINEAR response theories are supported. All calculations employ "// &
+                          "Tamm-Dancoff approximation (TDA) within Davidson solver with restart "// &
+                          "capability for challenging cases. No exchange-correlation kernel "// &
+                          "contributions are included. "// &
+                          "Available theories: "// &
+                          "SF/SPNFLP/SPINFLIP (Spin-Flip TDDFT): Single-reference excited states, "// &
+                          "compatible with ROKS/ROHF and UKS/UHF reference states. "// &
+                          "MRSF-S/SINGLET (Mixed Reference Spin-Flip Singlets): Pure spin singlet "// &
+                          "excited states from multi-reference approach, requires ROKS/ROHF. "// &
+                          "MRSF-T/TRIPLET (Mixed Reference Spin-Flip Triplets): Pure spin triplet "// &
+                          "excited states from multi-reference approach, requires ROKS/ROHF. "// &
+                          "For ROKS/ROHF reference, set ROKS_SCHEME HIGH-SPIN and "// &
+                          "ROKS_PARAMETERS 0.5 0.5 0.5 0.5 0.5 0.5 in &SCF section. "// &
+                          "The additional keyword SPINFLIP COLLINEAR/NONCOLLINEAR triggers an independent "// &
+                          "SF-TDDFPT calculation (only supported for UKS/UHF reference). "// &
+                          "Multiple theories can be computed sequentially. "// &
+                          "More information about MRSF and implementation ideas: "// &
+                          "https://doi.org/10.1021/acs.jpclett.3c02296, "// &
+                          "https://doi.org/10.1063/5.0148005, "// &
+                          "https://doi.org/10.1021/acs.jctc.3c00884 (please cite these works).", &
+                          usage="THEORY_LIST SF MRSF-S MRSF-T", &
+                          type_of_var=char_t, repeats=.FALSE., n_var=-1, &
+                          default_c_vals=(/"DO NOTHING"/))
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

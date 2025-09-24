@@ -113,6 +113,7 @@ CONTAINS
                                start_row=1, start_col=1, &
                                n_rows=5, n_cols=5)
 
+      IF (.FALSE.) THEN
       IF (unit_nr > 0) THEN
          WRITE(unit_nr, '(A,A,A,I0,A)') "First 5x5 elements of ",TRIM(mat_name)," at iter ",iter,":"
          DO i = 1, 5
@@ -120,6 +121,7 @@ CONTAINS
          END DO
          WRITE(unit_nr, '(A)') ""
          CALL m_flush(unit_nr)
+      END IF
       END IF
 
       CALL timestop(handle)
@@ -644,32 +646,47 @@ CONTAINS
                CALL parallel_gemm('N', 'T', nao, nao, nactive(ispin), 0.5_dp, gs_mos(ispin)%mos_occ, &
                                   evects(ispin, ivect), 1.0_dp, wfm_rho_orb)
 
+!              print *, "KKK| iver=",ivect, "ispin=", ispin
+!              CALL print_mat_ao_ao(wfm_rho_orb, 'SYM: X_ao_ao', logger, ivect)
+
                CALL dbcsr_set(work_hmat_symm(ispin)%matrix, 0.0_dp)
+               !==================================================================
                IF (do_admm) THEN
-                  CALL parallel_gemm('N', 'N', nao_aux, nao, nao, 1.0_dp, admm_env%A, &
-                                     wfm_rho_orb, 0.0_dp, admm_env%work_aux_orb)
-                  CALL parallel_gemm('N', 'T', nao_aux, nao_aux, nao, 1.0_dp, admm_env%work_aux_orb, admm_env%A, &
+                  CALL parallel_gemm('N', 'N', nao_aux, nao, nao, &
+                                     1.0_dp, admm_env%A, &
+                                             wfm_rho_orb, &
+                                     0.0_dp, admm_env%work_aux_orb)
+                  CALL parallel_gemm('N', 'T', nao_aux, nao_aux, nao, &
+                                     1.0_dp, admm_env%work_aux_orb, &
+                                             admm_env%A, &
                                      0.0_dp, admm_env%work_aux_aux)
+
+!                 print *, "KKK| iver=",ivect, "ispin=", ispin
+!                 CALL print_mat_ao_ao(admm_env%work_aux_aux, 'SYM: X_ao_ao_aux', logger, ivect)
                   CALL copy_fm_to_dbcsr(admm_env%work_aux_aux, work_rho_ia_ao_symm(ispin)%matrix, keep_sparsity=.TRUE.)
                ELSE
                   CALL copy_fm_to_dbcsr(wfm_rho_orb, work_rho_ia_ao_symm(ispin)%matrix, keep_sparsity=.TRUE.)
                END IF
-!              print *, "KKK| iver=",ivect, "ispin=", ispin
-!              CALL print_mat_ao_ao(wfm_rho_orb, 'SYM: X_ao_ao', logger, ivect)
+               !==================================================================
             END DO
 
             CALL tddft_hfx_matrix(work_hmat_symm, work_rho_ia_ao_symm, qs_env)
 
             IF (do_admm) THEN
                DO ispin = 1, nspins
+               !==================================================================
                   CALL cp_dbcsr_sm_fm_multiply(work_hmat_symm(ispin)%matrix, admm_env%A, admm_env%work_aux_orb, &
                                                ncol=nao, alpha=1.0_dp, beta=0.0_dp)
 
                   CALL parallel_gemm('T', 'N', nao, nao, nao_aux, 1.0_dp, admm_env%A, &
                                      admm_env%work_aux_orb, 0.0_dp, wfm_rho_orb)
 
+!                 print *, "KKK After| iver=",ivect, "ispin=", ispin
+!                 CALL print_mat_ao_ao(wfm_rho_orb, 'SYM: X_ao_ao*ERI AUX', logger, ivect)
+
                   CALL parallel_gemm('N', 'N', nao, nactive(ispin), nao, alpha, wfm_rho_orb, &
                                      gs_mos(ispin)%mos_occ, 1.0_dp, Aop_evects(ispin, ivect))
+               !==================================================================
                END DO
             ELSE
                DO ispin = 1, nspins
@@ -695,18 +712,21 @@ CONTAINS
                CALL parallel_gemm('N', 'T', nao, nao, nactive(ispin), -0.5_dp, gs_mos(ispin)%mos_occ, &
                                   evects(ispin, ivect), 1.0_dp, wfm_rho_orb)
 
+!              print *, "KKK| iver=",ivect, "ispin=", ispin
+!              CALL print_mat_ao_ao(wfm_rho_orb, 'A-SYM: X_ao_ao', logger, ivect)
+
                CALL dbcsr_set(work_hmat_asymm(ispin)%matrix, 0.0_dp)
                IF (do_admm) THEN
                   CALL parallel_gemm('N', 'N', nao_aux, nao, nao, 1.0_dp, admm_env%A, &
                                      wfm_rho_orb, 0.0_dp, admm_env%work_aux_orb)
                   CALL parallel_gemm('N', 'T', nao_aux, nao_aux, nao, 1.0_dp, admm_env%work_aux_orb, admm_env%A, &
                                      0.0_dp, admm_env%work_aux_aux)
+!                 print *, "KKK| iver=",ivect, "ispin=", ispin
+!                 CALL print_mat_ao_ao(admm_env%work_aux_aux, 'A-SYM: X_ao_ao_aux', logger, ivect)
                   CALL copy_fm_to_dbcsr(admm_env%work_aux_aux, work_rho_ia_ao_asymm(ispin)%matrix, keep_sparsity=.TRUE.)
                ELSE
                   CALL copy_fm_to_dbcsr(wfm_rho_orb, work_rho_ia_ao_asymm(ispin)%matrix, keep_sparsity=.TRUE.)
                END IF
-!              print *, "KKK| iver=",ivect, "ispin=", ispin
-!              CALL print_mat_ao_ao(wfm_rho_orb, 'A-SYM: X_ao_ao', logger, ivect)
             END DO
 
             CALL tddft_hfx_matrix(work_hmat_asymm, work_rho_ia_ao_asymm, qs_env)
@@ -718,6 +738,8 @@ CONTAINS
 
                   CALL parallel_gemm('T', 'N', nao, nao, nao_aux, 1.0_dp, admm_env%A, &
                                      admm_env%work_aux_orb, 0.0_dp, wfm_rho_orb)
+!                 print *, "KKK After| iver=",ivect, "ispin=", ispin
+!                 CALL print_mat_ao_ao(wfm_rho_orb, 'A-SYM: X_ao_ao*ERI AUX', logger, ivect)
 
                   CALL parallel_gemm('N', 'N', nao, nactive(ispin), nao, alpha, wfm_rho_orb, &
                                      gs_mos(ispin)%mos_occ, 1.0_dp, Aop_evects(ispin, ivect))

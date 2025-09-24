@@ -22,6 +22,8 @@
 ! **************************************************************************************************
 MODULE qs_tddft_theory_sf
 
+   USE admm_types,                      ONLY: admm_type,&
+                                              get_admm_env
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: tddfpt2_control_type
    USE cp_dbcsr_api,                    ONLY: dbcsr_complete_redistribute,&
@@ -91,35 +93,41 @@ MODULE qs_tddft_theory_sf
 !> \brief SF-TDDFT derived type implementing the abstract theory interface
 !>
 !> \details Contains all working arrays and procedures specific to spin-flip TDDFT calculations.
-!>          The implementation handles α→β excitations with proper spin contamination analysis.
+!>          The implementation handles alpha to beta excitations.
+!>
+!> \par Key features
+!>      - Support for both ROKS/ROHF and UKS/UHF reference states
+!>      - ADMM acceleration for Hartree-Fock exchange kernel
+!>      - Shows the same result between SF-TDDFT and SF-TDDFPT (Sternheimer approach) in CP2K.
+!>
+!> \author Konstantin Komarov (constlike@gmail.com) (Luber group)
+!> \date Aug 2025
 ! **************************************************************************************************
    TYPE, EXTENDS(tddft_theory_type) :: tddft_sf_type
 
       ! AO-MO transformation buffer matrices
-      TYPE(cp_fm_type), POINTER                          :: work_nao_vir => NULL()    ! [nbf, nvirb]
-      TYPE(cp_fm_type), POINTER                          :: work_noc_nao => NULL()    ! [nocca, nbf]
+      TYPE(cp_fm_type), POINTER                          :: work_nao_vir => NULL()   ! [nbf, nvirb]
+      TYPE(cp_fm_type), POINTER                          :: work_noc_nao => NULL()   ! [nocca, nbf]
       TYPE(cp_fm_type), POINTER                          :: work_noc_noc => NULL()   ! [nocca, nocca]
-      TYPE(cp_fm_type), POINTER                          :: work_nao_noc => NULL()    ! [nbf, nocca]
+      TYPE(cp_fm_type), POINTER                          :: work_nao_noc => NULL()   ! [nbf, nocca]
       TYPE(cp_fm_type), POINTER                          :: work_vir_vir => NULL()   ! [nvirb, nvirb]
       TYPE(cp_fm_type), POINTER                          :: work_noc_vir => NULL()   ! [nocca, nvirb]
 
       ! General AO working matrices
-      TYPE(cp_fm_type), POINTER                          :: work1_nao_nao => NULL()    ! [nbf, nbf]
-      TYPE(cp_fm_type), POINTER                          :: work2_nao_nao => NULL()    ! [nbf, nbf]
+      TYPE(cp_fm_type), POINTER                          :: work1_nao_nao => NULL()  ! [nbf, nbf]
+      TYPE(cp_fm_type), POINTER                          :: work2_nao_nao => NULL()  ! [nbf, nbf]
+
+      ! ADMM working matrices
+      TYPE(cp_fm_type), POINTER                          :: work_aux_aux => NULL()   ! [nao_aux, nao_aux]
+      TYPE(cp_fm_type), POINTER                          :: work_aux_nao => NULL()   ! [nao_aux, nao]
+      TYPE(cp_fm_type), POINTER                          :: work_nao_aux => NULL()   ! [nao, nao_aux]
 
       ! Density
-      TYPE(qs_rho_type), POINTER                         :: rho_orb_struct => NULL()
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: rho_fm_nao      ! (nSpins) [nbf, nbf]
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: rho_fm_nao     ! (nSpins) [nbf, nbf]
 
       ! Density difference matrices for electron-hole analysis
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: dens_diff_ij   ! (nStates) [nbf, nbf] hole
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: dens_diff_ab   ! (nStates) [nbf, nbf] electron
-
-      ! ADMM working matrices
-      TYPE(cp_fm_type), POINTER :: work_aux_aux    ! [nao_aux, nao_aux]
-      TYPE(cp_fm_type), POINTER :: work_aux_nao    ! [nao_aux, nao]
-      TYPE(cp_fm_type), POINTER :: work_nao_aux    ! [nao, nao_aux]
-      TYPE(cp_fm_type), POINTER :: admm_A          ! Projection matrix
 
    CONTAINS
       PROCEDURE, PASS(this) :: allocate   => sf_allocate
@@ -147,31 +155,32 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_allocate'
 
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s, matrix_s_aux_fit
       TYPE(dbcsr_distribution_type), POINTER             :: dbcsr_dist
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-         POINTER                                         :: sab_orb
+         POINTER                                         :: sab_orb, sab_aux_fit
+      TYPE(admm_type), POINTER                           :: admm_env
       INTEGER                                            :: handle, ispin
 
       CALL timeset(routineN, handle)
 
       CALL get_qs_env(qs_env=qs_env, blacs_env=blacs_env)
 
-      !=== hmat_nao_nao (1) [nbf, nbf] =======================
+      !=== hmat_nao_nao (1) [nbf, nbf] =================
       CALL allocate_fm_matrix(matrix=this%hmat_nao_nao, &
                               nmat=1, &
                               nrow=tddft_env%nbf, &
                               ncol=tddft_env%nbf, &
                               blacs_env=blacs_env)
 
-      !=== evects_nao_nao (1) [nbf, nbf] =================
+      !=== evects_nao_nao (1) [nbf, nbf] ===============
       CALL allocate_fm_matrix(matrix=this%evects_nao_nao, &
                               nmat=1, &
                               nrow=tddft_env%nbf, &
                               ncol=tddft_env%nbf, &
                               blacs_env=blacs_env)
 
-      !=== rho_fm_nao (nSpins) [nbf, nbf] ===============
+      !=== rho_fm_nao (nSpins) [nbf, nbf] ==============
       CALL allocate_fm_matrix(matrix=this%rho_fm_nao, &
                               nmat=tddft_env%nSpins, &
                               nrow=tddft_env%nbf, &
@@ -204,13 +213,13 @@ CONTAINS
                               ncol=tddft_env%nvirb, &
                               blacs_env=blacs_env)
 
-      !=== work_nao_vir [nbf, nvirb] ====================
+      !=== work_nao_vir [nbf, nvirb] ===================
       CALL allocate_fm_matrix(matrix=this%work_nao_vir, &
                               nrow=tddft_env%nbf, &
                               ncol=tddft_env%nvirb, &
                               blacs_env=blacs_env)
 
-      !=== work_noc_nao [nocca, nbf] ====================
+      !=== work_noc_nao [nocca, nbf] ===================
       CALL allocate_fm_matrix(matrix=this%work_noc_nao, &
                               nrow=tddft_env%nocca, &
                               ncol=tddft_env%nbf, &
@@ -222,7 +231,7 @@ CONTAINS
                               ncol=tddft_env%nocca, &
                               blacs_env=blacs_env)
 
-      !=== work_nao_noc [nbf, nocca] ====================
+      !=== work_nao_noc [nbf, nocca] ===================
       CALL allocate_fm_matrix(matrix=this%work_nao_noc, &
                               nrow=tddft_env%nbf, &
                               ncol=tddft_env%nocca, &
@@ -240,13 +249,13 @@ CONTAINS
                               ncol=tddft_env%nvirb, &
                               blacs_env=blacs_env)
 
-      !=== work1_nao_nao [nbf, nbf] ======================
+      !=== work1_nao_nao [nbf, nbf] ====================
       CALL allocate_fm_matrix(matrix=this%work1_nao_nao, &
                               nrow=tddft_env%nbf, &
                               ncol=tddft_env%nbf, &
                               blacs_env=blacs_env)
 
-      !=== work2_nao_nao [nbf, nbf] ======================
+      !=== work2_nao_nao [nbf, nbf] ====================
       CALL allocate_fm_matrix(matrix=this%work2_nao_nao, &
                               nrow=tddft_env%nbf, &
                               ncol=tddft_env%nbf, &
@@ -265,6 +274,26 @@ CONTAINS
                               nrow=tddft_env%nbf, &
                               ncol=tddft_env%nbf, &
                               blacs_env=blacs_env)
+
+      IF (tddft_env%do_admm) THEN
+         !=== work_aux_aux [nbf_aux, nbf_aux] ==========
+         CALL allocate_fm_matrix(matrix=this%work_aux_aux, &
+                                nrow=tddft_env%nbf_aux, &
+                                ncol=tddft_env%nbf_aux, &
+                                blacs_env=blacs_env)
+
+         !=== work_aux_nao [nbf_aux, nbf] ==============
+         CALL allocate_fm_matrix(matrix=this%work_aux_nao, &
+                                nrow=tddft_env%nbf_aux, &
+                                ncol=tddft_env%nbf, &
+                                blacs_env=blacs_env)
+
+         !=== work_nao_aux [nbf, nbf_aux] ==============
+         CALL allocate_fm_matrix(matrix=this%work_nao_aux, &
+                                nrow=tddft_env%nbf, &
+                                ncol=tddft_env%nbf_aux, &
+                                blacs_env=blacs_env)
+      END IF
 
       !--------------------
       ! ALLOCATE  DBCSR
@@ -314,14 +343,51 @@ CONTAINS
                                           this%work_hmat_asymm(ispin)%matrix)
       END DO
 
-      ! Create density structure for grid-based XC operations
-      NULLIFY (this%rho_orb_struct)
-      ALLOCATE (this%rho_orb_struct)
-      CALL qs_rho_create(this%rho_orb_struct)
-      CALL qs_rho_set(this%rho_orb_struct, rho_ao=this%work_rho_nao_nao_symm)
-      CALL qs_rho_rebuild(this%rho_orb_struct, qs_env, &
-                          rebuild_ao=.FALSE., &
-                          rebuild_grids=.TRUE.)
+      IF (tddft_env%do_admm) THEN
+         CALL get_qs_env(qs_env, admm_env=admm_env)
+         CALL get_admm_env(admm_env, &
+                           matrix_s_aux_fit=matrix_s_aux_fit, &
+                           sab_aux_fit=sab_aux_fit)
+
+         NULLIFY (this%work_rho_aux_aux_symm)
+         CALL dbcsr_allocate_matrix_set(this%work_rho_aux_aux_symm, tddft_env%nSpins)
+         NULLIFY (this%work_rho_aux_aux_asymm)
+         CALL dbcsr_allocate_matrix_set(this%work_rho_aux_aux_asymm, tddft_env%nSpins)
+         DO ispin = 1, tddft_env%nSpins
+            CALL dbcsr_init_p(this%work_rho_aux_aux_symm(ispin)%matrix)
+            CALL tddfpt_dbcsr_create_by_dist( &
+               this%work_rho_aux_aux_symm(ispin)%matrix, &
+               template=matrix_s_aux_fit(1)%matrix, &
+               dbcsr_dist=dbcsr_dist, &
+               sab=sab_aux_fit)
+
+            CALL dbcsr_init_p(this%work_rho_aux_aux_asymm(ispin)%matrix)
+            CALL dbcsr_create(this%work_rho_aux_aux_asymm(ispin)%matrix, &
+                              matrix_type=dbcsr_type_antisymmetric, &
+                              template=this%work_rho_aux_aux_symm(ispin)%matrix)
+            CALL dbcsr_complete_redistribute(this%work_rho_aux_aux_symm(ispin)%matrix, &
+                                             this%work_rho_aux_aux_asymm(ispin)%matrix)
+         END DO
+
+         NULLIFY (this%work_hmat_aux_symm)
+         CALL dbcsr_allocate_matrix_set(this%work_hmat_aux_symm, tddft_env%nSpins)
+         NULLIFY (this%work_hmat_aux_asymm)
+         CALL dbcsr_allocate_matrix_set(this%work_hmat_aux_asymm, tddft_env%nSpins)
+         DO ispin = 1, tddft_env%nSpins
+            CALL dbcsr_init_p(this%work_hmat_aux_symm(ispin)%matrix)
+            CALL tddfpt_dbcsr_create_by_dist(this%work_hmat_aux_symm(ispin)%matrix, &
+                                             template=matrix_s_aux_fit(1)%matrix, &
+                                             dbcsr_dist=dbcsr_dist, &
+                                             sab=sab_aux_fit)
+
+            CALL dbcsr_init_p(this%work_hmat_aux_asymm(ispin)%matrix)
+            CALL dbcsr_create(this%work_hmat_aux_asymm(ispin)%matrix, &
+                              matrix_type=dbcsr_type_antisymmetric, &
+                              template=this%work_hmat_aux_symm(ispin)%matrix)
+            CALL dbcsr_complete_redistribute(this%work_hmat_aux_symm(ispin)%matrix, &
+                                             this%work_hmat_aux_asymm(ispin)%matrix)
+         END DO
+      END IF
 
       CALL timestop(handle)
 
@@ -482,29 +548,33 @@ CONTAINS
 !> \param[inout] this            SF theory object
 !> \param[in]    qs_env          QuickStep environment
 !> \param[inout] tddft_env       TDDFT environment
-!> \param[in]    tddfpt_control  TDDFPT control parameters
 !> \details Applies HFX kernel by decomposing density into symmetric and antisymmetric parts
+!> \note  The HFX kernel is applied to both symmetric and antisymmetric
+!>        components of the density matrix. When ADMM is enabled, the
+!>        expensive four-center integrals are evaluated in a smaller
+!>        auxiliary basis and then transformed back to the primary basis.
 ! **************************************************************************************************
-   SUBROUTINE sf_apply(this, qs_env, tddft_env, tddfpt_control)
+   SUBROUTINE sf_apply(this, qs_env, tddft_env)
       CLASS(tddft_sf_type), INTENT(INOUT)                :: this
       TYPE(tddft_info_type), INTENT(INOUT)               :: tddft_env
       TYPE(qs_environment_type), POINTER                 :: qs_env
-      TYPE(tddfpt2_control_type), POINTER, INTENT(IN)    :: tddfpt_control
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'sf_apply'
 
+      TYPE(admm_type), POINTER                           :: admm_env
       INTEGER                                            :: handle
 
       CALL timeset(routineN, handle)
 
-      ! Dummy
-      IF(tddft_env%do_hfx)THEN
-      END IF
-
       !-----------------------------------------------
       ! ERI contraction: Sigma = ERI * X [DBCSR type]
       !-----------------------------------------------
-      IF (tddfpt_control%do_hfx) THEN
+      IF(tddft_env%do_hfx)THEN
+
+         IF (tddft_env%do_admm) THEN
+            CALL get_qs_env(qs_env, admm_env=admm_env)
+         END IF
+
          !--------------------------------------
          ! Get Symmetric part of X vector
          !--------------------------------------
@@ -521,13 +591,50 @@ CONTAINS
             alpha=1.0_dp, matrix_a=this%work1_nao_nao, &
             beta=0.5_dp, matrix_b=this%work2_nao_nao)
 
-         ! Set density-like to 0.0
-         CALL dbcsr_set(matrix=this%work_rho_nao_nao_symm(1)%matrix, &
-                        alpha=0.0_dp)
-         ! FM to DBCSR
-         CALL copy_fm_to_dbcsr(fm=this%work1_nao_nao, &
-                               matrix=this%work_rho_nao_nao_symm(1)%matrix, &
-                               keep_sparsity=.TRUE.)
+         IF (tddft_env%do_admm) THEN
+            ! Project onto the auxiliary basis
+            ! C[nbf_aux,nbf] = 1.0*A[nbf_aux,nbf]*B[nbf,nbf] + 0.0*C[nbf_aux,nbf]
+            CALL parallel_gemm('N', 'N', tddft_env%nbf_aux, tddft_env%nbf, tddft_env%nbf, &
+                               1.0_dp, admm_env%A, &
+                                       this%work1_nao_nao, &
+                               0.0_dp, this%work_aux_nao)
+            ! C[nbf_aux,nbf_aux] = 1.0*A[nbf_aux,nbf]*(B[nbf_aux,nbf])^T + 0.0*C[nbf_aux,nbf_aux]
+            CALL parallel_gemm('N', 'T', tddft_env%nbf_aux, tddft_env%nbf_aux, tddft_env%nbf, &
+                               1.0_dp, this%work_aux_nao, &
+                                       admm_env%A, &
+                               0.0_dp, this%work_aux_aux)
+
+            ! Set density-like to 0.0
+            CALL dbcsr_set(matrix=this%work_rho_aux_aux_symm(1)%matrix, &
+                           alpha=0.0_dp)
+
+            ! Convert aux FM to DBCSR
+            CALL copy_fm_to_dbcsr(fm=this%work_aux_aux, &
+                                  matrix=this%work_rho_aux_aux_symm(1)%matrix, &
+                                  keep_sparsity=.true.)
+
+            ! Apply HFX-ADMM to symmetric part
+            CALL dbcsr_set(matrix=this%work_hmat_aux_symm(1)%matrix, alpha=0.0_dp)
+            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_aux_symm, &
+                                  rho_ao=this%work_rho_aux_aux_symm, &
+                                  qs_env=qs_env)
+         ELSE
+            ! Set density-like to 0.0
+            CALL dbcsr_set(matrix=this%work_rho_nao_nao_symm(1)%matrix, &
+                           alpha=0.0_dp)
+
+            ! Convert FM to DBCSR
+            CALL copy_fm_to_dbcsr(fm=this%work1_nao_nao, &
+                                  matrix=this%work_rho_nao_nao_symm(1)%matrix, &
+                                  keep_sparsity=.TRUE.)
+
+            ! Apply HFX to symmetric part
+            CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
+            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
+                                  rho_ao=this%work_rho_nao_nao_symm, &
+                                  qs_env=qs_env)
+         END IF
+
          !--------------------------------------
          ! Get Antisymmetric part of X vector
          !--------------------------------------
@@ -542,35 +649,97 @@ CONTAINS
             alpha=1.0_dp, matrix_a=this%work1_nao_nao, &
             beta=-0.5_dp, matrix_b=this%work2_nao_nao)
 
-         ! Set density-like to 0.0
-         CALL dbcsr_set(matrix=this%work_rho_nao_nao_asymm(1)%matrix, &
-                        alpha=0.0_dp)
+         IF (tddft_env%do_admm) THEN
+            ! Project onto the auxiliary basis
+            ! C[nbf_aux,nbf] = 1.0*A[nbf_aux,nbf]*B[nbf,nbf] + 0.0*C[nbf_aux,nbf]
+            CALL parallel_gemm('N', 'N', tddft_env%nbf_aux, tddft_env%nbf, tddft_env%nbf, &
+                               1.0_dp, admm_env%A, &
+                                       this%work1_nao_nao, &
+                               0.0_dp, this%work_aux_nao)
+            ! C[nbf_aux,nbf_aux] = 1.0*A[nbf_aux,nbf]*(B[nbf_aux,nbf])^T + 0.0*C[nbf_aux,nbf_aux]
+            CALL parallel_gemm('N', 'T', tddft_env%nbf_aux, tddft_env%nbf_aux, tddft_env%nbf, &
+                               1.0_dp, this%work_aux_nao, &
+                                       admm_env%A, &
+                               0.0_dp, this%work_aux_aux)
 
-         ! Convert FM to DBCSR
-         CALL copy_fm_to_dbcsr(fm=this%work1_nao_nao, &
-                               matrix=this%work_rho_nao_nao_asymm(1)%matrix, &
-                               keep_sparsity=.TRUE.)
+            ! Set density-like to 0.0
+            CALL dbcsr_set(matrix=this%work_rho_aux_aux_asymm(1)%matrix, &
+                           alpha=0.0_dp)
 
-         ! Apply HFX to symmetric part
-         CALL dbcsr_set(matrix=this%work_hmat_symm(1)%matrix, alpha=0.0_dp)
-         CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_symm, &
-                               rho_ao=this%work_rho_nao_nao_symm, &
-                               qs_env=qs_env)
+            ! Convert aux FM to DBCSR
+            CALL copy_fm_to_dbcsr(fm=this%work_aux_aux, &
+                                  matrix=this%work_rho_aux_aux_asymm(1)%matrix, &
+                                  keep_sparsity=.TRUE.)
 
-         ! Apply HFX to antisymmetric part
-         CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
-         CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
-                               rho_ao=this%work_rho_nao_nao_asymm, &
-                               qs_env=qs_env)
+            ! Apply HFX to antisymmetric part
+            CALL dbcsr_set(matrix=this%work_hmat_aux_asymm(1)%matrix, alpha=0.0_dp)
+            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_aux_asymm, &
+                                  rho_ao=this%work_rho_aux_aux_asymm, &
+                                  qs_env=qs_env)
+         ELSE
+            ! Set density-like to 0.0
+            CALL dbcsr_set(matrix=this%work_rho_nao_nao_asymm(1)%matrix, &
+                           alpha=0.0_dp)
+
+            ! Convert FM to DBCSR
+            CALL copy_fm_to_dbcsr(fm=this%work1_nao_nao, &
+                                  matrix=this%work_rho_nao_nao_asymm(1)%matrix, &
+                                  keep_sparsity=.TRUE.)
+
+            ! Apply HFX to antisymmetric part
+            CALL dbcsr_set(matrix=this%work_hmat_asymm(1)%matrix, alpha=0.0_dp)
+            CALL tddft_hfx_matrix(matrix_ks=this%work_hmat_asymm, &
+                                  rho_ao=this%work_rho_nao_nao_asymm, &
+                                  qs_env=qs_env)
+         END IF
 
          ! Convert results back to FM from DBCSR
          CALL cp_fm_set_all(matrix=this%work1_nao_nao, alpha=0.0_dp)
          CALL cp_fm_set_all(matrix=this%work2_nao_nao, alpha=0.0_dp)
 
-         CALL copy_dbcsr_to_fm(matrix=this%work_hmat_symm(1)%matrix, &
-                               fm=this%work1_nao_nao)
-         CALL copy_dbcsr_to_fm(matrix=this%work_hmat_asymm(1)%matrix, &
-                               fm=this%work2_nao_nao)
+         IF (tddft_env%do_admm) THEN
+            ! Convert DBCSR to aux FM
+            CALL cp_fm_set_all(matrix=this%work_aux_aux, alpha=0.0_dp)
+            CALL copy_dbcsr_to_fm(matrix=this%work_hmat_aux_symm(1)%matrix, &
+                                  fm=this%work_aux_aux)
+            ! Project back from the auxiliary basis
+            ! C[nbf,nbf_aux] = 1.0*(A[nbf_aux,nbf])^T*B[nbf_aux,nbf_aux] + 0.0*C[nbf,nbf_aux]
+            CALL parallel_gemm('T', 'N', tddft_env%nbf, tddft_env%nbf_aux, tddft_env%nbf_aux, &
+                               1.0_dp, admm_env%A, &
+                                       this%work_aux_aux, &
+                               0.0_dp, this%work_nao_aux)
+            ! C[nbf,nbf] = 1.0*A[nbf,nbf_aux]*B[nbf_aux,nbf] + 0.0*C[nbf,nbf]
+            CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf_aux, &
+                               1.0_dp, this%work_nao_aux, &
+                                       admm_env%A, &
+                               0.0_dp, this%work1_nao_nao)
+         ELSE
+            ! Convert DBCSR to FM
+            CALL copy_dbcsr_to_fm(matrix=this%work_hmat_symm(1)%matrix, &
+                                  fm=this%work1_nao_nao)
+         END IF
+
+         IF (tddft_env%do_admm) THEN
+            ! Convert DBCSR to aux FM
+            CALL cp_fm_set_all(matrix=this%work_aux_aux, alpha=0.0_dp)
+            CALL copy_dbcsr_to_fm(matrix=this%work_hmat_aux_asymm(1)%matrix, &
+                                  fm=this%work_aux_aux)
+            ! Project back from the auxiliary basis
+            ! C[nbf,nbf_aux] = 1.0*(A[nbf_aux,nbf])^T*B[nbf_aux,nbf_aux] + 0.0*C[nbf,nbf_aux]
+            CALL parallel_gemm('T', 'N', tddft_env%nbf, tddft_env%nbf_aux, tddft_env%nbf_aux, &
+                               1.0_dp, admm_env%A, &
+                                       this%work_aux_aux, &
+                               0.0_dp, this%work_nao_aux)
+            ! C[nbf,nbf] = 1.0*A[nbf,nbf_aux]*B[nbf_aux,nbf] + 0.0*C[nbf,nbf]
+            CALL parallel_gemm('N', 'N', tddft_env%nbf, tddft_env%nbf, tddft_env%nbf_aux, &
+                               1.0_dp, this%work_nao_aux, &
+                                       admm_env%A, &
+                               0.0_dp, this%work2_nao_nao)
+         ELSE
+            ! Convert DBCSR to FM
+            CALL copy_dbcsr_to_fm(matrix=this%work_hmat_asymm(1)%matrix, &
+                                  fm=this%work2_nao_nao)
+         END IF
 
          CALL cp_fm_set_all(matrix=this%hmat_nao_nao(1), alpha=0.0_dp)
          ! A = 0.0*A + 1.0*B
@@ -1073,6 +1242,9 @@ CONTAINS
       CALL deallocate_fm_matrix(this%work2_nao_nao)
       CALL deallocate_fm_matrix(this%dens_diff_ij)
       CALL deallocate_fm_matrix(this%dens_diff_ab)
+      CALL deallocate_fm_matrix(this%work_aux_aux)
+      CALL deallocate_fm_matrix(this%work_aux_nao)
+      CALL deallocate_fm_matrix(this%work_nao_aux)
       CALL deallocate_fm_matrix(this%rho_fm_nao)
       CALL deallocate_fm_matrix(this%focka_noc_noc)
       CALL deallocate_fm_matrix(this%fockb_vir_vir)
@@ -1106,14 +1278,34 @@ CONTAINS
          END DO
          DEALLOCATE (this%work_hmat_asymm)
       END IF
+      IF (ASSOCIATED(this%work_rho_aux_aux_symm)) THEN
+         DO ivec = 1, SIZE(this%work_rho_aux_aux_symm)
+            CALL dbcsr_deallocate_matrix(this%work_rho_aux_aux_symm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_rho_aux_aux_symm)
+      END IF
+      IF (ASSOCIATED(this%work_rho_aux_aux_asymm)) THEN
+         DO ivec = 1, SIZE(this%work_rho_aux_aux_asymm)
+            CALL dbcsr_deallocate_matrix(this%work_rho_aux_aux_asymm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_rho_aux_aux_asymm)
+      END IF
+      IF (ASSOCIATED(this%work_hmat_aux_symm)) THEN
+         DO ivec = 1, SIZE(this%work_hmat_aux_symm)
+            CALL dbcsr_deallocate_matrix(this%work_hmat_aux_symm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_hmat_aux_symm)
+      END IF
+      IF (ASSOCIATED(this%work_hmat_aux_asymm)) THEN
+         DO ivec = 1, SIZE(this%work_hmat_aux_asymm)
+            CALL dbcsr_deallocate_matrix(this%work_hmat_aux_asymm(ivec)%matrix)
+         END DO
+         DEALLOCATE (this%work_hmat_aux_asymm)
+      END IF
 
       !--------------------
       ! DEALLOCATE  PW
       !--------------------
-
-      IF (ASSOCIATED(this%rho_orb_struct)) THEN
-         NULLIFY (this%rho_orb_struct)
-      END IF
 
       CALL timestop(handle)
 

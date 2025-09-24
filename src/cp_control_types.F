@@ -485,11 +485,8 @@ MODULE cp_control_types
       INTEGER                              :: kernel = 0
       !> type of spin excitations to compute
       INTEGER                              :: spinflip = 0
-      INTEGER                              :: sf_tddft = 0
-      ! Type of MRSF: 0: not used, 1: COLLINEAR, 2: NONCOLLINEAR
-      INTEGER                              :: mrsf_type = 0
-      ! MRSF Multiplicity: 1 (singlets), 3 (triplets)
-      INTEGER                              :: mrsf_mult = 1
+      CHARACTER(LEN=default_string_length), &
+         DIMENSION(:), POINTER             :: theory_list
       ! MRSF HF exchange
       REAL(KIND=dp), DIMENSION(:), POINTER :: mrsf_HF => NULL()
       ! MRSF spin pair coupling parameters

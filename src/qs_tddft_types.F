@@ -41,8 +41,12 @@
 !> \date    Aug 2025
 ! **************************************************************************************************
 MODULE qs_tddft_types
+   USE admm_types,                      ONLY: admm_type,&
+                                              get_admm_env
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type, &
+                                              dbcsr_get_info
    USE cp_fm_struct,                    ONLY: cp_fm_struct_create, &
                                               cp_fm_struct_release, &
                                               cp_fm_struct_type
@@ -271,8 +275,6 @@ MODULE qs_tddft_types
 
       !> Flag indicating if Hartree-Fock exchange is included in the calculation
       LOGICAL                                            :: do_hfx
-      !> Flag indicating if ADMM is included in the calculation
-      LOGICAL                                            :: do_admm
       !> Flag for range-separated (CAM) hybrid functionals
       !> .TRUE. for functionals with separate short/long-range exchange treatment
       LOGICAL                                            :: do_hfx_cam
@@ -282,6 +284,14 @@ MODULE qs_tddft_types
       REAL(KIND=dp)                                      :: C_hf_beta
       !> Range separation parameter (omega) for CAM functionals
       REAL(KIND=dp)                                      :: C_hf_omega
+
+      !----------------------------------------------------------------------
+      ! ADMM (Auxiliary Density Matrix Method) parameters
+      !----------------------------------------------------------------------
+
+      !> Flag indicating if ADMM is included in the calculation
+      !> ADMM accelerates HFX evaluation by using a smaller auxiliary basis
+      LOGICAL                                            :: do_admm
 
    END TYPE tddft_info_type
 
@@ -330,6 +340,8 @@ CONTAINS
       TYPE(cp_fm_struct_type), POINTER                   :: fm_struct
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
       TYPE(section_vals_type), POINTER                   :: hf_section
+      TYPE(admm_type), POINTER                           :: admm_env
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s_aux_fit
       INTEGER                                            :: ivec, handle, n_rep_hf, potential_type
       LOGICAL                                            :: explicit
 
@@ -379,6 +391,9 @@ CONTAINS
                                    r_val=tddft_env%C_hf_omega)
       END IF
 
+      CALL get_qs_env(qs_env=qs_env, dft_control=dft_control)
+      tddft_env%do_admm = dft_control%do_admm .AND. tddft_env%do_hfx
+
       !----------------------------------------------------------------------
       ! Extract orbital space dimensions
       !----------------------------------------------------------------------
@@ -389,12 +404,16 @@ CONTAINS
       CALL cp_fm_get_info(gs_mos(1)%mos_virt, ncol_global=tddft_env%nvira)
       CALL cp_fm_get_info(gs_mos(2)%mos_virt, ncol_global=tddft_env%nvirb)
       CALL cp_fm_get_info(gs_mos(1)%mos_occ, nrow_global=tddft_env%nbf)
+      IF (tddft_env%do_admm) THEN
+         CALL get_qs_env(qs_env, admm_env=admm_env)
+         CALL get_admm_env(admm_env, matrix_s_aux_fit=matrix_s_aux_fit)
+         CALL dbcsr_get_info(matrix_s_aux_fit(1)%matrix, &
+                             nfullrows_total=tddft_env%nbf_aux)
+      END IF
 
       !----------------------------------------------------------------------
       ! Determine system parameters and subspace limits
       !----------------------------------------------------------------------
-
-      CALL get_qs_env(qs_env=qs_env, dft_control=dft_control)
 
       ! Identify SCF reference type
       tddft_env%reference_type = 0

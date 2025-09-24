@@ -89,7 +89,8 @@ MODULE qs_tddft_methods
                                               tddft_initialization, &
                                               tddft_finalization
    USE qs_tddft_utils,                  ONLY: allocate_fm_matrix, &
-                                              deallocate_fm_matrix
+                                              deallocate_fm_matrix, &
+                                              is_valid_mrsf_reference
    USE string_utilities,                ONLY: integer_to_string
 #include "./base/base_uses.f90"
 
@@ -136,7 +137,6 @@ CONTAINS
       CLASS(tddft_theory_type), ALLOCATABLE              :: theory
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks, matrix_ks_oep
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
-      CHARACTER(LEN=6), DIMENSION(1)                     :: theory_to_run
       CHARACTER(LEN=6)                                   :: logo
       INTEGER                                            :: handle, i, log_unit
       LOGICAL                                            :: do_admm, do_exck, do_hfx, do_hfxlr, &
@@ -211,22 +211,29 @@ CONTAINS
          CALL cp_abort(__LOCATION__, "LRI only implemented for full kernel")
       END IF
 
-      ! Define theories to execute
-      ! TODO: Make this configurable via input
-!     theory_to_run = ["    SF", "MRSF-S", "MRSF-T"]
-      theory_to_run = ["    SF"]
-
       ! Main theory loop - iterate over all requested theories
-      DO i = 1, SIZE(theory_to_run)
+      DO i = 1, SIZE(tddfpt_control%theory_list)
 
          ! Initialize TDDFT environment for current theory
          CALL tddft_initialization(qs_env, tddft_env, gs_mos)
 
-         logo = theory_to_run(i)
+         logo = TRIM(ADJUSTL(tddfpt_control%theory_list(i)(:6)))
+
+         ! Check MRSF compatibility with ROHF high spin requirement
+         IF (TRIM(logo) == 'MRSF-S' .OR. TRIM(logo) == 'MRSF-T') THEN
+            IF (.NOT. is_valid_mrsf_reference(qs_env)) THEN
+               CALL cp_abort(__LOCATION__, &
+                             "MRSF calculations require ROHF/ROKS with HIGH SPIN TRIPLET reference state. "// &
+                             "Please set: 1) ROKS .TRUE. in &DFT section, "// &
+                             "2) MULTIPLICITY 3 (or higher odd number) for high spin triplet reference, "// &
+                             "3) Ensure proper high spin electronic configuration.")
+            END IF
+         END IF
 
          ! Allocate theory-specific handler based on theory type
          SELECT CASE (logo)
-            CASE('    SF')
+            CASE("SPNFLP")
+               logo = '    SF'
                tddft_env%response_type = 1 ! Spin-flip TDDFT
                ALLOCATE(tddft_sf_type :: theory)
             CASE('MRSF-S')
@@ -370,7 +377,7 @@ CONTAINS
                   CALL theory_env%mo_to_ao(tddft_env, gs_mos, jvec)
 
                   ! Apply TDDFT operators (HFX, Coulomb, XC kernel) in AO basis
-                  CALL theory_env%apply(qs_env, tddft_env, tddfpt_control)
+                  CALL theory_env%apply(qs_env, tddft_env)
 
                   ! Transform resulting sigma vector back to MO representation
                   CALL theory_env%ao_to_mo(tddft_env, gs_mos, jvec)

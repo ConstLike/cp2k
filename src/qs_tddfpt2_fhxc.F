@@ -120,6 +120,7 @@ CONTAINS
                                start_row=1, start_col=1, &
                                n_rows=5, n_cols=5)
 
+      IF (.FALSE.) THEN
       IF (unit_nr > 0) THEN
          WRITE(unit_nr, '(A,A,A,I0,A)') "First 5x5 elements of ",TRIM(mat_name)," at iter ",iter,":"
          DO i = 1, 5
@@ -127,6 +128,7 @@ CONTAINS
          END DO
          WRITE(unit_nr, '(A)') ""
          CALL m_flush(unit_nr)
+      END IF
       END IF
 
       CALL timestop(handle)
@@ -227,12 +229,12 @@ CONTAINS
                                           ncol=nactive(ispin), symmetry_mode=1)
             END DO
          END IF
-         DO ispin = 1, nSpins
-            CALL cp_fm_set_all(matrix=work_matrices%check_xc, alpha=0.0_dp)
-            CALL copy_dbcsr_to_fm(matrix=rho_ia_ao(ispin)%matrix, &
-                                 fm=work_matrices%check_xc)
+!        DO ispin = 1, nSpins
+!           CALL cp_fm_set_all(matrix=work_matrices%check_xc, alpha=0.0_dp)
+!           CALL copy_dbcsr_to_fm(matrix=rho_ia_ao(ispin)%matrix, &
+!                                fm=work_matrices%check_xc)
 !           CALL print_mat_ao_ao(work_matrices%check_xc, 'rho_ia_ao', logger, ivect)
-         END DO
+!        END DO
          logger = logger
 
          IF (do_lrigpw) THEN
@@ -504,6 +506,7 @@ CONTAINS
                END DO
             END IF ! for full kernel using lri
          END DO
+!        print *, " someplace check mat 1<<<==================================="
 !        DO ispin = 1, nSpins
 !           CALL cp_fm_set_all(matrix=work_matrices%check_xc, alpha=0.0_dp)
 !           CALL copy_dbcsr_to_fm(matrix=work_matrices%A_ia_munu_sub(ispin)%matrix, &

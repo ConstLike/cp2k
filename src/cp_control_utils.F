@@ -56,8 +56,7 @@ MODULE cp_control_utils
         sccs_derivative_cd3, sccs_derivative_cd5, sccs_derivative_cd7, sccs_derivative_fft, &
         sccs_fattebert_gygi, sic_ad, sic_eo, sic_list_all, sic_list_unpaired, sic_mauri_spz, &
         sic_mauri_us, sic_none, slater, tddfpt_dipole_length, tddfpt_kernel_stda, &
-        use_mom_ref_user, xtb_vdw_type_d3, xtb_vdw_type_d4, xtb_vdw_type_none, &
-        tddft_sf_col, tddft_sf_noncol, mrsf_col, mrsf_noncol
+        use_mom_ref_user, xtb_vdw_type_d3, xtb_vdw_type_d4, xtb_vdw_type_none, no_sf_tddfpt
    USE input_cp2k_check,                ONLY: xc_functionals_expand
    USE input_cp2k_dft,                  ONLY: create_dft_section
    USE input_enumeration_types,         ONLY: enum_i2c,&
@@ -1616,6 +1615,9 @@ CONTAINS
       TYPE(section_vals_type), POINTER                   :: dipole_section, mgrid_section, &
                                                             soc_section, stda_section, xc_func, &
                                                             xc_section
+      CHARACTER(LEN=default_string_length), &
+         DIMENSION(:), POINTER                           :: theory_strings
+      INTEGER                                            :: itheory, ntheory, n_theories
 
       CALL timeset(routineN, handle)
 
@@ -1645,9 +1647,39 @@ CONTAINS
       CALL section_vals_val_get(t_section, "EXCITON_DESCRIPTORS", l_val=t_control%do_exciton_descriptors)
       CALL section_vals_val_get(t_section, "DIRECTIONAL_EXCITON_DESCRIPTORS", l_val=t_control%do_directional_exciton_descriptors)
 
-      CALL section_vals_val_get(t_section, "SF_TDDFT", i_val=t_control%sf_tddft)
-      CALL section_vals_val_get(t_section, "MRSF", i_val=t_control%mrsf_type)
-      CALL section_vals_val_get(t_section, "MRSF_MULT", i_val=t_control%mrsf_mult)
+      ! Read theory list
+      CALL section_vals_val_get(t_section, "THEORY_LIST", c_vals=theory_strings)
+      ntheory = SIZE(theory_strings)
+
+      ! Validate and store theory list
+      n_theories = 0
+      ALLOCATE(t_control%theory_list(ntheory))
+
+      t_control%tddft_enabled = .FALSE.
+      DO itheory = 1, ntheory
+         SELECT CASE(TRIM(ADJUSTL(theory_strings(itheory)(:6))))
+         CASE("SPNFLP", "SF    ", "SPINFL")
+            n_theories = n_theories + 1
+            t_control%theory_list(n_theories) = "SPNFLP"
+            t_control%tddft_enabled = .TRUE.
+         CASE("MRSF-S", "SINGLE", "MRSFSI")
+            n_theories = n_theories + 1
+            t_control%theory_list(n_theories) = "MRSF-S"
+            t_control%tddft_enabled = .TRUE.
+         CASE("MRSF-T", "TRIPLE", "MRSFTR")
+            n_theories = n_theories + 1
+            t_control%theory_list(n_theories) = "MRSF-T"
+            t_control%tddft_enabled = .TRUE.
+         CASE("      ") ! Skip default/empty entries
+            CYCLE
+         END SELECT
+      END DO
+
+      IF (t_control%tddft_enabled .and. t_control%spinflip == no_sf_tddfpt) THEN
+         t_control%enabled = .FALSE.
+      END IF
+
+
       CALL section_vals_val_get(t_section, "SPIN_PAIR_COUPLING", explicit=explicit)
       IF (explicit) THEN
          CALL section_vals_val_get(t_section, "SPIN_PAIR_COUPLING", r_vals=t_control%mrsf_SPC)
@@ -1656,13 +1688,12 @@ CONTAINS
       IF (explicit) THEN
          CALL section_vals_val_get(t_section, "MRSF_HF", r_vals=t_control%mrsf_HF)
       END IF
-      IF (t_control%enabled) THEN
-         IF (t_control%sf_tddft==tddft_sf_col .or. t_control%mrsf_type==mrsf_col) THEN
-            t_control%tddft_enabled = .TRUE.
-            t_control%spinflip = 1
-!           t_control%enabled = .FALSE.
-         END IF
-      END IF
+!     IF (t_control%enabled) THEN
+!        IF (t_control%sf_tddft==tddft_sf_col .or. t_control%mrsf_type==mrsf_col) THEN
+!           t_control%tddft_enabled = .TRUE.
+!           t_control%spinflip = 1
+!        END IF
+!     END IF
 
       ! read automatically generated auxiliary basis for LRI
       CALL section_vals_val_get(t_section, "AUTO_BASIS", n_rep_val=nrep)

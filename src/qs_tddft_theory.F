@@ -138,24 +138,24 @@ MODULE qs_tddft_theory
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: evects_nao_nao
 
       !----------------------------------------------------------------------
-      ! HFX kernel working arrays (and ADMM)
+      ! HFX kernel working arrays and their ADMM copies (aux marker)
       !----------------------------------------------------------------------
 
       !> Symmetric AO density matrices for HFX calculations [nSpins]
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_nao_nao_symm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_aux_aux_symm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_nao_nao_symm => NULL()
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_aux_aux_symm => NULL()
 
       !> Antisymmetric AO density matrices for HFX calculations [nSpins]
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_nao_nao_asymm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_aux_aux_asymm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_nao_nao_asymm => NULL()
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_rho_aux_aux_asymm => NULL()
 
-      !> Symmetric Hamiltonian matrices from HFX kernel [nSpins]
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_symm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_aux_symm
+      !> symmetric Hamiltonian matrices from HFX kernel [nSpins]
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_symm => NULL()
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_aux_symm => NULL()
 
       !> Antisymmetric Hamiltonian matrices from HFX kernel [nSpins]
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_asymm
-      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_aux_asymm
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_asymm => NULL()
+      TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: work_hmat_aux_asymm => NULL()
 
       !----------------------------------------------------------------------
       ! Property calculation arrays
@@ -307,7 +307,6 @@ MODULE qs_tddft_theory
 !> \param[inout] this            Theory object instance
 !> \param        qs_env          QuickStep environment containing integral data
 !> \param[inout] tddft_env       TDDFT environment with trial vectors in AO basis
-!> \param[in]    tddfpt_control  Control parameters for operator selection and accuracy
 !>
 !> \par Operator Applications
 !>      The procedure typically performs:
@@ -320,7 +319,7 @@ MODULE qs_tddft_theory
 !> \author  Konstantin Komarov
 !> \date    Aug 2025
 ! **************************************************************************************************
-      SUBROUTINE apply_op_iface(this, qs_env, tddft_env, tddfpt_control)
+      SUBROUTINE apply_op_iface(this, qs_env, tddft_env)
          IMPORT                                          :: qs_environment_type, &
                                                             tddft_info_type, &
                                                             tddft_theory_type, &
@@ -328,7 +327,6 @@ MODULE qs_tddft_theory
          CLASS(tddft_theory_type), INTENT(INOUT)         :: this
          TYPE(qs_environment_type), POINTER              :: qs_env
          TYPE(tddft_info_type), INTENT(INOUT)            :: tddft_env
-         TYPE(tddfpt2_control_type), POINTER, INTENT(IN) :: tddfpt_control
 
       END SUBROUTINE
 
