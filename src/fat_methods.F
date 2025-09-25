@@ -1321,8 +1321,6 @@ CONTAINS
 !> \param v_emb The embedding potential to write
 !> \param work_tmp Temporary workspace for potential calculations
 !> \param i_frag The fragment index
-!> \par History
-!>      09.2024 Created [Konstantin Komarov]
 ! **************************************************************************************************
    SUBROUTINE fat_write_embedding_potential(fat_env, v_emb, work_tmp, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
@@ -1375,8 +1373,10 @@ CONTAINS
          CALL close_file(unit_number=output_unit)
       END IF
 
-      WRITE(filename,'(A,I0,A,I0,A)') 'embedding_dat_frag', i_frag, '.cube'
-      CALL write_pw_to_cube(fat_env, pw_r=v_emb, filename=filename)
+      IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
+         WRITE(filename,'(A,I0,A,I0,A)') 'embedding_dat_frag', i_frag, '.cube'
+         CALL write_pw_to_cube(fat_env, pw_r=v_emb, filename=filename)
+      END IF
 
       DEALLOCATE(stride)
 
@@ -1789,6 +1789,7 @@ CONTAINS
       END IF
 
    END FUNCTION fat_e_tot
+
 ! ************************************************************************************************
 !> \brief Print the intermediate results of a freeze-and-thaw iteration
 ! **************************************************************************************************
@@ -1843,7 +1844,7 @@ CONTAINS
       TYPE(pw_type), POINTER                             :: rho(:), v_emb, weights
       TYPE(qs_energy_type), POINTER                      :: energy
       TYPE(qs_environment_type), POINTER                 :: qs_env_tmp
-!     TYPE(pw_type), POINTER                             :: rho_tmp
+      TYPE(pw_type), POINTER                             :: rho_tmp
       CHARACTER(len=50)                                  :: filename
 
       CALL timeset(routinen, handle)
@@ -1912,17 +1913,17 @@ CONTAINS
          ! Integrate the density * embedding potential
          fat_env%e_emb(i_frag) = pw_integral_ab(v_emb, rho(1))
 
-!        IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
-!           ! Create temporary pw for density
-!           CALL fat_pw_create_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
-!           CALL pw_transfer(rho(1), rho_tmp)
-!           ! Write density to cube file
-!           WRITE(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
-!           CALL write_pw_to_cube(fat_env, pw_r=rho_tmp, filename=filename)
-!           ! Deallocate
-!           CALL fat_pw_release_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
-!        END IF
-
+         IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
+            ! Create temporary pw for density
+            CALL fat_pw_create_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
+            CALL pw_transfer(rho(1), rho_tmp)
+            ! Write density to cube file
+            WRITE(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
+            CALL write_pw_to_cube(fat_env, pw_r=rho_tmp, filename=filename)
+            ! Deallocate
+            CALL fat_pw_release_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
+         END IF
+ 
          IF (is_debug .and. fat_env%force_env_ref%para_env%is_source()) &
             PRINT *, "DBG| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
 
@@ -1947,18 +1948,18 @@ CONTAINS
          IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) &
             PRINT *, "DBG| Embedding energy from fragment ", i_frag, fat_env%e_emb(i_frag)
 
-!        IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
-!           ! Get electron density from internal calculation
-!           CALL fat_get_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
-!           ! Create temporary pw for density
-!           CALL fat_pw_create_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
-!           CALL pw_transfer(rho(1), rho_tmp)
-!           ! Write density to cube file
-!           WRITE(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
-!           CALL write_pw_to_cube(fat_env, pw_r=rho_tmp, filename=filename)
-!           ! Deallocate
-!           CALL fat_pw_release_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
-!        END IF
+         IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) THEN
+            ! Get electron density from internal calculation
+            CALL fat_get_rho_frag(fat_env, rho_r=rho, i_frag=i_frag)
+            ! Create temporary pw for density
+            CALL fat_pw_create_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
+            CALL pw_transfer(rho(1), rho_tmp)
+            ! Write density to cube file
+            WRITE(filename,'(A,I0,A,I0,A)') 'rho_frag', i_frag, '_iter', fat_env%i_iter, '.cube'
+            CALL write_pw_to_cube(fat_env, pw_r=rho_tmp, filename=filename)
+            ! Deallocate
+            CALL fat_pw_release_frag(fat_env, pw_r=rho_tmp, i_frag=i_frag)
+         END IF
 
       END IF
 
@@ -2481,7 +2482,7 @@ CONTAINS
       n = SIZE(particles)
 
 
-      IF (is_master) THEN
+      IF (is_master .AND. is_debug) THEN
          logger => cp_get_default_logger()
          log_unit = cp_logger_get_default_io_unit(logger)
 
