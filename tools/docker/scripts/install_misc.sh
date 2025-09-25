@@ -9,6 +9,7 @@ apt-get install -qq --no-install-recommends \
   libpython3-stdlib \
   python3 \
   python3-pip \
+  python3-venv \
   python3-wheel \
   python3-setuptools \
   python3-dev \
@@ -20,13 +21,19 @@ apt-get install -qq --no-install-recommends \
   wget
 rm -rf /var/lib/apt/lists/*
 
+# Create and activate a virtual environment for Python packages.
+python3 -m venv /opt/venv
+export PATH="/opt/venv/bin:$PATH"
+
 # install python packages
 pip3 install --quiet \
-  numpy \
-  matplotlib \
-  requests \
-  types-lxml \
-  types-requests \
+  numpy==2.2.4 \
+  matplotlib==3.10.1 \
+  requests==2.32.3 \
+  types-requests==2.32.0.20250328 \
+  torch==2.6.0 \
+  e3nn==0.5.6 \
+  scipy==1.15.2 \
   mypy==1.5.1
 
 # download inputs for minimax_to_fortran_source.py

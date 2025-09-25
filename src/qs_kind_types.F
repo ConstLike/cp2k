@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -84,6 +84,12 @@ MODULE qs_kind_types
    USE physcon,                         ONLY: angstrom,&
                                               bohr,&
                                               evolt
+   USE qs_cneo_types,                   ONLY: allocate_cneo_potential,&
+                                              cneo_potential_type,&
+                                              deallocate_cneo_potential,&
+                                              get_cneo_potential,&
+                                              set_cneo_potential,&
+                                              write_cneo_potential
    USE qs_dftb_types,                   ONLY: qs_dftb_atom_type
    USE qs_dftb_utils,                   ONLY: deallocate_dftb_atom_param,&
                                               get_dftb_atom_param,&
@@ -128,7 +134,7 @@ MODULE qs_kind_types
       INTEGER                                :: max_scf = -1
       REAL(KIND=dp)                          :: eps_u_ramping = 0.0_dp
       REAL(KIND=dp)                          :: eps_scf = HUGE(0.0_dp)
-      REAL(KIND=dp)                          :: u_minus_j_target
+      REAL(KIND=dp)                          :: u_minus_j_target = 0.0_dp
       REAL(KIND=dp)                          :: u_minus_j = 0.0_dp
       REAL(KIND=dp)                          :: u_ramping = 0.0_dp
       REAL(KIND=dp)                          :: U = 0.0_dp
@@ -181,9 +187,10 @@ MODULE qs_kind_types
       TYPE(xtb_atom_type), POINTER           :: xtb_parameter => Null()
       !
       TYPE(atom_upfpot_type), POINTER        :: upf_potential => Null()
+      TYPE(cneo_potential_type), POINTER     :: cneo_potential => Null()
       !
       TYPE(basis_set_container_type), &
-         DIMENSION(20)                       :: basis_sets
+         DIMENSION(20)                       :: basis_sets = basis_set_container_type()
       ! Atomic radii
       REAL(KIND=dp)                          :: covalent_radius = 0.0_dp
       REAL(KIND=dp)                          :: vdw_radius = 0.0_dp
@@ -219,6 +226,7 @@ MODULE qs_kind_types
       TYPE(qs_atom_dispersion_type), POINTER :: dispersion => Null()
       REAL(KIND=dp), DIMENSION(:, :), POINTER :: reltmat => Null()
       INTEGER                                :: pao_basis_size = -1
+      CHARACTER(LEN=default_path_length)     :: pao_model_file = ""
       TYPE(pao_potential_type), DIMENSION(:), POINTER :: pao_potentials => Null()
       TYPE(pao_descriptor_type), DIMENSION(:), POINTER :: pao_descriptors => Null()
    END TYPE qs_kind_type
@@ -228,7 +236,7 @@ MODULE qs_kind_types
 ! **************************************************************************************************
    TYPE qs_kind_p_type
       TYPE(qs_kind_type), DIMENSION(:), &
-         POINTER                             :: qs_kind_set
+         POINTER                             :: qs_kind_set => NULL()
    END TYPE qs_kind_p_type
 
    ! Public subroutines
@@ -245,7 +253,8 @@ MODULE qs_kind_types
              set_qs_kind, &
              write_qs_kind_set, &
              write_gto_basis_sets, &
-             init_atom_electronic_state, set_pseudo_state
+             init_atom_electronic_state, set_pseudo_state, &
+             init_cneo_basis_set
 
    ! Public data types
    PUBLIC :: qs_kind_type, pao_potential_type, pao_descriptor_type
@@ -285,6 +294,9 @@ CONTAINS
             IF (ASSOCIATED(qs_kind_set(ikind)%upf_potential)) THEN
                CALL atom_release_upf(qs_kind_set(ikind)%upf_potential)
                DEALLOCATE (qs_kind_set(ikind)%upf_potential)
+            END IF
+            IF (ASSOCIATED(qs_kind_set(ikind)%cneo_potential)) THEN
+               CALL deallocate_cneo_potential(qs_kind_set(ikind)%cneo_potential)
             END IF
             IF (ASSOCIATED(qs_kind_set(ikind)%se_parameter)) THEN
                CALL semi_empirical_release(qs_kind_set(ikind)%se_parameter)
@@ -369,10 +381,12 @@ CONTAINS
 !> \param gth_potential ...
 !> \param sgp_potential ...
 !> \param upf_potential ...
+!> \param cneo_potential ...
 !> \param se_parameter ...
 !> \param dftb_parameter ...
 !> \param xtb_parameter ...
 !> \param dftb3_param ...
+!> \param zatom ...
 !> \param zeff ...
 !> \param elec_conf ...
 !> \param mao ...
@@ -427,6 +441,7 @@ CONTAINS
 !> \param name ...
 !> \param element_symbol ...
 !> \param pao_basis_size ...
+!> \param pao_model_file ...
 !> \param pao_potentials ...
 !> \param pao_descriptors ...
 !> \param nelec ...
@@ -434,8 +449,8 @@ CONTAINS
    SUBROUTINE get_qs_kind(qs_kind, &
                           basis_set, basis_type, ncgf, nsgf, &
                           all_potential, tnadd_potential, gth_potential, sgp_potential, upf_potential, &
-                          se_parameter, dftb_parameter, xtb_parameter, &
-                          dftb3_param, zeff, elec_conf, mao, lmax_dftb, &
+                          cneo_potential, se_parameter, dftb_parameter, xtb_parameter, &
+                          dftb3_param, zatom, zeff, elec_conf, mao, lmax_dftb, &
                           alpha_core_charge, ccore_charge, core_charge, core_charge_radius, &
                           paw_proj_set, paw_atom, hard_radius, hard0_radius, max_rad_local, &
                           covalent_radius, vdw_radius, &
@@ -447,7 +462,7 @@ CONTAINS
                           bs_occupation, magnetization, no_optimize, addel, laddel, naddel, orbitals, &
                           max_scf, eps_scf, smear, u_ramping, u_minus_j_target, eps_u_ramping, &
                           init_u_ramping_each_scf, reltmat, ghost, floating, name, element_symbol, &
-                          pao_basis_size, pao_potentials, pao_descriptors, nelec)
+                          pao_basis_size, pao_model_file, pao_potentials, pao_descriptors, nelec)
 
       TYPE(qs_kind_type)                                 :: qs_kind
       TYPE(gto_basis_set_type), OPTIONAL, POINTER        :: basis_set
@@ -458,10 +473,13 @@ CONTAINS
       TYPE(gth_potential_type), OPTIONAL, POINTER        :: gth_potential
       TYPE(sgp_potential_type), OPTIONAL, POINTER        :: sgp_potential
       TYPE(atom_upfpot_type), OPTIONAL, POINTER          :: upf_potential
+      TYPE(cneo_potential_type), OPTIONAL, POINTER       :: cneo_potential
       TYPE(semi_empirical_type), OPTIONAL, POINTER       :: se_parameter
       TYPE(qs_dftb_atom_type), OPTIONAL, POINTER         :: dftb_parameter
       TYPE(xtb_atom_type), OPTIONAL, POINTER             :: xtb_parameter
-      REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: dftb3_param, zeff
+      REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: dftb3_param
+      INTEGER, INTENT(OUT), OPTIONAL                     :: zatom
+      REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: zeff
       INTEGER, DIMENSION(:), OPTIONAL, POINTER           :: elec_conf
       INTEGER, INTENT(OUT), OPTIONAL                     :: mao, lmax_dftb
       REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: alpha_core_charge, ccore_charge, &
@@ -498,6 +516,8 @@ CONTAINS
          INTENT(OUT), OPTIONAL                           :: name
       CHARACTER(LEN=2), INTENT(OUT), OPTIONAL            :: element_symbol
       INTEGER, INTENT(OUT), OPTIONAL                     :: pao_basis_size
+      CHARACTER(LEN=default_path_length), INTENT(OUT), &
+         OPTIONAL                                        :: pao_model_file
       TYPE(pao_potential_type), DIMENSION(:), OPTIONAL, &
          POINTER                                         :: pao_potentials
       TYPE(pao_descriptor_type), DIMENSION(:), &
@@ -506,6 +526,7 @@ CONTAINS
 
       CHARACTER(LEN=default_string_length)               :: my_basis_type
       INTEGER                                            :: l
+      LOGICAL                                            :: found
       TYPE(gto_basis_set_type), POINTER                  :: tmp_basis_set
 
       ! Retrieve basis set from the kind container
@@ -550,10 +571,10 @@ CONTAINS
       IF (PRESENT(gth_potential)) gth_potential => qs_kind%gth_potential
       IF (PRESENT(sgp_potential)) sgp_potential => qs_kind%sgp_potential
       IF (PRESENT(upf_potential)) upf_potential => qs_kind%upf_potential
+      IF (PRESENT(cneo_potential)) cneo_potential => qs_kind%cneo_potential
       IF (PRESENT(se_parameter)) se_parameter => qs_kind%se_parameter
       IF (PRESENT(dftb_parameter)) dftb_parameter => qs_kind%dftb_parameter
       IF (PRESENT(xtb_parameter)) xtb_parameter => qs_kind%xtb_parameter
-
       IF (PRESENT(element_symbol)) element_symbol = qs_kind%element_symbol
       IF (PRESENT(name)) name = qs_kind%name
       IF (PRESENT(dftb3_param)) dftb3_param = qs_kind%dudq_dftb3
@@ -568,6 +589,8 @@ CONTAINS
          ELSE IF (ASSOCIATED(qs_kind%sgp_potential)) THEN
             CALL get_potential(potential=qs_kind%sgp_potential, &
                                alpha_core_charge=alpha_core_charge)
+         ELSE IF (ASSOCIATED(qs_kind%cneo_potential)) THEN
+            CPABORT("CNEO ALPHA CORE CHARGE NOT AVAILABLE")
          ELSE
             alpha_core_charge = 1.0_dp
          END IF
@@ -583,7 +606,9 @@ CONTAINS
             CALL get_potential(potential=qs_kind%sgp_potential, &
                                ccore_charge=ccore_charge)
          ELSE IF (ASSOCIATED(qs_kind%upf_potential)) THEN
-            CPABORT("UPF CCORE CHARGE RADIUS NOT AVAILABLE")
+            CPABORT("UPF CCORE CHARGE NOT AVAILABLE")
+         ELSE IF (ASSOCIATED(qs_kind%cneo_potential)) THEN
+            CPABORT("CNEO CCORE CHARGE NOT AVAILABLE")
          ELSE
             ccore_charge = 0.0_dp
          END IF
@@ -600,6 +625,8 @@ CONTAINS
                                core_charge_radius=core_charge_radius)
          ELSE IF (ASSOCIATED(qs_kind%upf_potential)) THEN
             CPABORT("UPF CORE CHARGE RADIUS NOT AVAILABLE")
+         ELSE IF (ASSOCIATED(qs_kind%cneo_potential)) THEN
+            CPABORT("CNEO CORE CHARGE RADIUS NOT AVAILABLE")
          ELSE
             core_charge_radius = 0.0_dp
          END IF
@@ -616,9 +643,18 @@ CONTAINS
                                zeff=core_charge)
          ELSE IF (ASSOCIATED(qs_kind%upf_potential)) THEN
             CPABORT("UPF CORE CHARGE NOT AVAILABLE")
+         ELSE IF (ASSOCIATED(qs_kind%cneo_potential)) THEN
+            CALL get_cneo_potential(potential=qs_kind%cneo_potential, &
+                                    zeff=core_charge)
          ELSE
             core_charge = 0.0_dp
          END IF
+      END IF
+
+      IF (PRESENT(zatom)) THEN
+         ! Retrieve information on element
+         CALL get_ptable_info(qs_kind%element_symbol, ielement=zatom, found=found)
+         CPASSERT(found)
       END IF
 
       IF (PRESENT(zeff)) THEN
@@ -630,6 +666,8 @@ CONTAINS
             CALL get_potential(potential=qs_kind%sgp_potential, zeff=zeff)
          ELSE IF (ASSOCIATED(qs_kind%upf_potential)) THEN
             zeff = qs_kind%upf_potential%zion
+         ELSE IF (ASSOCIATED(qs_kind%cneo_potential)) THEN
+            CALL get_cneo_potential(potential=qs_kind%cneo_potential, zeff=zeff)
          ELSE
             zeff = 0.0_dp
          END IF
@@ -812,6 +850,7 @@ CONTAINS
       IF (PRESENT(lmax_dftb)) lmax_dftb = qs_kind%lmax_dftb
 
       IF (PRESENT(pao_basis_size)) pao_basis_size = qs_kind%pao_basis_size
+      IF (PRESENT(pao_model_file)) pao_model_file = qs_kind%pao_model_file
       IF (PRESENT(pao_potentials)) pao_potentials => qs_kind%pao_potentials
       IF (PRESENT(pao_descriptors)) pao_descriptors => qs_kind%pao_descriptors
    END SUBROUTINE get_qs_kind
@@ -852,6 +891,10 @@ CONTAINS
 !> \param basis_rcut ...
 !> \param basis_type ...
 !> \param total_zeff_corr ... [SGh]
+!> \param npgf_seg total number of primitive GTOs in "segmented contraction format"
+!> \param cneo_potential_present ...
+!> \param nkind_q ...
+!> \param natom_q ...
 ! **************************************************************************************************
    SUBROUTINE get_qs_kind_set(qs_kind_set, &
                               all_potential_present, tnadd_potential_present, gth_potential_present, &
@@ -860,7 +903,8 @@ CONTAINS
                               ncgf, npgf, nset, nsgf, nshell, maxpol, maxlppl, maxlppnl, maxppnl, &
                               nelectron, maxder, max_ngrid_rad, max_sph_harm, maxg_iso_not0, lmax_rho0, &
                               basis_rcut, &
-                              basis_type, total_zeff_corr)
+                              basis_type, total_zeff_corr, npgf_seg, &
+                              cneo_potential_present, nkind_q, natom_q)
 
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       LOGICAL, INTENT(OUT), OPTIONAL :: all_potential_present, tnadd_potential_present, &
@@ -874,6 +918,9 @@ CONTAINS
       REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: basis_rcut
       CHARACTER(len=*), OPTIONAL                         :: basis_type
       REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: total_zeff_corr
+      INTEGER, INTENT(OUT), OPTIONAL                     :: npgf_seg
+      LOGICAL, INTENT(OUT), OPTIONAL                     :: cneo_potential_present
+      INTEGER, INTENT(OUT), OPTIONAL                     :: nkind_q, natom_q
 
       CHARACTER(len=default_string_length)               :: my_basis_type
       INTEGER                                            :: ikind, imax, lmax_rho0_kind, &
@@ -883,6 +930,7 @@ CONTAINS
       LOGICAL                                            :: dft_plus_u_atom, ecp_semi_local, paw_atom
       REAL(KIND=dp)                                      :: brcut, zeff, zeff_correction
       TYPE(all_potential_type), POINTER                  :: all_potential
+      TYPE(cneo_potential_type), POINTER                 :: cneo_potential
       TYPE(gth_potential_type), POINTER                  :: gth_potential
       TYPE(gto_basis_set_type), POINTER                  :: tmp_basis_set
       TYPE(local_potential_type), POINTER                :: tnadd_potential
@@ -923,12 +971,16 @@ CONTAINS
          IF (PRESENT(tnadd_potential_present)) tnadd_potential_present = .FALSE.
          IF (PRESENT(gth_potential_present)) gth_potential_present = .FALSE.
          IF (PRESENT(sgp_potential_present)) sgp_potential_present = .FALSE.
+         IF (PRESENT(cneo_potential_present)) cneo_potential_present = .FALSE.
+         IF (PRESENT(nkind_q)) nkind_q = 0
+         IF (PRESENT(natom_q)) natom_q = 0
          IF (PRESENT(paw_atom_present)) paw_atom_present = .FALSE.
          IF (PRESENT(max_ngrid_rad)) max_ngrid_rad = 0
          IF (PRESENT(max_sph_harm)) max_sph_harm = 0
          IF (PRESENT(lmax_rho0)) lmax_rho0 = 0
          IF (PRESENT(basis_rcut)) basis_rcut = 0.0_dp
          IF (PRESENT(total_zeff_corr)) total_zeff_corr = 0.0_dp
+         IF (PRESENT(npgf_seg)) npgf_seg = 0
 
          nkind = SIZE(qs_kind_set)
          DO ikind = 1, nkind
@@ -938,6 +990,7 @@ CONTAINS
                              tnadd_potential=tnadd_potential, &
                              gth_potential=gth_potential, &
                              sgp_potential=sgp_potential, &
+                             cneo_potential=cneo_potential, &
                              paw_proj_set=paw_proj_set, &
                              dftb_parameter=dftb_parameter, &
                              ngrid_rad=ngrid_rad, &
@@ -993,8 +1046,12 @@ CONTAINS
                maxppnl = MAX(maxppnl, imax)
             END IF
 
-            CALL get_basis_from_container(qs_kind%basis_sets, basis_set=tmp_basis_set, &
-                                          basis_type=my_basis_type)
+            IF (my_basis_type(1:3) == "NUC" .AND. .NOT. ASSOCIATED(cneo_potential)) THEN
+               NULLIFY (tmp_basis_set)
+            ELSE
+               CALL get_basis_from_container(qs_kind%basis_sets, basis_set=tmp_basis_set, &
+                                             basis_type=my_basis_type)
+            END IF
 
             IF (PRESENT(maxcgf)) THEN
                IF (ASSOCIATED(tmp_basis_set)) THEN
@@ -1122,6 +1179,10 @@ CONTAINS
                ELSE IF (ASSOCIATED(qs_kind%sgp_potential)) THEN
                   CALL get_potential(potential=qs_kind%sgp_potential, &
                                      zeff=zeff, zeff_correction=zeff_correction)
+               ELSE IF (ASSOCIATED(qs_kind%cneo_potential)) THEN
+                  CALL get_cneo_potential(potential=qs_kind%cneo_potential, &
+                                          zeff=zeff)
+                  zeff_correction = 0.0_dp
                ELSE
                   zeff = 0.0_dp
                   zeff_correction = 0.0_dp
@@ -1180,6 +1241,24 @@ CONTAINS
                END IF
             END IF
 
+            IF (PRESENT(cneo_potential_present)) THEN
+               IF (ASSOCIATED(cneo_potential)) THEN
+                  cneo_potential_present = .TRUE.
+               END IF
+            END IF
+
+            IF (PRESENT(nkind_q)) THEN
+               IF (ASSOCIATED(cneo_potential)) THEN
+                  nkind_q = nkind_q + 1
+               END IF
+            END IF
+
+            IF (PRESENT(natom_q)) THEN
+               IF (ASSOCIATED(cneo_potential)) THEN
+                  natom_q = natom_q + qs_kind_set(ikind)%natom
+               END IF
+            END IF
+
             IF (PRESENT(paw_atom_present)) THEN
                IF (paw_atom) THEN
                   paw_atom_present = .TRUE.
@@ -1206,6 +1285,13 @@ CONTAINS
 
             IF (PRESENT(lmax_rho0)) THEN
                lmax_rho0 = MAX(lmax_rho0, lmax_rho0_kind)
+            END IF
+
+            IF (PRESENT(npgf_seg)) THEN
+               IF (ASSOCIATED(tmp_basis_set)) THEN
+                  CALL get_gto_basis_set(gto_basis_set=tmp_basis_set, npgf_seg_sum=n)
+                  npgf_seg = npgf_seg + n*qs_kind_set(ikind)%natom
+               END IF
             END IF
 
          END DO
@@ -1330,9 +1416,13 @@ CONTAINS
 
             NULLIFY (soft_basis)
             CALL allocate_gto_basis_set(soft_basis)
+            ! Quantum nuclear wave functions are very localized. Even if soft
+            ! electronic basis is used, the atomic kind needs PAW treatment
+            ! because the local Hartree potential is needed.
             CALL create_soft_basis(orb_basis, soft_basis, &
                                    qs_control%gapw_control%eps_fit, rc, paw_atom, &
-                                   qs_control%gapw_control%force_paw, gpw)
+                                   (qs_control%gapw_control%force_paw .OR. &
+                                    ASSOCIATED(qs_kind%cneo_potential)), gpw)
             CALL add_basis_set_to_container(qs_kind%basis_sets, soft_basis, "ORB_SOFT")
             CALL set_qs_kind(qs_kind=qs_kind, paw_atom=paw_atom)
 
@@ -1471,6 +1561,51 @@ CONTAINS
    END SUBROUTINE init_gapw_nlcc
 
 ! **************************************************************************************************
+!> \brief ...
+!> \param qs_kind_set ...
+!> \param qs_control ...
+! **************************************************************************************************
+   SUBROUTINE init_cneo_basis_set(qs_kind_set, qs_control)
+
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      TYPE(qs_control_type), POINTER                     :: qs_control
+
+      INTEGER                                            :: ikind, nkind
+      LOGICAL                                            :: paw_atom
+      REAL(dp)                                           :: rc
+      TYPE(gto_basis_set_type), POINTER                  :: orb_basis, soft_basis
+      TYPE(qs_kind_type), POINTER                        :: qs_kind
+
+      IF (ASSOCIATED(qs_kind_set)) THEN
+
+         nkind = SIZE(qs_kind_set)
+
+         DO ikind = 1, nkind
+
+            qs_kind => qs_kind_set(ikind)
+
+            IF (ASSOCIATED(qs_kind%cneo_potential)) THEN
+               CALL get_qs_kind(qs_kind=qs_kind, basis_set=orb_basis, basis_type="NUC", &
+                                hard_radius=rc)
+
+               NULLIFY (soft_basis)
+               CALL allocate_gto_basis_set(soft_basis)
+               CALL create_soft_basis(orb_basis, soft_basis, &
+                                      qs_control%gapw_control%eps_fit/ &
+                                      SQRT(qs_kind%cneo_potential%zeff), &
+                                      rc, paw_atom, .TRUE., .FALSE.)
+               CALL add_basis_set_to_container(qs_kind%basis_sets, soft_basis, "NUC_SOFT")
+            END IF
+
+         END DO
+
+      ELSE
+         CPABORT("The pointer qs_kind_set is not associated")
+      END IF
+
+   END SUBROUTINE init_cneo_basis_set
+
+! **************************************************************************************************
 !> \brief Read an atomic kind data set from the input file.
 !> \param qs_kind ...
 !> \param kind_section ...
@@ -1478,12 +1613,14 @@ CONTAINS
 !> \param force_env_section ...
 !> \param no_fail ...
 !> \param method_id ...
+!> \param silent ...
 !> \par History
 !>      - Creation (09.02.2002,MK)
 !>      - 20.09.2002,gt: adapted for POL/KG use (elp_potential)
 !>      - 05.03.2010: split elp_potential into fist_potential and kg_potential
 ! **************************************************************************************************
-   SUBROUTINE read_qs_kind(qs_kind, kind_section, para_env, force_env_section, no_fail, method_id)
+   SUBROUTINE read_qs_kind(qs_kind, kind_section, para_env, force_env_section, &
+                           no_fail, method_id, silent)
 
       TYPE(qs_kind_type), INTENT(INOUT)                  :: qs_kind
       TYPE(section_vals_type), POINTER                   :: kind_section
@@ -1491,6 +1628,7 @@ CONTAINS
       TYPE(section_vals_type), POINTER                   :: force_env_section
       LOGICAL, INTENT(IN)                                :: no_fail
       INTEGER, INTENT(IN)                                :: method_id
+      LOGICAL, INTENT(IN)                                :: silent
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'read_qs_kind'
       INTEGER, PARAMETER                                 :: maxbas = 20
@@ -1511,9 +1649,10 @@ CONTAINS
          nb_rep, nexp, ngauss, nlcc, nloc, nnl, norbitals, npaodesc, npaopot, nppnl, nspin, nu, z
       INTEGER, DIMENSION(:), POINTER                     :: add_el, elec_conf, orbitals
       LOGICAL :: check, ecp_semi_local, explicit, explicit_basis, explicit_J, explicit_kgpot, &
-         explicit_potential, explicit_U, explicit_u_m_j, nobasis, section_enabled, &
+         explicit_potential, explicit_U, explicit_u_m_j, nobasis, nobasis_nuc, section_enabled, &
          subsection_enabled, update_input
-      REAL(KIND=dp)                                      :: alpha, ccore, r, rc, zeff_correction
+      REAL(KIND=dp)                                      :: alpha, ccore, mass, r, rc, &
+                                                            zeff_correction
       REAL(KIND=dp), DIMENSION(6)                        :: error
       REAL(KIND=dp), DIMENSION(:), POINTER               :: a_nl, aloc, anlcc, cloc, cnlcc, nelec
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: h_nl
@@ -1665,9 +1804,15 @@ CONTAINS
             END IF
          END DO
 
-         ! parse PAO_BASIS_SIZE
+         ! parse PAO keywords
          CALL section_vals_val_get(kind_section, keyword_name="PAO_BASIS_SIZE", i_rep_section=k_rep, &
                                    i_val=qs_kind%pao_basis_size)
+         CALL section_vals_val_get(kind_section, keyword_name="PAO_MODEL_FILE", i_rep_section=k_rep, &
+                                   explicit=explicit)
+         IF (explicit) THEN
+            CALL section_vals_val_get(kind_section, keyword_name="PAO_MODEL_FILE", i_rep_section=k_rep, &
+                                      c_val=qs_kind%pao_model_file)
+         END IF
 
          ! parse PAO_POTENTIAL sections
          pao_pot_section => section_vals_get_subs_vals(kind_section, "PAO_POTENTIAL", i_rep_section=k_rep)
@@ -2096,13 +2241,13 @@ CONTAINS
                              zeff=qs_kind%se_parameter%zeff, zeff_correction=zeff_correction)
          qs_kind%se_parameter%zeff = qs_kind%se_parameter%zeff - zeff_correction
 
-         check = ((potential_name /= '') .OR. explicit_potential)
+         check = ((potential_name /= '') .OR. explicit_potential) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding POTENTIAL for KIND <"// &
                          TRIM(qs_kind%name)//"> will be ignored!")
 
-         check = ((k_rep > 0) .OR. explicit_basis)
+         check = ((k_rep > 0) .OR. explicit_basis) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding BASIS for KIND <"// &
@@ -2129,13 +2274,13 @@ CONTAINS
                                zeff_correction=0.0_dp)
          END IF
 
-         check = ((potential_name /= '') .OR. explicit_potential)
+         check = ((potential_name /= '') .OR. explicit_potential) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding POTENTIAL for KIND <"// &
                          TRIM(qs_kind%name)//"> will be ignored!")
 
-         check = ((k_rep > 0) .OR. explicit_basis)
+         check = ((k_rep > 0) .OR. explicit_basis) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding BASIS for KIND <"// &
@@ -2162,13 +2307,13 @@ CONTAINS
                                zeff_correction=0.0_dp)
          END IF
 
-         check = ((potential_name /= '') .OR. explicit_potential)
+         check = ((potential_name /= '') .OR. explicit_potential) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding POTENTIAL for KIND <"// &
                          TRIM(qs_kind%name)//"> will be ignored!")
 
-         check = ((k_rep > 0) .OR. explicit_basis)
+         check = ((k_rep > 0) .OR. explicit_basis) .AND. .NOT. silent
          IF (check) &
             CALL cp_warn(__LOCATION__, &
                          "Information provided in the input file regarding BASIS for KIND <"// &
@@ -2179,7 +2324,7 @@ CONTAINS
          ! Allocate and initialise the potential data set structure
          IF (potential_name /= '') THEN
             SELECT CASE (TRIM(potential_type))
-            CASE ("ALL", "ECP")
+            CASE ("ALL", "ECP", "CNEO")
                CALL cp_abort(__LOCATION__, &
                              "PW DFT calculations only with potential type UPF or GTH possible."// &
                              " <"//TRIM(potential_type)//"> was specified "// &
@@ -2204,7 +2349,8 @@ CONTAINS
                END IF
             CASE ("UPF")
                ALLOCATE (qs_kind%upf_potential)
-               CALL atom_read_upf(qs_kind%upf_potential, potential_name, read_header=.TRUE.)
+               qs_kind%upf_potential%zion = 0
+               qs_kind%upf_potential%filename = ADJUSTL(TRIM(potential_name))
                CALL get_qs_kind(qs_kind, elec_conf=elec_conf)
                IF (.NOT. ASSOCIATED(elec_conf)) THEN
                   CALL set_qs_kind(qs_kind, elec_conf=qs_kind%upf_potential%econf)
@@ -2365,7 +2511,7 @@ CONTAINS
                      CPABORT("ECPs are only well tested in their semi-local form")
                      CALL get_qs_kind(qs_kind, basis_set=orb_basis_set)
                      CALL sgp_construction(sgp_pot=sgppot, ecp_pot=ecppot, orb_basis=orb_basis_set, error=error)
-                     IF (iounit > 0) THEN
+                     IF (iounit > 0 .AND. .NOT. silent) THEN
                         WRITE (iounit, "(/,T2,'PP Transformation for ',A)") TRIM(ecppot%pname)
                         IF (sgppot%has_local) THEN
                            WRITE (iounit, "(T8,'Accuracy for local part:',T41,F10.3,'%',T61,F20.12)") error(4), error(1)
@@ -2425,7 +2571,7 @@ CONTAINS
                                      zeff=upfpot%zion, z=z, has_nlcc=upfpot%core_correction)
                   ! convert pp
                   CALL sgp_construction(sgp_pot=sgppot, upf_pot=upfpot, error=error)
-                  IF (iounit > 0) THEN
+                  IF (iounit > 0 .AND. .NOT. silent) THEN
                      WRITE (iounit, "(/,T2,'PP Transformation for ',A)") TRIM(upfpot%pname)
                      IF (sgppot%has_local) THEN
                         WRITE (iounit, "(T8,'Accuracy for local part:',T61,F20.12)") error(1)
@@ -2484,6 +2630,43 @@ CONTAINS
                   CALL set_potential(qs_kind%sgp_potential, elec_conf=elec_conf)
                   CALL atom_release_upf(upfpot)
                   CALL atom_sgp_release(sgppot)
+               CASE ("CNEO")
+                  IF (zeff_correction /= 0.0_dp) &
+                     CPABORT("CORE_CORRECTION is not compatible with CNEO")
+                  CALL allocate_cneo_potential(qs_kind%cneo_potential)
+                  CALL set_cneo_potential(qs_kind%cneo_potential, z=z)
+                  mass = 0.0_dp
+                  ! Input mass is the mass of the neutral atom, not the nucleus.
+                  ! The mass of electrons will get subtracted later.
+                  ! In principle, the most abundant pure isotope mass should be used.
+                  IF (k_rep > 0) THEN
+                     CALL section_vals_val_get(kind_section, i_rep_section=k_rep, &
+                                               keyword_name="MASS", n_rep_val=i)
+                     IF (i > 0) CALL section_vals_val_get(kind_section, i_rep_section=k_rep, &
+                                                          keyword_name="MASS", r_val=mass)
+                  END IF
+                  ! Remove electron mass from atomic mass to get nuclear mass
+                  IF (mass - REAL(z, dp)*0.000548579909_dp > 0.0_dp) THEN
+                     mass = mass - REAL(z, dp)*0.000548579909_dp
+                     CALL set_cneo_potential(qs_kind%cneo_potential, mass=mass)
+                  END IF
+                  ! In case the mass is not set by user, get the default mass from z
+                  CALL get_cneo_potential(qs_kind%cneo_potential, mass=mass)
+                  ! Warn if the mass is from ptable
+                  IF (ABS(mass + REAL(z, dp)*0.000548579909_dp - ptable(z)%amass) < 1.e-4_dp) THEN
+                     CALL cp_warn(__LOCATION__, &
+                                  "Atomic mass of the atomic kind <"//TRIM(qs_kind%name)// &
+                                  "> is very close to its average mass. Is it a pure isotope? "// &
+                                  "Pure isotopes are preferable for CNEO. "// &
+                                  "(e.g., mass of 1H is 1.007825, not 1.00794)")
+                  END IF
+                  CALL get_qs_kind(qs_kind, elec_conf=elec_conf)
+                  IF (.NOT. ASSOCIATED(elec_conf)) THEN
+                     CALL get_cneo_potential(potential=qs_kind%cneo_potential, elec_conf=elec_conf)
+                     CALL set_qs_kind(qs_kind, elec_conf=elec_conf)
+                  ELSE
+                     CALL set_cneo_potential(potential=qs_kind%cneo_potential, elec_conf=elec_conf)
+                  END IF
                CASE DEFAULT
                   CALL cp_abort(__LOCATION__, &
                                 "An invalid potential type <"// &
@@ -2531,6 +2714,28 @@ CONTAINS
                                 TRIM(qs_kind%name))
                END SELECT
             END IF
+         END IF
+
+         ! check that we have a nuclear orbital basis set if CNEO is requested
+         nobasis_nuc = ASSOCIATED(qs_kind%cneo_potential)
+         DO i = 1, SIZE(qs_kind%basis_sets)
+            NULLIFY (tmp_basis_set)
+            CALL get_basis_from_container(qs_kind%basis_sets, basis_set=tmp_basis_set, &
+                                          inumbas=i, basis_type=basis_type)
+            IF (basis_type == "NUC") THEN
+               nobasis_nuc = .FALSE.
+               IF (.NOT. ASSOCIATED(qs_kind%cneo_potential)) THEN
+                  CALL cp_warn(__LOCATION__, &
+                               "POTENTIAL is not set to CNEO, NUC type basis set for KIND <"// &
+                               TRIM(qs_kind%name)//"> will be ignored!")
+               END IF
+            END IF
+         END DO
+         IF (nobasis_nuc) THEN
+            CALL cp_abort(__LOCATION__, &
+                          "No NUC type basis set was defined for the "// &
+                          "atomic kind <"//TRIM(qs_kind%name)//">, which is required by "// &
+                          "POTENTIAL CNEO.")
          END IF
       END SELECT
 
@@ -2595,14 +2800,17 @@ CONTAINS
 !> \param kind_section ...
 !> \param para_env ...
 !> \param force_env_section ...
+!> \param silent ...
 ! **************************************************************************************************
-   SUBROUTINE create_qs_kind_set(qs_kind_set, atomic_kind_set, kind_section, para_env, force_env_section)
+   SUBROUTINE create_qs_kind_set(qs_kind_set, atomic_kind_set, kind_section, para_env, &
+                                 force_env_section, silent)
 
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(section_vals_type), POINTER                   :: kind_section
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(section_vals_type), POINTER                   :: force_env_section
+      LOGICAL, INTENT(IN)                                :: silent
 
       CHARACTER(len=*), PARAMETER :: routineN = 'create_qs_kind_set'
 
@@ -2642,7 +2850,8 @@ CONTAINS
          qs_kind_set(ikind)%name = atomic_kind_set(ikind)%name
          qs_kind_set(ikind)%element_symbol = atomic_kind_set(ikind)%element_symbol
          qs_kind_set(ikind)%natom = atomic_kind_set(ikind)%natom
-         CALL read_qs_kind(qs_kind_set(ikind), kind_section, para_env, force_env_section, no_fail, qs_method)
+         CALL read_qs_kind(qs_kind_set(ikind), kind_section, para_env, force_env_section, &
+                           no_fail, qs_method, silent)
       END DO
 
       CALL timestop(handle)
@@ -2662,6 +2871,7 @@ CONTAINS
       TYPE(dft_control_type), INTENT(IN)                 :: dft_control
       TYPE(section_vals_type), POINTER                   :: subsys_section
 
+      INTEGER                                            :: gfn_type
       LOGICAL                                            :: defined
       TYPE(qs_dftb_atom_type), POINTER                   :: dftb_parameter
       TYPE(semi_empirical_type), POINTER                 :: se_parameter
@@ -2680,9 +2890,12 @@ CONTAINS
          CPASSERT(defined)
          CALL write_dftb_atom_param(dftb_parameter, subsys_section)
       ELSE IF (dft_control%qs_control%xtb) THEN
-         CALL get_qs_kind(qs_kind, xtb_parameter=xtb_parameter)
-         CPASSERT(ASSOCIATED(xtb_parameter))
-         CALL write_xtb_atom_param(xtb_parameter, subsys_section)
+         IF (.NOT. (dft_control%qs_control%xtb_control%do_tblite)) THEN
+            CALL get_qs_kind(qs_kind, xtb_parameter=xtb_parameter)
+            CPASSERT(ASSOCIATED(xtb_parameter))
+            gfn_type = dft_control%qs_control%xtb_control%gfn_type
+            CALL write_xtb_atom_param(xtb_parameter, gfn_type, subsys_section)
+         END IF
       END IF
 
    END SUBROUTINE check_qs_kind
@@ -2834,6 +3047,8 @@ CONTAINS
             CALL set_potential(potential=qs_kind%gth_potential, zeff=zeff)
          ELSE IF (ASSOCIATED(qs_kind%sgp_potential)) THEN
             CALL set_potential(potential=qs_kind%sgp_potential, zeff=zeff)
+         ELSE IF (ASSOCIATED(qs_kind%cneo_potential)) THEN
+            CPABORT("CNEO potential ZEFF should not be manually set")
          END IF
       END IF
       IF (PRESENT(ghost)) qs_kind%ghost = ghost
@@ -2912,6 +3127,12 @@ CONTAINS
                   bstring = "RI XAS Basis Set"
                CASE ("RI_HFX")
                   bstring = "RI HFX Basis Set"
+               CASE ("NUC")
+                  bstring = "Nuclear Basis Set"
+                  do_print = .FALSE.
+               CASE ("NUC_SOFT")
+                  bstring = "Nuclear Soft Basis Set"
+                  do_print = .FALSE.
                END SELECT
 
                IF (do_print) THEN
@@ -3003,6 +3224,19 @@ CONTAINS
                         "A smearing of the orbital occupations will be performed"
                   END IF
                END IF
+            END IF
+            IF (ASSOCIATED(qs_kind%cneo_potential)) THEN
+               WRITE (UNIT=output_unit, FMT="(/,T6,A)") &
+                  "The nuclei of this atomic kind are quantum mechanical (CNEO)"
+               CALL write_cneo_potential(qs_kind%cneo_potential, output_unit)
+               NULLIFY (tmp_basis)
+               CALL get_basis_from_container(qs_kind%basis_sets, basis_set=tmp_basis, &
+                                             basis_type="NUC")
+               CALL write_orb_basis_set(tmp_basis, output_unit, "Nuclear Basis Set")
+               NULLIFY (tmp_basis)
+               CALL get_basis_from_container(qs_kind%basis_sets, basis_set=tmp_basis, &
+                                             basis_type="NUC_SOFT")
+               CALL write_orb_basis_set(tmp_basis, output_unit, "Nuclear Soft Basis Set")
             END IF
          ELSE
             CPABORT("")
@@ -3120,6 +3354,12 @@ CONTAINS
                      bstring = "LRI Basis Set for TDDFPT"
                   CASE ("RI_HFX")
                      bstring = "RI HFX Basis Set"
+                  CASE ("NUC")
+                     bstring = "Nuclear Basis Set"
+                     IF (.NOT. ASSOCIATED(qs_kind%cneo_potential)) NULLIFY (tmp_basis)
+                  CASE ("NUC_SOFT")
+                     bstring = "Nuclear Soft Basis Set"
+                     IF (.NOT. ASSOCIATED(qs_kind%cneo_potential)) NULLIFY (tmp_basis)
                   END SELECT
 
                   IF (ASSOCIATED(tmp_basis)) CALL write_gto_basis_set(tmp_basis, output_unit, bstring)
@@ -3286,6 +3526,7 @@ CONTAINS
       INTEGER, INTENT(IN)                                :: z
       INTEGER, DIMENSION(0:lmat, 10), INTENT(OUT)        :: ncalc, ncore, nelem
 
+      CHARACTER(LEN=default_string_length)               :: message
       INTEGER                                            :: ii, iounit, l, ll, lmin, nc, nn
       INTEGER, DIMENSION(0:lmat)                         :: econfx
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -3392,6 +3633,218 @@ CONTAINS
             ncore(2, 2) = 10
             ncore(2, 3) = 10
             ncore(3, 1) = 14
+            ! 79 - 92 5f incore PP
+         CASE (79)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 1
+         CASE (80)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 2
+         CASE (81)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 3
+         CASE (82)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 4
+         CASE (83)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 5
+         CASE (84)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 6
+         CASE (85)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 7
+         CASE (86)
+            ! this is not Rn core, add double assignment below
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 8
+         CASE (87)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 9
+         CASE (88)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 10
+         CASE (89)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 11
+         CASE (90)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 12
+         CASE (91)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 13
+         CASE (92)
+            ncore(0, 1) = 2
+            ncore(0, 2) = 2
+            ncore(0, 3) = 2
+            ncore(0, 4) = 2
+            ncore(0, 5) = 2
+            ncore(1, 1) = 6
+            ncore(1, 2) = 6
+            ncore(1, 3) = 6
+            ncore(1, 4) = 6
+            ncore(2, 1) = 10
+            ncore(2, 2) = 10
+            ncore(2, 3) = 10
+            ncore(3, 1) = 14
+            ncore(3, 2) = 14
          CASE DEFAULT
             ncore(0, 1) = -1
          END SELECT
@@ -3404,12 +3857,23 @@ CONTAINS
          ! if there is still no core, check for special cases
          IF (ncore(0, 1) <= 0) THEN
             IF (z >= 58 .AND. z <= 71) THEN
-               ! 4f-in-core PPs Lathanides
+               ! 4f-in-core PPs for lanthanides
                nc = z - SUM(econf)
                ! setup ncore
                ncore = 0
                SELECT CASE (nc)
-               CASE (47)
+               CASE (29:42)
+                  ncore(0, 1) = 2
+                  ncore(0, 2) = 2
+                  ncore(0, 3) = 2
+                  ncore(1, 1) = 6
+                  ncore(1, 2) = 6
+                  ncore(2, 1) = 10
+                  ncore(3, 1) = nc - 28
+                  message = "A small-core pseudopotential with 4f-in-core is used for the lanthanide "// &
+                            TRIM(ptable(z)%symbol)
+                  CPHINT(TRIM(message))
+               CASE (47:60)
                   ncore(0, 1) = 2
                   ncore(0, 2) = 2
                   ncore(0, 3) = 2
@@ -3419,139 +3883,10 @@ CONTAINS
                   ncore(1, 3) = 6
                   ncore(2, 1) = 10
                   ncore(2, 2) = 10
-                  ncore(3, 1) = 1
-               CASE (48)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 2
-               CASE (49)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 3
-               CASE (50)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 4
-               CASE (51)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 5
-               CASE (52)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 6
-               CASE (53)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 7
-               CASE (54)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 8
-               CASE (55)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 9
-               CASE (56)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 10
-               CASE (57)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 11
-               CASE (58)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 12
-               CASE (59)
-                  ncore(0, 1) = 2
-                  ncore(0, 2) = 2
-                  ncore(0, 3) = 2
-                  ncore(0, 4) = 2
-                  ncore(1, 1) = 6
-                  ncore(1, 2) = 6
-                  ncore(1, 3) = 6
-                  ncore(2, 1) = 10
-                  ncore(2, 2) = 10
-                  ncore(3, 1) = 13
+                  ncore(3, 1) = nc - 46
+                  message = "A medium-core pseudopotential with 4f-in-core is used for the lanthanide "// &
+                            TRIM(ptable(z)%symbol)
+                  CPHINT(TRIM(message))
                CASE DEFAULT
                   ncore(0, 1) = -1
                END SELECT

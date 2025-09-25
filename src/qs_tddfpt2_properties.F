@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -9,6 +9,10 @@ MODULE qs_tddfpt2_properties
    USE atomic_kind_types,               ONLY: atomic_kind_type
    USE bibliography,                    ONLY: Martin2003,&
                                               cite_reference
+   USE bse_print,                       ONLY: print_exciton_descriptors
+   USE bse_properties,                  ONLY: exciton_descr_type,&
+                                              get_exciton_descriptors
+   USE bse_util,                        ONLY: get_multipoles_mo
    USE cell_types,                      ONLY: cell_type
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_cfm_basic_linalg,             ONLY: cp_cfm_solve
@@ -20,6 +24,10 @@ MODULE qs_tddfpt2_properties
                                               cp_fm_to_cfm
    USE cp_control_types,                ONLY: dft_control_type,&
                                               tddfpt2_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_copy, dbcsr_get_block_p, dbcsr_get_info, dbcsr_init_p, dbcsr_iterator_blocks_left, &
+        dbcsr_iterator_next_block, dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, &
+        dbcsr_p_type, dbcsr_set, dbcsr_type
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
                                               cp_dbcsr_sm_fm_multiply,&
@@ -38,6 +46,7 @@ MODULE qs_tddfpt2_properties
                                               cp_fm_release,&
                                               cp_fm_set_all,&
                                               cp_fm_to_fm,&
+                                              cp_fm_to_fm_submat_general,&
                                               cp_fm_type,&
                                               cp_fm_vectorsnorm
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
@@ -48,11 +57,8 @@ MODULE qs_tddfpt2_properties
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
    USE cp_realspace_grid_cube,          ONLY: cp_pw_to_cube
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_copy, dbcsr_get_block_p, dbcsr_get_info, dbcsr_init_p, dbcsr_iterator_blocks_left, &
-        dbcsr_iterator_next_block, dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, &
-        dbcsr_p_type, dbcsr_set, dbcsr_type
-   USE input_constants,                 ONLY: tddfpt_dipole_berry,&
+   USE input_constants,                 ONLY: no_sf_tddfpt,&
+                                              tddfpt_dipole_berry,&
                                               tddfpt_dipole_length,&
                                               tddfpt_dipole_velocity
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
@@ -79,11 +85,8 @@ MODULE qs_tddfpt2_properties
    USE pw_poisson_types,                ONLY: pw_poisson_type
    USE pw_pool_types,                   ONLY: pw_pool_p_type,&
                                               pw_pool_type
-   USE pw_types,                        ONLY: COMPLEXDATA1D,&
-                                              REALDATA3D,&
-                                              REALSPACE,&
-                                              RECIPROCALSPACE,&
-                                              pw_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
    USE qs_collocate_density,            ONLY: calculate_wavefunction
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
@@ -117,7 +120,7 @@ MODULE qs_tddfpt2_properties
    INTEGER, PARAMETER, PRIVATE          :: maxspins = 2
 
    PUBLIC :: tddfpt_dipole_operator, tddfpt_print_summary, tddfpt_print_excitation_analysis, &
-             tddfpt_print_nto_analysis
+             tddfpt_print_nto_analysis, tddfpt_print_exciton_descriptors
 
 ! **************************************************************************************************
 
@@ -630,26 +633,29 @@ CONTAINS
 !> \param evals              TDDFPT eigenvalues
 !> \param gs_mos             molecular orbitals optimised for the ground state
 !> \param matrix_s           overlap matrix
+!> \param spinflip ...
 !> \param min_amplitude      the smallest excitation amplitude to print
 !> \par History
 !>    * 05.2016 created as 'tddfpt_print_summary' [Sergey Chulkov]
 !>    * 08.2018 splited of from 'tddfpt_print_summary' [Sergey Chulkov]
 ! **************************************************************************************************
-   SUBROUTINE tddfpt_print_excitation_analysis(log_unit, evects, evals, gs_mos, matrix_s, min_amplitude)
+   SUBROUTINE tddfpt_print_excitation_analysis(log_unit, evects, evals, gs_mos, matrix_s, spinflip, min_amplitude)
       INTEGER, INTENT(in)                                :: log_unit
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(in)      :: evects
       REAL(kind=dp), DIMENSION(:), INTENT(in)            :: evals
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          INTENT(in)                                      :: gs_mos
       TYPE(dbcsr_type), POINTER                          :: matrix_s
+      INTEGER                                            :: spinflip
       REAL(kind=dp), INTENT(in)                          :: min_amplitude
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_print_excitation_analysis'
 
-      CHARACTER(len=5)                                   :: spin_label
+      CHARACTER(len=5)                                   :: spin_label, spin_label2
       INTEGER                                            :: handle, icol, iproc, irow, ispin, &
                                                             istate, nao, ncols_local, nrows_local, &
-                                                            nspins, nstates, state_spin
+                                                            nspins, nstates, spin2, state_spin, &
+                                                            state_spin2
       INTEGER(kind=int_8)                                :: iexc, imo_occ, imo_virt, ind, nexcs, &
                                                             nexcs_local, nexcs_max_local, &
                                                             nmo_virt_occ, nmo_virt_occ_alpha
@@ -673,7 +679,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      nspins = SIZE(evects, 1)
+      nspins = SIZE(gs_mos, 1)
       nstates = SIZE(evects, 2)
       do_exc_analysis = min_amplitude < 1.0_dp
 
@@ -703,28 +709,40 @@ CONTAINS
 
             IF (nspins == 1) THEN
                state_spin = 1
+               state_spin2 = 2
                spin_label = '     '
+               spin_label2 = '     '
+            ELSE IF (spinflip .NE. no_sf_tddfpt) THEN
+               state_spin = 1
+               state_spin2 = 2
+               spin_label = '(alp)'
+               spin_label2 = '(bet)'
             END IF
          END IF
 
-         ALLOCATE (S_mos_virt(nspins), weights_fm(nspins))
-         DO ispin = 1, nspins
-            CALL cp_fm_get_info(gs_mos(ispin)%mos_virt, matrix_struct=fm_struct)
+         ALLOCATE (S_mos_virt(SIZE(evects, 1)), weights_fm(SIZE(evects, 1)))
+         DO ispin = 1, SIZE(evects, 1)
+            IF (spinflip == no_sf_tddfpt) THEN
+               spin2 = ispin
+            ELSE
+               spin2 = 2
+            END IF
+            CALL cp_fm_get_info(gs_mos(spin2)%mos_virt, matrix_struct=fm_struct)
             CALL cp_fm_create(S_mos_virt(ispin), fm_struct)
             CALL cp_dbcsr_sm_fm_multiply(matrix_s, &
-                                         gs_mos(ispin)%mos_virt, &
+                                         gs_mos(spin2)%mos_virt, &
                                          S_mos_virt(ispin), &
-                                         ncol=nmo_virt(ispin), alpha=1.0_dp, beta=0.0_dp)
+                                         ncol=nmo_virt(spin2), alpha=1.0_dp, beta=0.0_dp)
 
             NULLIFY (fm_struct)
-            CALL cp_fm_struct_create(fm_struct, nrow_global=nmo_virt(ispin), ncol_global=nmo_occ(ispin), &
+            CALL cp_fm_struct_create(fm_struct, nrow_global=nmo_virt(spin2), ncol_global=nmo_occ(ispin), &
                                      context=blacs_env)
             CALL cp_fm_create(weights_fm(ispin), fm_struct)
             CALL cp_fm_struct_release(fm_struct)
          END DO
 
          nexcs_max_local = 0
-         DO ispin = 1, nspins
+         DO ispin = 1, SIZE(evects, 1)
             CALL cp_fm_get_info(weights_fm(ispin), nrow_local=nrows_local, ncol_local=ncols_local)
             nexcs_max_local = nexcs_max_local + INT(nrows_local, int_8)*INT(ncols_local, int_8)
          END DO
@@ -737,9 +755,14 @@ CONTAINS
 
             ! analyse matrix elements locally and transfer only significant
             ! excitations to the master node for subsequent ordering
-            DO ispin = 1, nspins
+            DO ispin = 1, SIZE(evects, 1)
+               IF (spinflip == no_sf_tddfpt) THEN
+                  spin2 = ispin
+               ELSE
+                  spin2 = 2
+               END IF
                ! compute excitation amplitudes
-               CALL parallel_gemm('T', 'N', nmo_virt(ispin), nmo_occ(ispin), nao, 1.0_dp, S_mos_virt(ispin), &
+               CALL parallel_gemm('T', 'N', nmo_virt(spin2), nmo_occ(ispin), nao, 1.0_dp, S_mos_virt(ispin), &
                                   evects(ispin, istate), 0.0_dp, weights_fm(ispin))
 
                CALL cp_fm_get_info(weights_fm(ispin), nrow_local=nrows_local, ncol_local=ncols_local, &
@@ -755,12 +778,12 @@ CONTAINS
                         weights_local(nexcs_local) = local_data(irow, icol)
                         ! index of single excitation (ivirt, iocc, ispin) in compressed form
                         inds_local(nexcs_local) = nmo_virt_occ + INT(row_indices(irow), int_8) + &
-                                                  INT(col_indices(icol) - 1, int_8)*nmo_virt8(ispin)
+                                                  INT(col_indices(icol) - 1, int_8)*nmo_virt8(spin2)
                      END IF
                   END DO
                END DO
 
-               nmo_virt_occ = nmo_virt_occ + nmo_virt8(ispin)*nmo_occ8(ispin)
+               nmo_virt_occ = nmo_virt_occ + nmo_virt8(spin2)*nmo_occ8(ispin)
             END DO
 
             IF (para_env%is_source()) THEN
@@ -844,24 +867,33 @@ CONTAINS
 
                WRITE (log_unit, '(T7,I8,F10.5,A)') istate, evals(istate)*evolt, " eV"
 
+               ! This reinitialization is needed to prevent the intel fortran compiler from introduce
+               ! a bug when using optimization level 3 flag
+               state_spin = 1
+               state_spin2 = 1
+               IF (spinflip .NE. no_sf_tddfpt) THEN
+                  state_spin = 1
+                  state_spin2 = 2
+               END IF
                DO iexc = 1, nexcs
                   ind = inds_recv(inds(iexc)) - 1
-                  IF (nspins > 1) THEN
+                  IF ((nspins > 1) .AND. (spinflip == no_sf_tddfpt)) THEN
                      IF (ind < nmo_virt_occ_alpha) THEN
-                        state_spin = 1
                         spin_label = '(alp)'
+                        spin_label2 = '(alp)'
                      ELSE
                         state_spin = 2
+                        state_spin2 = 2
                         ind = ind - nmo_virt_occ_alpha
                         spin_label = '(bet)'
+                        spin_label2 = '(bet)'
                      END IF
                   END IF
-
-                  imo_occ = ind/nmo_virt8(state_spin) + 1
-                  imo_virt = MOD(ind, nmo_virt8(state_spin)) + 1
+                  imo_occ = ind/nmo_virt8(state_spin2) + 1
+                  imo_virt = MOD(ind, nmo_virt8(state_spin2)) + 1
 
                   WRITE (log_unit, '(T27,I8,1X,A5,T48,I8,1X,A5,T70,F9.6)') imo_occ, spin_label, &
-                     nmo_occ8(state_spin) + imo_virt, spin_label, weights_recv(inds(iexc))
+                     nmo_occ8(state_spin2) + imo_virt, spin_label2, weights_recv(inds(iexc))
                END DO
             END IF
 
@@ -1148,6 +1180,158 @@ CONTAINS
    END SUBROUTINE tddfpt_print_nto_analysis
 
 ! **************************************************************************************************
+!> \brief Print exciton descriptors, cf. Mewes et al., JCTC 14, 710-725 (2018)
+!> \param log_unit                              output unit
+!> \param evects                                TDDFPT trial vectors (SIZE(evects,1) -- number of spins;
+!>                                              SIZE(evects,2) -- number of excited states to print)
+!> \param gs_mos                                molecular orbitals optimised for the ground state
+!> \param matrix_s                              overlap matrix
+!> \param do_directional_exciton_descriptors    flag for computing descriptors for each (cartesian) direction
+!> \param qs_env                                Information on particles/geometry
+!> \par History
+!>    * 12.2024 created as 'tddfpt_print_exciton_descriptors' [Maximilian Graml]
+! **************************************************************************************************
+   SUBROUTINE tddfpt_print_exciton_descriptors(log_unit, evects, gs_mos, matrix_s, &
+                                               do_directional_exciton_descriptors, qs_env)
+      INTEGER, INTENT(in)                                :: log_unit
+      TYPE(cp_fm_type), DIMENSION(:, :), INTENT(in)      :: evects
+      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+         INTENT(in)                                      :: gs_mos
+      TYPE(dbcsr_type), POINTER                          :: matrix_s
+      LOGICAL, INTENT(IN) :: do_directional_exciton_descriptors
+      TYPE(qs_environment_type), INTENT(IN), POINTER     :: qs_env
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_print_exciton_descriptors'
+
+      CHARACTER(LEN=4)                                   :: prefix_output
+      INTEGER                                            :: handle, ispin, istate, n_moments_quad, &
+                                                            nao, nspins, nstates
+      INTEGER, DIMENSION(maxspins)                       :: nmo_occ, nmo_virt
+      LOGICAL                                            :: print_checkvalue
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: ref_point_multipole
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(cp_fm_struct_type), POINTER                   :: fm_struct_mo_coeff, &
+                                                            fm_struct_S_mos_virt, fm_struct_X_ia_n
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: eigvec_X_ia_n, fm_multipole_ab, &
+                                                            fm_multipole_ai, fm_multipole_ij, &
+                                                            S_mos_virt
+      TYPE(cp_fm_type), DIMENSION(:), POINTER            :: mo_coeff
+      TYPE(exciton_descr_type), ALLOCATABLE, &
+         DIMENSION(:)                                    :: exc_descr
+
+      CALL timeset(routineN, handle)
+
+      nspins = SIZE(evects, 1)
+      nstates = SIZE(evects, 2)
+
+      CPASSERT(nspins == 1) ! Other spins are not yet implemented for exciton descriptors
+
+      CALL cp_fm_get_info(gs_mos(1)%mos_occ, context=blacs_env)
+      CALL dbcsr_get_info(matrix_s, nfullrows_total=nao)
+
+      DO ispin = 1, nspins
+         nmo_occ(ispin) = SIZE(gs_mos(ispin)%evals_occ)
+         nmo_virt(ispin) = SIZE(gs_mos(ispin)%evals_virt)
+      END DO
+
+      ! Prepare fm with all MO coefficents, i.e. nao x nao
+      ALLOCATE (mo_coeff(nspins))
+      CALL cp_fm_struct_create(fm_struct_mo_coeff, nrow_global=nao, ncol_global=nao, &
+                               context=blacs_env)
+      DO ispin = 1, nspins
+         CALL cp_fm_create(mo_coeff(ispin), fm_struct_mo_coeff)
+         CALL cp_fm_to_fm_submat_general(gs_mos(ispin)%mos_occ, &
+                                         mo_coeff(ispin), &
+                                         nao, &
+                                         nmo_occ(ispin), &
+                                         1, &
+                                         1, &
+                                         1, &
+                                         1, &
+                                         blacs_env)
+         CALL cp_fm_to_fm_submat_general(gs_mos(ispin)%mos_virt, &
+                                         mo_coeff(ispin), &
+                                         nao, &
+                                         nmo_virt(ispin), &
+                                         1, &
+                                         1, &
+                                         1, &
+                                         nmo_occ(ispin) + 1, &
+                                         blacs_env)
+      END DO
+      CALL cp_fm_struct_release(fm_struct_mo_coeff)
+
+      ! Compute multipole moments
+      ! fm_multipole_XY have structure inherited by libint, i.e. x, y, z, xx, xy, xz, yy, yz, zz
+      n_moments_quad = 9
+      ALLOCATE (ref_point_multipole(3))
+      ALLOCATE (fm_multipole_ij(n_moments_quad))
+      ALLOCATE (fm_multipole_ab(n_moments_quad))
+      ALLOCATE (fm_multipole_ai(n_moments_quad))
+
+      CALL get_multipoles_mo(fm_multipole_ai, fm_multipole_ij, fm_multipole_ab, &
+                             qs_env, mo_coeff, ref_point_multipole, 2, &
+                             nmo_occ(1), nmo_virt(1), blacs_env)
+
+      CALL cp_fm_release(mo_coeff)
+
+      ! Compute eigenvector X of the Casida equation from trial vectors
+      ALLOCATE (S_mos_virt(nspins), eigvec_X_ia_n(nspins))
+      DO ispin = 1, nspins
+         CALL cp_fm_get_info(gs_mos(ispin)%mos_virt, matrix_struct=fm_struct_S_mos_virt)
+         CALL cp_fm_create(S_mos_virt(ispin), fm_struct_S_mos_virt)
+         NULLIFY (fm_struct_S_mos_virt)
+         CALL cp_dbcsr_sm_fm_multiply(matrix_s, &
+                                      gs_mos(ispin)%mos_virt, &
+                                      S_mos_virt(ispin), &
+                                      ncol=nmo_virt(ispin), alpha=1.0_dp, beta=0.0_dp)
+
+         CALL cp_fm_struct_create(fm_struct_X_ia_n, nrow_global=nmo_occ(ispin), ncol_global=nmo_virt(ispin), &
+                                  context=blacs_env)
+         CALL cp_fm_create(eigvec_X_ia_n(ispin), fm_struct_X_ia_n)
+         CALL cp_fm_struct_release(fm_struct_X_ia_n)
+      END DO
+      ALLOCATE (exc_descr(nstates))
+      DO istate = 1, nstates
+         DO ispin = 1, nspins
+            CALL cp_fm_set_all(eigvec_X_ia_n(ispin), 0.0_dp)
+            ! compute eigenvectors X of the TDA equation
+            ! Reshuffle multiplication from
+            ! X_ai = S_µa ^T * C_µi
+            ! to
+            ! X_ia = C_µi ^T * S_µa
+            ! for compatibility with the structure needed for get_exciton_descriptors of bse_properties.F
+            CALL parallel_gemm('T', 'N', nmo_occ(ispin), nmo_virt(ispin), nao, 1.0_dp, &
+                               evects(ispin, istate), S_mos_virt(ispin), 0.0_dp, eigvec_X_ia_n(ispin))
+
+            CALL get_exciton_descriptors(exc_descr, eigvec_X_ia_n(ispin), &
+                                         fm_multipole_ij, fm_multipole_ab, &
+                                         fm_multipole_ai, &
+                                         istate, nmo_occ(ispin), nmo_virt(ispin))
+
+         END DO
+      END DO
+      CALL cp_fm_release(eigvec_X_ia_n)
+      CALL cp_fm_release(S_mos_virt)
+      CALL cp_fm_release(fm_multipole_ai)
+      CALL cp_fm_release(fm_multipole_ij)
+      CALL cp_fm_release(fm_multipole_ab)
+
+      ! Actual printing
+      print_checkvalue = .TRUE.
+      prefix_output = ' '
+      CALL print_exciton_descriptors(exc_descr, ref_point_multipole, log_unit, &
+                                     nstates, print_checkvalue, do_directional_exciton_descriptors, &
+                                     prefix_output, qs_env)
+
+      DEALLOCATE (ref_point_multipole)
+      DEALLOCATE (exc_descr)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE tddfpt_print_exciton_descriptors
+
+! **************************************************************************************************
 !> \brief ...
 !> \param vin ...
 !> \param vout ...
@@ -1209,7 +1393,7 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'vec_product'
 
-      INTEGER                                            :: blk, group_handle, handle, icol, irow
+      INTEGER                                            :: handle, icol, irow
       LOGICAL                                            :: found
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: vba, vbb
       TYPE(dbcsr_iterator_type)                          :: iter
@@ -1219,11 +1403,10 @@ CONTAINS
 
       res = 0.0_dp
 
-      CALL dbcsr_get_info(va, group=group_handle)
-      CALL group%set_handle(group_handle)
+      CALL dbcsr_get_info(va, group=group)
       CALL dbcsr_iterator_start(iter, va)
       DO WHILE (dbcsr_iterator_blocks_left(iter))
-         CALL dbcsr_iterator_next_block(iter, irow, icol, vba, blk)
+         CALL dbcsr_iterator_next_block(iter, irow, icol, vba)
          CALL dbcsr_get_block_p(vb, row=irow, col=icol, block=vbb, found=found)
          res = res + SUM(vba*vbb)
          CPASSERT(found)
@@ -1263,10 +1446,11 @@ CONTAINS
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(particle_list_type), POINTER                  :: particles
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(pw_c1d_gs_type)                               :: wf_g
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_p_type), DIMENSION(:), POINTER        :: pw_pools
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_type)                                      :: wf_g, wf_r
+      TYPE(pw_r3d_rs_type)                               :: wf_r
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_subsys_type), POINTER                      :: subsys
 
@@ -1274,12 +1458,8 @@ CONTAINS
 
       CALL get_qs_env(qs_env=qs_env, dft_control=dft_control, pw_env=pw_env)
       CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool, pw_pools=pw_pools)
-      CALL auxbas_pw_pool%create_pw(wf_r, &
-                                    use_data=REALDATA3D, &
-                                    in_space=REALSPACE)
-      CALL auxbas_pw_pool%create_pw(wf_g, &
-                                    use_data=COMPLEXDATA1D, &
-                                    in_space=RECIPROCALSPACE)
+      CALL auxbas_pw_pool%create_pw(wf_r)
+      CALL auxbas_pw_pool%create_pw(wf_g)
 
       CALL get_qs_env(qs_env, subsys=subsys)
       CALL qs_subsys_get(subsys, particles=particles)

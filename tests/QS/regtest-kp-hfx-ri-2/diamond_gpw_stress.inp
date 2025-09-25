@@ -1,8 +1,14 @@
 &GLOBAL
   PRINT_LEVEL MEDIUM
   PROJECT diamond_gpw_stress
-  RUN_TYPE ENERGY_FORCE
+  RUN_TYPE CELL_OPT
 &END GLOBAL
+
+&MOTION
+  &CELL_OPT
+    MAX_ITER 1
+  &END CELL_OPT
+&END MOTION
 
 &FORCE_EVAL
   METHOD Quickstep
@@ -44,6 +50,10 @@
           NGROUPS 2
           RI_METRIC IDENTITY
         &END RI
+        &SCREENING
+          EPS_SCHWARZ 1.0E-10
+          EPS_SCHWARZ_FORCES 1.0E-6
+        &END SCREENING
       &END HF
       &XC_FUNCTIONAL
         &PBE

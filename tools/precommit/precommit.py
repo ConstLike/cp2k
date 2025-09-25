@@ -86,11 +86,15 @@ def main() -> None:
                 continue
             if root.startswith("./tools/prettify/fprettify"):
                 continue
+            if root.startswith("./tools/precommit/fprettify"):
+                continue
             if root.startswith("./tools/build_utils/fypp"):
                 continue
             if root.startswith("./tools/autotools"):
                 continue
             if root.startswith("./tools/minimax_tools/1_xData"):
+                continue
+            if root.startswith("./tools/fedora"):
                 continue
             if root.startswith("./data/DFTB/scc"):
                 continue
@@ -112,17 +116,20 @@ def main() -> None:
                 continue
             if root.startswith("./regtesting"):
                 continue
+            if root.startswith("./build"):
+                continue
             if root.startswith("./.git"):
                 continue
             if "/.mypy_cache/" in root:
                 continue
             file_list += [os.path.join(root, fn) for fn in files]
 
-    # Filter symlinks, backup copies, logs, and hidden files.
+    # Filter symlinks, backup copies, logs, hidden, and very large files.
     file_list = [fn for fn in file_list if not os.path.islink(fn)]
     file_list = [fn for fn in file_list if not fn[-1] in ("~", "#")]
     file_list = [fn for fn in file_list if not fn.endswith(".log")]
     file_list = [fn for fn in file_list if not os.path.basename(fn).startswith(".")]
+    file_list = [fn for fn in file_list if os.path.getsize(fn) < 2**20]  # 1MiB
 
     # Sort files by size as larger ones will take longer to process.
     file_list.sort(reverse=True, key=lambda fn: os.path.getsize(fn))
@@ -192,21 +199,27 @@ def process_file(fn: str, allow_modifications: bool) -> None:
 
     if re.match(r".*\.(F|fypp)$", fn):
         run_local_tool("./tools/doxify/doxify.sh", fn)
-        run_prettify(fn)
+        run_format_fortran(fn)
 
-    if re.match(r".*\.(c|cu|h)$", fn):
+    if re.match(r".*\.(c|cu|cl|h)$", fn):
         run_remote_tool("clangformat", fn)
 
     if re.match(r".*\.(cc|cpp|cxx|hcc|hpp|hxx)$", fn):
         if fn.endswith("/torch_c_api.cpp"):
             # Begrudgingly tolerated because PyTorch has no C API.
             run_remote_tool("clangformat", fn)
+        elif fn.endswith("/ace_c_api.cpp"):
+            # same as PyTorch
+            run_remote_tool("clangformat", fn)
         else:
             raise Exception(f"C++ is not supported.")
 
     if re.match(r"(.*/PACKAGE)|(.*\.py)$", fn):
         ast.parse(orig_content, filename=fn)
-        run_remote_tool("black", fn)
+        if "tools/spack/cp2k_dev_repo/packages" in fn:
+            run_remote_tool("spackformat", fn)
+        else:
+            run_remote_tool("black", fn)
 
     if re.match(r".*\.sh$", fn):
         run_remote_tool("shfmt", fn)
@@ -246,13 +259,13 @@ def process_file(fn: str, allow_modifications: bool) -> None:
 
 
 # ======================================================================================
-def run_prettify(fn: str) -> None:
+def run_format_fortran(fn: str) -> None:
     if fn in ("./src/base/base_uses.f90", "./src/common/util.F"):
         return  # Skipping because of prettify bugs.
 
     # The prettify tool processes only about 1k lines of code per second.
     # Hence, setting a generous timeout as our largest file has 100k lines.
-    run_local_tool("./tools/prettify/prettify.py", fn, timeout=600)
+    run_local_tool("./tools/precommit/format_fortran.py", fn, timeout=600)
 
 
 # ======================================================================================

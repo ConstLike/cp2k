@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -17,6 +17,11 @@ MODULE rt_propagation_forces
                                               get_atomic_kind_set
    USE cp_control_types,                ONLY: dft_control_type,&
                                               rtp_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_get_block_p, &
+        dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, dbcsr_iterator_start, &
+        dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_multiply, dbcsr_p_type, dbcsr_type, &
+        dbcsr_type_no_symmetry
    USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: copy_fm_to_dbcsr,&
                                               cp_dbcsr_sm_fm_multiply
@@ -24,11 +29,6 @@ MODULE rt_propagation_forces
    USE cp_fm_types,                     ONLY: cp_fm_create,&
                                               cp_fm_release,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_get_block_p, &
-        dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, dbcsr_iterator_start, &
-        dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_multiply, dbcsr_p_type, dbcsr_type, &
-        dbcsr_type_no_symmetry
    USE kinds,                           ONLY: dp
    USE mathconstants,                   ONLY: one,&
                                               zero
@@ -168,7 +168,7 @@ CONTAINS
 
       INTEGER                                            :: col_atom, i, ikind, kind_atom, row_atom
       LOGICAL                                            :: found
-      REAL(dp), DIMENSION(:), POINTER                    :: block_values, block_values2
+      REAL(dp), DIMENSION(:, :), POINTER                 :: block_values, block_values2
       TYPE(dbcsr_iterator_type)                          :: iter
 
       DO i = 1, 3
@@ -185,7 +185,7 @@ CONTAINS
                !The block_values are in a vector format,
                ! so the dot_product is the sum over all elements of the hamand product, that I need
                force(ikind)%ehrenfest(i, kind_atom) = force(ikind)%ehrenfest(i, kind_atom) + &
-                                                      2.0_dp*DOT_PRODUCT(block_values, block_values2)
+                                                      2.0_dp*SUM(block_values*block_values2)
             END IF
          END DO
          CALL dbcsr_iterator_stop(iter)
@@ -202,7 +202,7 @@ CONTAINS
                !The block_values are in a vector format, so the dot_product is
                ! the sum over all elements of the hamand product, that I need
                force(ikind)%ehrenfest(i, kind_atom) = force(ikind)%ehrenfest(i, kind_atom) + &
-                                                      2.0_dp*DOT_PRODUCT(block_values, block_values2)
+                                                      2.0_dp*SUM(block_values*block_values2)
             END IF
          END DO
          CALL dbcsr_iterator_stop(iter)

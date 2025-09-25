@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------------------*/
 /*  CP2K: A general program to perform molecular dynamics simulations         */
-/*  Copyright 2000-2024 CP2K developers group <https://cp2k.org>              */
+/*  Copyright 2000-2025 CP2K developers group <https://cp2k.org>              */
 /*                                                                            */
 /*  SPDX-License-Identifier: BSD-3-Clause                                     */
 /*----------------------------------------------------------------------------*/
@@ -11,7 +11,7 @@
 #include "../offload/offload_runtime.h"
 #if defined(__OFFLOAD) && !defined(__NO_OFFLOAD_DBM)
 
-#include "dbm_multiply_internal.h"
+#include "dbm_internal.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,9 +22,9 @@ extern "C" {
  *        All arguments are assumed to be device pointers.
  * \author Ole Schuett
  ******************************************************************************/
-void dbm_multiply_gpu_launch_kernel(const offloadStream_t stream,
-                                    const double alpha, const int ntasks,
-                                    const dbm_task_t *batch,
+void dbm_multiply_gpu_launch_kernel(offloadStream_t stream, double alpha,
+                                    int ntasks, const dbm_task_t *tasks_host,
+                                    const dbm_task_t *tasks,
                                     const double *pack_a_data,
                                     const double *pack_b_data,
                                     double *shard_c_data);

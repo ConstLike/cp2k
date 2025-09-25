@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -206,6 +206,8 @@ CONTAINS
 
       INTEGER                                            :: end_idx, increment_counter, start_idx, &
                                                             stat, tmp_elements, tmp_nints
+
+      CPASSERT(ASSOCIATED(container%current))
 
       start_idx = container%element_counter
       increment_counter = (nbits*CACHE_SIZE + 63)/64

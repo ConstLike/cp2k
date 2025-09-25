@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -21,7 +21,8 @@ MODULE qs_update_s_mstruct
                                               kg_tnadd_embed,&
                                               kg_tnadd_embed_ri
    USE pw_methods,                      ONLY: pw_transfer
-   USE pw_types,                        ONLY: pw_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
    USE qs_collocate_density,            ONLY: calculate_ppl_grid,&
                                               calculate_rho_core,&
                                               calculate_rho_nlcc
@@ -68,7 +69,8 @@ CONTAINS
       INTEGER                                            :: handle
       LOGICAL                                            :: do_ppl
       TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(pw_type), POINTER                             :: rho_core, rho_nlcc, rho_nlcc_g, vppl
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho_core, rho_nlcc_g
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_nlcc, vppl
 
       CALL timeset(routineN, handle)
 
@@ -83,6 +85,9 @@ CONTAINS
       CALL get_qs_env(qs_env, rho_core=rho_core)
       IF (dft_control%qs_control%gapw) THEN
          qs_env%qs_charges%total_rho_core_rspace = qs_env%local_rho_set%rhoz_tot
+         ! Initial CNEO quantum nuclear charge density is a simple Zeff sum.
+         ! Later it will be calculated from numerical integration during SCF.
+         qs_env%qs_charges%total_rho1_hard_nuc = qs_env%local_rho_set%rhoz_cneo_tot
          IF (dft_control%qs_control%gapw_control%nopaw_as_gpw) THEN
             CPASSERT(ASSOCIATED(rho_core))
             CALL calculate_rho_core(rho_core, &

@@ -98,6 +98,8 @@ endif
 
 # Begrudgingly tolerated because PyTorch has no C API.
 OBJ_SRC_FILES += $(SRCDIR)/torch_c_api.cpp
+#same as PyTorch
+OBJ_SRC_FILES += $(SRCDIR)/ace_c_api.cpp
 
 # Included files used by Fypp preprocessor
 INCLUDED_SRC_FILES = $(notdir $(shell find $(SRCDIR) -name "*.fypp"))
@@ -253,11 +255,11 @@ $(EXEDIR)/cp2k_shell.$(ONEVERSION): $(EXEDIR)/cp2k.$(ONEVERSION)
 	cd $(EXEDIR); ln -sf cp2k.$(ONEVERSION) cp2k_shell.$(ONEVERSION)
 
 test:
-	@$(CP2KHOME)/tests/do_regtest.py $(ARCH) $(ONEVERSION) $(TESTOPTS)
+	@$(CP2KHOME)/tests/do_regtest.py --workbasedir $(TSTDIR) $(EXEDIR) $(ONEVERSION) $(TESTOPTS)
 
 testbg:
 	@echo "testing: $(ONEVERSION) : full log in $(TSTDIR)/regtest.log "
-	@$(CP2KHOME)/tests/do_regtest.py $(ARCH) $(ONEVERSION) $(TESTOPTS) > $(TSTDIR)/regtest.log 2>&1
+	@$(CP2KHOME)/tests/do_regtest.py --workbasedir $(TSTDIR) $(EXEDIR) $(ONEVERSION) $(TESTOPTS) > $(TSTDIR)/regtest.log 2>&1
 	@grep -e "Summary:" -e "Status:" $(TSTDIR)/regtest.log
 
 endif
@@ -331,7 +333,7 @@ realclean: extclean clean execlean
 OTHER_HELP += "realclean : Remove all files for given ARCH and VERSION"
 
 testclean:
-	rm -rf $(foreach v, $(VERSION), $(MAINTSTDIR)/$(ARCH)/$(v)/TEST-*)
+	rm -rf $(foreach v, $(VERSION), $(MAINTSTDIR)/$(ARCH)/$(v)/TEST-* $(MAINTSTDIR)/$(ARCH)/$(v)/regtest.log)
 OTHER_HELP += "testclean : Remove all TEST-* files for given ARCH and VERSION"
 
 #
@@ -353,12 +355,12 @@ TOOL_HELP += "fprettyclean : Remove prettify marker files and preprettify direct
 
 $(PRETTYOBJDIR)/%.pretty: %.F $(DOXIFYOBJDIR)/%.doxified
 	@mkdir -p $(PRETTYOBJDIR)
-	cd $(dir $<); $(TOOLSRC)/prettify/prettify.py --do-backup --backup-dir=$(PRETTYOBJDIR) $(notdir $<)
+	cd $(dir $<); $(TOOLSRC)/precommit/format_fortran.py --do-backup --backup-dir=$(PRETTYOBJDIR) $(notdir $<)
 	@touch $@
 
 $(PRETTYOBJDIR)/%.pretty_included: %.f90 $(DOXIFYOBJDIR)/%.doxified_included
 	@mkdir -p $(PRETTYOBJDIR)
-	cd $(dir $<); $(TOOLSRC)/prettify/prettify.py --do-backup --backup-dir=$(PRETTYOBJDIR) $(notdir $<)
+	cd $(dir $<); $(TOOLSRC)/precommit/format_fortran.py --do-backup --backup-dir=$(PRETTYOBJDIR) $(notdir $<)
 	@touch $@
 
 $(PRETTYOBJDIR)/%.pretty: %.c $(DOXIFYOBJDIR)/%.doxified
@@ -532,6 +534,9 @@ FYPPFLAGS ?= -n
 
 # Begrudgingly tolerated because PyTorch has no C API.
 torch_c_api.o: torch_c_api.cpp
+	$(CXX) -c $(CXXFLAGS) $<
+# same as PyTorch
+ace_c_api.o: ace_c_api.cpp
 	$(CXX) -c $(CXXFLAGS) $<
 
 ifneq ($(LIBDIR),)

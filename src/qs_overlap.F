@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -29,12 +29,12 @@ MODULE qs_overlap
                                               gto_basis_set_type
    USE block_p_types,                   ONLY: block_p_type
    USE cp_control_types,                ONLY: dft_control_type
-   USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
-   USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set
-   USE dbcsr_api,                       ONLY: &
+   USE cp_dbcsr_api,                    ONLY: &
         dbcsr_create, dbcsr_distribution_type, dbcsr_filter, dbcsr_finalize, dbcsr_get_block_p, &
         dbcsr_p_type, dbcsr_type, dbcsr_type_antisymmetric, dbcsr_type_no_symmetry, &
         dbcsr_type_symmetric
+   USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
+   USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set
    USE kinds,                           ONLY: default_string_length,&
                                               dp,&
                                               int_8
@@ -305,7 +305,7 @@ CONTAINS
 !$OMP         matrix_s, matrix_p,basis_set_list_a, basis_set_list_b, cell_to_index, &
 !$OMP         matrixkp_s, matrixkp_p, locks, natom)  &
 !$OMP PRIVATE (oint, owork, pmat, sint, ikind, jkind, iatom, jatom, rab, cell, &
-!$OMP          basis_set_a, basis_set_b, &
+!$OMP          basis_set_a, basis_set_b, lock_num, &
 !$OMP          first_sgfa, la_max, la_min, npgfa, nsgfa, nseta, rpgfa, set_radius_a, ncoa, ncob, force_a, &
 !$OMP          zeta, first_sgfb, lb_max, lb_min, npgfb, nsetb, rpgfb, set_radius_b, nsgfb, p_block, dab, f,  &
 !$OMP          zetb, scon_a, scon_b, ic, irow, icol, f0, ff, found, trans, rab2, n1, n2, sgfa, sgfb, iset, jset, &
@@ -1084,8 +1084,7 @@ CONTAINS
          CALL dbcsr_create(matrix=matrix_s(i)%matrix, &
                            name=TRIM(name), &
                            dist=dbcsr_dist, matrix_type=symmetry_string, &
-                           row_blk_size=row_blk_sizes, col_blk_size=col_blk_sizes, &
-                           nze=0)
+                           row_blk_size=row_blk_sizes, col_blk_size=col_blk_sizes)
          CALL cp_dbcsr_alloc_block_from_nbl(matrix_s(i)%matrix, sab_nl)
       END DO
 
@@ -1174,8 +1173,7 @@ CONTAINS
             CALL dbcsr_create(matrix=matrix_s(i1, i2)%matrix, &
                               name=TRIM(name), &
                               dist=dbcsr_dist, matrix_type=symmetry_string, &
-                              row_blk_size=row_blk_sizes, col_blk_size=col_blk_sizes, &
-                              nze=0)
+                              row_blk_size=row_blk_sizes, col_blk_size=col_blk_sizes)
             CALL cp_dbcsr_alloc_block_from_nbl(matrix_s(i1, i2)%matrix, sab_nl)
          END DO
       END DO

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -44,6 +44,7 @@ MODULE sirius_interface
                                               section_vals_val_get
    USE kinds,                           ONLY: default_string_length,&
                                               dp
+   USE machine,                         ONLY: m_flush
    USE mathconstants,                   ONLY: fourpi,&
                                               gamma1
    USE message_passing,                 ONLY: mp_para_env_type
@@ -129,9 +130,9 @@ CONTAINS
 
       CHARACTER(len=2)                                   :: element_symbol
       CHARACTER(len=default_string_length)               :: label
-      INTEGER                                            :: i, iatom, ibeta, ifun, ikind, iwf, j, l, &
-                                                            n, natom, nbeta, nkind, nmesh, &
-                                                            num_mag_dims, sirius_mpi_comm, vdw_func, nu, lu
+      INTEGER                                            :: i, ii, jj, iatom, ibeta, ifun, ikind, iwf, j, l, &
+                                                            n, ns, natom, nbeta, nbs, nkind, nmesh, &
+                                                            num_mag_dims, sirius_mpi_comm, vdw_func, nu, lu, output_unit
       INTEGER, DIMENSION(:), POINTER                     :: mpi_grid_dims
       INTEGER(KIND=C_INT), DIMENSION(3)                  :: k_grid, k_shift
       INTEGER, DIMENSION(:), POINTER                     :: kk
@@ -142,9 +143,9 @@ CONTAINS
       REAL(KIND=C_DOUBLE), DIMENSION(3)                  :: a1, a2, a3, v1, v2
       REAL(KIND=dp)                                      :: al, angle1, angle2, cval, focc, &
                                                             magnetization, mass, pf, rl, zeff, alpha_u, beta_u, &
-                                                            J0_u, J_u, U_u, occ_u, u_minus_J
+                                                            J0_u, J_u, U_u, occ_u, u_minus_J, vnlp, vnlm
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: beta, corden, ef, fe, locpot, rc, rp
-      REAL(KIND=dp), DIMENSION(3)                        :: vr, vs
+      REAL(KIND=dp), DIMENSION(3)                        :: vr, vs, j_t
       REAL(KIND=dp), DIMENSION(:), POINTER               :: density
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: wavefunction, wfninfo
       TYPE(atom_gthpot_type), POINTER                    :: gth_atompot
@@ -166,6 +167,7 @@ CONTAINS
 
       CPASSERT(ASSOCIATED(pwdft_env))
 
+      output_unit = cp_logger_get_default_io_unit()
       ! create context of simulation
       CALL pwdft_env_get(pwdft_env, para_env=para_env)
       sirius_mpi_comm = para_env%get_handle()
@@ -175,6 +177,8 @@ CONTAINS
 
       CALL pwdft_env_get(pwdft_env=pwdft_env, pwdft_input=pwdft_section, xc_input=xc_section)
 
+      CALL section_vals_val_get(pwdft_section, "ignore_convergence_failure", &
+                                l_val=pwdft_env%ignore_convergence_failure)
       ! cp2k should *have* a function that return all xc_functionals. Doing
       ! manually is prone to errors
 
@@ -250,15 +254,36 @@ CONTAINS
          CALL cp_sirius_fill_in_section(sctx, pwdft_sub_section, "iterative_solver")
       END IF
 
+#if defined(__SIRIUS_DFTD4)
+      ! import dftd3 and dftd4 section
+      pwdft_sub_section => section_vals_get_subs_vals(pwdft_section, "dftd4")
+      IF (ASSOCIATED(pwdft_sub_section)) THEN
+         CALL cp_sirius_fill_in_section(sctx, pwdft_sub_section, "dftd4")
+      END IF
+
+      pwdft_sub_section => section_vals_get_subs_vals(pwdft_section, "dftd3")
+      IF (ASSOCIATED(pwdft_sub_section)) THEN
+         CALL cp_sirius_fill_in_section(sctx, pwdft_sub_section, "dftd3")
+      END IF
+#endif
+
       !
       ! uncomment these lines when nlcg is officially supported
       !
-
+#if defined(__SIRIUS_NLCG)
       !     import nlcg section
-      !      pwdft_sub_section => section_vals_get_subs_vals(pwdft_section, "nlcg")
-      !      IF (ASSOCIATED(pwdft_sub_section)) THEN
-      !         CALL cp_sirius_fill_in_section(sctx, pwdft_sub_section, "nlcg")
-      !      ENDIF
+      pwdft_sub_section => section_vals_get_subs_vals(pwdft_section, "nlcg")
+      IF (ASSOCIATED(pwdft_sub_section)) THEN
+         CALL cp_sirius_fill_in_section(sctx, pwdft_sub_section, "nlcg")
+      END IF
+#endif
+
+#if defined(__SIRIUS_VCSQNM)
+      pwdft_sub_section => section_vals_get_subs_vals(pwdft_section, "vcsqnm")
+      IF (ASSOCIATED(pwdft_sub_section)) THEN
+         CALL cp_sirius_fill_in_section(sctx, pwdft_sub_section, "vcsqnm")
+      END IF
+#endif
 
       !CALL sirius_dump_runtime_setup(sctx, "runtime.json")
       CALL sirius_import_parameters(sctx, '{}')
@@ -318,7 +343,7 @@ CONTAINS
                                       zn=NINT(zeff + 0.001d0), &
                                       symbol=element_symbol, &
                                       mass=REAL(mass/massunit, KIND=C_DOUBLE), &
-                                      spin_orbit=.FALSE.)
+                                      spin_orbit=gth_potential%soc)
 !
             ALLOCATE (gth_atompot)
             CALL gth_potential_conversion(gth_potential, gth_atompot)
@@ -326,6 +351,7 @@ CONTAINS
             fun(1:nmesh) = rp(1:nmesh)
             CALL sirius_set_atom_type_radial_grid(sctx, label, nmesh, fun(1))
 ! set beta-projectors
+! GTH SOC uses the same projectors, SIRIUS can use the same or different projectors for l+1/2, l-1/2 (l > 0 l+1/2 l < 0 l-/2 )
             ALLOCATE (ef(nmesh), beta(nmesh))
             ibeta = 0
             DO l = 0, 3
@@ -342,21 +368,55 @@ CONTAINS
                   fun(1:nmesh) = beta(1:nmesh)*rp(1:nmesh)
                   CALL sirius_add_atom_type_radial_function(sctx, label, &
                                                             "beta", fun(1), nmesh, l=l)
+                  ! we double the number of beta projectors for SO and l>0
+                  IF (gth_atompot%soc .AND. l /= 0) THEN
+                     CALL sirius_add_atom_type_radial_function(sctx, label, &
+                                                               "beta", fun(1), nmesh, l=-l)
+                  END IF
                END DO
             END DO
             DEALLOCATE (ef, beta)
             nbeta = ibeta
 
 ! nonlocal PP matrix elements
-            ALLOCATE (dion(nbeta, nbeta))
+            IF (gth_atompot%soc) THEN
+               nbs = 2*nbeta - gth_atompot%nl(0)
+               ALLOCATE (dion(nbs, nbs))
+            ELSE
+               ALLOCATE (dion(nbeta, nbeta))
+            END IF
             dion = 0.0_dp
-            DO l = 0, 3
-               IF (gth_atompot%nl(l) == 0) CYCLE
-               ibeta = SUM(gth_atompot%nl(0:l - 1)) + 1
-               i = ibeta + gth_atompot%nl(l) - 1
-               dion(ibeta:i, ibeta:i) = gth_atompot%hnl(1:gth_atompot%nl(l), 1:gth_atompot%nl(l), l)
-            END DO
-            CALL sirius_set_atom_type_dion(sctx, label, nbeta, dion(1, 1))
+            IF (gth_atompot%soc) THEN
+               ns = gth_atompot%nl(0)
+               IF (ns /= 0) THEN
+                  dion(1:ns, 1:ns) = gth_atompot%hnl(1:ns, 1:ns, 0)
+               END IF
+               DO l = 1, 3
+                  IF (gth_atompot%nl(l) == 0) CYCLE
+                  DO i = 1, gth_atompot%nl(l)
+                     ii = ns + 2*SUM(gth_atompot%nl(1:l - 1))
+                     ii = ii + 2*(i - 1) + 1
+                     DO j = 1, gth_atompot%nl(l)
+                        jj = ns + 2*SUM(gth_atompot%nl(1:l - 1))
+                        jj = jj + 2*(j - 1) + 1
+                        vnlp = gth_atompot%hnl(i, j, l) + 0.5_dp*l*gth_atompot%knl(i, j, l)
+                        vnlm = gth_atompot%hnl(i, j, l) - 0.5_dp*(l + 1)*gth_atompot%knl(i, j, l)
+                        dion(ii, jj) = vnlp
+                        dion(ii + 1, jj + 1) = vnlm
+                     END DO
+                  END DO
+               END DO
+               CALL sirius_set_atom_type_dion(sctx, label, nbs, dion(1, 1))
+            ELSE
+               DO l = 0, 3
+                  IF (gth_atompot%nl(l) == 0) CYCLE
+                  ibeta = SUM(gth_atompot%nl(0:l - 1)) + 1
+                  i = ibeta + gth_atompot%nl(l) - 1
+                  dion(ibeta:i, ibeta:i) = gth_atompot%hnl(1:gth_atompot%nl(l), 1:gth_atompot%nl(l), l)
+               END DO
+               CALL sirius_set_atom_type_dion(sctx, label, nbeta, dion(1, 1))
+            END IF
+
             DEALLOCATE (dion)
 
 ! set non-linear core correction
@@ -397,7 +457,8 @@ CONTAINS
             DO iwf = 1, SIZE(wavefunction, 2)
                focc = wfninfo(1, iwf)
                l = NINT(wfninfo(2, iwf))
-               nu = NINT(wfninfo(3, iwf))
+! we can not easily get the principal quantum number
+               nu = -1
                IF (up) THEN
                   fun(1:nmesh) = wavefunction(1:nmesh, iwf)*rp(i)
                ELSE
@@ -421,39 +482,6 @@ CONTAINS
             CALL sirius_add_atom_type_radial_function(sctx, label, "ps_rho_total", &
                                                       fun(1), nmesh)
 
-            CALL get_qs_kind(qs_kind_set(ikind), &
-                             dft_plus_u_atom=dft_plus_u_atom, &
-                             l_of_dft_plus_u=lu, &
-                             n_of_dft_plus_u=nu, &
-                             u_minus_j_target=u_minus_j, &
-                             U_of_dft_plus_u=U_u, &
-                             J_of_dft_plus_u=J_u, &
-                             alpha_of_dft_plus_u=alpha_u, &
-                             beta_of_dft_plus_u=beta_u, &
-                             J0_of_dft_plus_u=J0_u, &
-                             occupation_of_dft_plus_u=occ_u)
-
-            IF (dft_plus_u_atom) THEN
-               IF (nu < 1) THEN
-                  CPABORT("CP2K/SIRIUS (hubbard): principal quantum number not specified")
-               END IF
-
-               IF (lu < 0) THEN
-                  CPABORT("CP2K/SIRIUS (hubbard): l can not be negative.")
-               END IF
-
-               IF (occ_u < 0.0) THEN
-                  CPABORT("CP2K/SIRIUS (hubbard): the occupation number can not be negative.")
-               END IF
-
-               IF (ABS(u_minus_j) < 1e-8) THEN
-                  CALL sirius_set_atom_type_hubbard(sctx, label, lu, nu, &
-                                                    occ_u, U_u, J_u, alpha_u, beta_u, J0_u)
-               ELSE
-                  CALL sirius_set_atom_type_hubbard(sctx, label, lu, nu, &
-                                                    occ_u, u_minus_j, 0.0_dp, alpha_u, beta_u, J0_u)
-               END IF
-            END IF
             IF (ASSOCIATED(density)) DEALLOCATE (density)
             IF (ASSOCIATED(wavefunction)) DEALLOCATE (wavefunction)
             IF (ASSOCIATED(wfninfo)) DEALLOCATE (wfninfo)
@@ -466,6 +494,43 @@ CONTAINS
             CALL cp_abort(__LOCATION__, &
                           "CP2K/SIRIUS: atomic kind needs UPF or GTH potential definition")
          END IF
+
+         CALL get_qs_kind(qs_kind_set(ikind), &
+                          dft_plus_u_atom=dft_plus_u_atom, &
+                          l_of_dft_plus_u=lu, &
+                          n_of_dft_plus_u=nu, &
+                          u_minus_j_target=u_minus_j, &
+                          U_of_dft_plus_u=U_u, &
+                          J_of_dft_plus_u=J_u, &
+                          alpha_of_dft_plus_u=alpha_u, &
+                          beta_of_dft_plus_u=beta_u, &
+                          J0_of_dft_plus_u=J0_u, &
+                          occupation_of_dft_plus_u=occ_u)
+
+         IF (dft_plus_u_atom) THEN
+            IF (nu < 1) THEN
+               CPABORT("CP2K/SIRIUS (hubbard): principal quantum number not specified")
+            END IF
+
+            IF (lu < 0) THEN
+               CPABORT("CP2K/SIRIUS (hubbard): l can not be negative.")
+            END IF
+
+            IF (occ_u < 0.0) THEN
+               CPABORT("CP2K/SIRIUS (hubbard): the occupation number can not be negative.")
+            END IF
+
+            j_t(:) = 0.0
+            IF (ABS(u_minus_j) < 1e-8) THEN
+               j_t(1) = J_u
+               CALL sirius_set_atom_type_hubbard(sctx, label, lu, nu, &
+                                                 occ_u, U_u, j_t, alpha_u, beta_u, J0_u)
+            ELSE
+               CALL sirius_set_atom_type_hubbard(sctx, label, lu, nu, &
+                                                 occ_u, u_minus_j, j_t, alpha_u, beta_u, J0_u)
+            END IF
+         END IF
+
       END DO
 
 ! add atoms to the unit cell
@@ -672,26 +737,53 @@ CONTAINS
          POINTER                                         :: pwdft_env
       LOGICAL, INTENT(IN)                                :: calculate_forces, calculate_stress_tensor
 
-      INTEGER                                            :: n1, n2
-      LOGICAL                                            :: do_print
+      INTEGER                                            :: iw, n1, n2
+      LOGICAL                                            :: do_print, gs_converged
       REAL(KIND=C_DOUBLE)                                :: etotal
       REAL(KIND=C_DOUBLE), ALLOCATABLE, DIMENSION(:, :)  :: cforces
       REAL(KIND=C_DOUBLE), DIMENSION(3, 3)               :: cstress
       REAL(KIND=dp), DIMENSION(3, 3)                     :: stress
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: forces
+      TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(pwdft_energy_type), POINTER                   :: energy
       TYPE(section_vals_type), POINTER                   :: print_section, pwdft_input
       TYPE(sirius_ground_state_handler)                  :: gs_handler
 
       CPASSERT(ASSOCIATED(pwdft_env))
 
+      NULLIFY (logger)
+      logger => cp_get_default_logger()
+      iw = cp_logger_get_default_io_unit(logger)
+
       CALL pwdft_env_get(pwdft_env=pwdft_env, gs_handler=gs_handler)
-      CALL sirius_find_ground_state(gs_handler)
+      CALL sirius_find_ground_state(gs_handler, converged=gs_converged)
+
+      IF (gs_converged) THEN
+         IF (iw > 0) WRITE (iw, '(A)') "CP2K/SIRIUS: ground state is converged"
+      ELSE
+         IF (pwdft_env%ignore_convergence_failure) THEN
+            IF (iw > 0) WRITE (iw, '(A)') "CP2K/SIRIUS Warning: ground state is not converged"
+         ELSE
+            CPABORT("CP2K/SIRIUS (ground state): SIRIUS did not converge.")
+         END IF
+      END IF
+      IF (iw > 0) CALL m_flush(iw)
+
       CALL pwdft_env_get(pwdft_env=pwdft_env, energy=energy)
       etotal = 0.0_C_DOUBLE
 
+      CALL sirius_get_energy(gs_handler, 'band-gap', etotal)
+      energy%band_gap = etotal
+
+      etotal = 0.0_C_DOUBLE
       CALL sirius_get_energy(gs_handler, 'total', etotal)
       energy%etotal = etotal
+
+      ! extract entropy (TS returned by sirius is always negative, sign
+      ! convention in QE)
+      etotal = 0.0_C_DOUBLE
+      CALL sirius_get_energy(gs_handler, 'demet', etotal)
+      energy%entropy = -etotal
 
       IF (calculate_forces) THEN
          CALL pwdft_env_get(pwdft_env=pwdft_env, forces=forces)
@@ -723,7 +815,6 @@ CONTAINS
       IF (do_print) THEN
          CALL cp_sirius_print_results(pwdft_env, print_section)
       END IF
-
    END SUBROUTINE cp_sirius_energy_force
 
 !***************************************************************************************************

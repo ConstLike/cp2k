@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -45,7 +45,8 @@ MODULE basis_set_types
                                               nsoset
    USE orbital_symbols,                 ONLY: cgf_symbol,&
                                               sgf_symbol
-   USE orbital_transformation_matrices, ONLY: orbtramat
+   USE orbital_transformation_matrices, ONLY: init_spherical_harmonics,&
+                                              orbtramat
    USE sto_ng,                          ONLY: get_sto_ng
    USE string_utilities,                ONLY: integer_to_string,&
                                               remove_word,&
@@ -133,7 +134,7 @@ MODULE basis_set_types
              create_gto_from_sto_basis, &
              deallocate_sto_basis_set, &
              set_sto_basis_set, &
-             srules
+             srules, process_gto_basis
 
    ! Public data types
    PUBLIC :: gto_basis_set_p_type, &
@@ -278,13 +279,15 @@ CONTAINS
 !> \brief ...
 !> \param basis_set ...
 !> \param pbasis ...
+!> \param lmax ...
 ! **************************************************************************************************
-   SUBROUTINE create_primitive_basis_set(basis_set, pbasis)
+   SUBROUTINE create_primitive_basis_set(basis_set, pbasis, lmax)
 
       ! Create a primitives only basis set
 
       TYPE(gto_basis_set_type), INTENT(IN)               :: basis_set
       TYPE(gto_basis_set_type), POINTER                  :: pbasis
+      INTEGER, INTENT(IN), OPTIONAL                      :: lmax
 
       INTEGER                                            :: i, ico, ip, ipgf, iset, ishell, l, lm, &
                                                             lshell, m, maxco, mpgf, nc, ncgf, ns, &
@@ -331,7 +334,15 @@ CONTAINS
 
       CALL allocate_gto_basis_set(pbasis)
 
-      pbasis%name = basis_set%name//"_primitive"
+      IF (PRESENT(lmax)) THEN
+         ! if requested, reduce max l val
+         lm = MIN(lm, lmax)
+      END IF
+
+      IF (LEN_TRIM(basis_set%name) + 10 > default_string_length) THEN
+         CPWARN("The name of the primitive basis set will be truncated.")
+      END IF
+      pbasis%name = TRIM(basis_set%name)//"_primitive"
       pbasis%kind_radius = basis_set%kind_radius
       pbasis%short_kind_radius = basis_set%short_kind_radius
       pbasis%norm_type = basis_set%norm_type
@@ -459,7 +470,10 @@ CONTAINS
                                                             maxshell, nc, ncgf, ncgfn, ncgfo, ns, &
                                                             nset, nsetn, nseto, nsgf, nsgfn, nsgfo
 
-      basis_set%name = basis_set%name//basis_set_add%name
+      IF (LEN_TRIM(basis_set%name) + LEN_TRIM(basis_set_add%name) > default_string_length) THEN
+         CPWARN("The name of the combined GTO basis set will be truncated.")
+      END IF
+      basis_set%name = TRIM(basis_set%name)//TRIM(basis_set_add%name)
       basis_set%nset = basis_set%nset + basis_set_add%nset
       basis_set%ncgf = basis_set%ncgf + basis_set_add%ncgf
       basis_set%nsgf = basis_set%nsgf + basis_set_add%nsgf
@@ -606,12 +620,13 @@ CONTAINS
 !> \param nshell_sum ...
 !> \param maxder ...
 !> \param short_kind_radius ...
+!> \param npgf_seg_sum number of primitives in "segmented contraction format"
 ! **************************************************************************************************
    SUBROUTINE get_gto_basis_set(gto_basis_set, name, aliases, norm_type, kind_radius, ncgf, &
                                 nset, nsgf, cgf_symbol, sgf_symbol, norm_cgf, set_radius, lmax, lmin, lx, ly, lz, &
                                 m, ncgf_set, npgf, nsgf_set, nshell, cphi, pgf_radius, sphi, scon, zet, first_cgf, first_sgf, l, &
                                 last_cgf, last_sgf, n, gcc, maxco, maxl, maxpgf, maxsgf_set, maxshell, maxso, nco_sum, &
-                                npgf_sum, nshell_sum, maxder, short_kind_radius)
+                                npgf_sum, nshell_sum, maxder, short_kind_radius, npgf_seg_sum)
 
       ! Get informations about a Gaussian-type orbital (GTO) basis set.
 
@@ -638,6 +653,7 @@ CONTAINS
                                                             nshell_sum
       INTEGER, INTENT(IN), OPTIONAL                      :: maxder
       REAL(KIND=dp), INTENT(OUT), OPTIONAL               :: short_kind_radius
+      INTEGER, INTENT(OUT), OPTIONAL                     :: npgf_seg_sum
 
       INTEGER                                            :: iset, nder
 
@@ -728,6 +744,12 @@ CONTAINS
       END IF
       IF (PRESENT(npgf_sum)) npgf_sum = SUM(gto_basis_set%npgf)
       IF (PRESENT(nshell_sum)) nshell_sum = SUM(gto_basis_set%nshell)
+      IF (PRESENT(npgf_seg_sum)) THEN
+         npgf_seg_sum = 0
+         DO iset = 1, gto_basis_set%nset
+            npgf_seg_sum = npgf_seg_sum + gto_basis_set%npgf(iset)*gto_basis_set%nshell(iset)
+         END DO
+      END IF
 
    END SUBROUTINE get_gto_basis_set
 
@@ -822,6 +844,15 @@ CONTAINS
 
       gto_basis_set%sphi = 0.0_dp
       IF (n .GT. 0) THEN
+         lmax = -1
+         ! Ensure proper setup of orbtramat
+         DO iset = 1, gto_basis_set%nset
+            DO ishell = 1, gto_basis_set%nshell(iset)
+               lmax = MAX(lmax, gto_basis_set%l(ishell, iset))
+            END DO
+         END DO
+         CALL init_spherical_harmonics(lmax, -1)
+
          DO iset = 1, gto_basis_set%nset
             DO ishell = 1, gto_basis_set%nshell(iset)
                l = gto_basis_set%l(ishell, iset)
@@ -1077,6 +1108,8 @@ CONTAINS
          CALL normalise_gcc_orb(gto_basis_set)
          ! Compute the normalization factors of the contracted Gaussian-type
          ! functions
+         CALL init_norm_cgf_orb(gto_basis_set)
+      CASE (3)
          CALL init_norm_cgf_orb(gto_basis_set)
       CASE DEFAULT
          CPABORT("Normalization method not specified")
@@ -1545,7 +1578,7 @@ CONTAINS
       NULLIFY (gcc, l, lmax, lmin, n, npgf, nshell, zet)
       ! Read the basis set information
       is_ok = cp_sll_val_next(list, val)
-      IF (.NOT. is_ok) CPABORT("Error reading the Basis set from input file!!")
+      IF (.NOT. is_ok) CPABORT("Error reading the Basis set from input file!")
       CALL val_get(val, c_val=line_att)
       READ (line_att, *) nset
 
@@ -1561,7 +1594,7 @@ CONTAINS
 
       DO iset = 1, nset
          is_ok = cp_sll_val_next(list, val)
-         IF (.NOT. is_ok) CPABORT("Error reading the Basis set from input file!!")
+         IF (.NOT. is_ok) CPABORT("Error reading the Basis set from input file!")
          CALL val_get(val, c_val=line_att)
          READ (line_att, *) n(1, iset)
          CALL remove_word(line_att)
@@ -1595,10 +1628,10 @@ CONTAINS
             END DO
          END DO
          IF (LEN_TRIM(line_att) /= 0) &
-            CPABORT("Error reading the Basis from input file!!")
+            CPABORT("Error reading the Basis from input file!")
          DO ipgf = 1, npgf(iset)
             is_ok = cp_sll_val_next(list, val)
-            IF (.NOT. is_ok) CPABORT("Error reading the Basis set from input file!!")
+            IF (.NOT. is_ok) CPABORT("Error reading the Basis set from input file!")
             CALL val_get(val, c_val=line_att)
             READ (line_att, *) zet(ipgf, iset), (gcc(ipgf, ishell, iset), ishell=1, nshell(iset))
          END DO
@@ -2260,13 +2293,9 @@ CONTAINS
       INTEGER, PARAMETER                                 :: maxng = 6
 
       CHARACTER(LEN=default_string_length)               :: name, sng
-      INTEGER                                            :: i1, i2, ico, ipgf, iset, jset, l, &
-                                                            lshell, m, maxco, maxl, ncgf, ng, ngs, &
-                                                            np, nset, nsgf, nshell
-      INTEGER, DIMENSION(0:10)                           :: mxf
+      INTEGER                                            :: ipgf, iset, maxl, ng, nset, nshell
       INTEGER, DIMENSION(:), POINTER                     :: lq, nq
       LOGICAL                                            :: do_ortho
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: gal, zal, zll
       REAL(KIND=dp), DIMENSION(:), POINTER               :: zet
       REAL(KIND=dp), DIMENSION(maxng)                    :: gcc, zetg
 
@@ -2310,6 +2339,34 @@ CONTAINS
             gto_basis_set%gcc(ipgf, 1, iset) = gcc(ipgf)
             gto_basis_set%zet(ipgf, iset) = zetg(ipgf)
          END DO
+      END DO
+
+      CALL process_gto_basis(gto_basis_set, do_ortho, nset, maxl)
+
+   END SUBROUTINE create_gto_from_sto_basis
+
+! **************************************************************************************************
+!> \brief ...
+!> \param gto_basis_set ...
+!> \param do_ortho ...
+!> \param nset ...
+!> \param maxl ...
+! **************************************************************************************************
+   SUBROUTINE process_gto_basis(gto_basis_set, do_ortho, nset, maxl)
+
+      TYPE(gto_basis_set_type), POINTER                  :: gto_basis_set
+      LOGICAL, INTENT(IN), OPTIONAL                      :: do_ortho
+      INTEGER, INTENT(IN)                                :: nset, maxl
+
+      INTEGER                                            :: i1, i2, ico, iset, jset, l, lshell, m, &
+                                                            maxco, ncgf, ng, ngs, np, nsgf
+      INTEGER, DIMENSION(0:10)                           :: mxf
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: gal, zal, zll
+
+      ng = gto_basis_set%npgf(1)
+      DO iset = 1, nset
+         IF ((ng /= gto_basis_set%npgf(iset)) .AND. do_ortho) &
+            CPABORT("different number of primitves")
       END DO
 
       IF (do_ortho) THEN
@@ -2432,7 +2489,7 @@ CONTAINS
 
       gto_basis_set%norm_type = -1
 
-   END SUBROUTINE create_gto_from_sto_basis
+   END SUBROUTINE process_gto_basis
 
 ! **************************************************************************************************
 !> \brief ...

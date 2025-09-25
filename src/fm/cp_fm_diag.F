@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -24,7 +24,7 @@ MODULE cp_fm_diag
                                  cp_fm_syrk, &
                                  cp_fm_triangular_invert, &
                                  cp_fm_triangular_multiply, &
-                                 cp_fm_upper_to_full
+                                 cp_fm_uplo_to_full
    USE cp_fm_cholesky, ONLY: cp_fm_cholesky_decompose
    USE cp_fm_diag_utils, ONLY: cp_fm_redistribute_end, &
                                cp_fm_redistribute_start
@@ -34,14 +34,32 @@ MODULE cp_fm_diag
                          set_elpa_kernel, &
                          set_elpa_print, &
                          set_elpa_qr
-   USE cp_fm_cusolver_api, ONLY: cp_fm_diag_cusolver
+   USE cp_fm_cusolver_api, ONLY: cp_fm_diag_cusolver, &
+                                 cp_fm_general_cusolver
 #if defined(__DLAF)
-   USE cp_fm_dlaf_api, ONLY: cp_fm_diag_dlaf
+   USE cp_fm_dlaf_api, ONLY: cp_fm_diag_dlaf, cp_fm_diag_gen_dlaf
+   USE cp_dlaf_utils_api, ONLY: cp_dlaf_initialize, cp_dlaf_finalize
 #endif
    USE cp_fm_types, ONLY: cp_fm_get_info, &
                           cp_fm_set_element, &
                           cp_fm_to_fm, &
+                          cp_fm_type, &
+                          cp_fm_create, &
+                          cp_fm_get_info, &
+                          cp_fm_release, &
+                          cp_fm_set_all, &
+                          cp_fm_to_fm, &
+                          cp_fm_to_fm_submat, &
                           cp_fm_type
+   USE cp_fm_struct, ONLY: cp_fm_struct_equivalent, &
+                           cp_fm_struct_create, &
+                           cp_fm_struct_release, &
+                           cp_fm_struct_type
+   USE cp_log_handling, ONLY: cp_logger_get_default_unit_nr, &
+                              cp_get_default_logger, &
+                              cp_logger_get_default_io_unit, &
+                              cp_logger_type, &
+                              cp_to_string
    USE cp_log_handling, ONLY: cp_get_default_logger, &
                               cp_logger_get_default_unit_nr, &
                               cp_logger_get_unit_nr, &
@@ -50,7 +68,7 @@ MODULE cp_fm_diag
                     dp
    USE machine, ONLY: default_output_unit, &
                       m_memory
-#if defined (__SCALAPACK)
+#if defined (__parallel)
    USE message_passing, ONLY: mp_comm_type
 #endif
 #if defined (__HAS_IEEE_EXCEPTIONS)
@@ -70,14 +88,14 @@ MODULE cp_fm_diag
 
    ! The following saved variables are diagonalization global
    ! Stores the default library for diagonalization
-   INTEGER, SAVE       :: diag_type = 0
+   INTEGER, SAVE, PUBLIC   :: diag_type = 0
    ! Minimum number of eigenvectors for the use of the ELPA eigensolver.
    ! The ScaLAPACK eigensolver is used as fallback for all smaller cases.
    INTEGER, SAVE       :: elpa_neigvec_min = 0
 #if defined(__DLAF)
    ! Minimum number of eigenvectors for the use of the DLAF eigensolver.
    ! The ScaLAPACK eigensolver is used as fallback for all smaller cases.
-   INTEGER, SAVE       :: dlaf_neigvec_min = 0
+   INTEGER, SAVE, PUBLIC    :: dlaf_neigvec_min = 0
 #endif
    ! Threshold value for the orthonormality check of the eigenvectors obtained
    ! after a diagonalization. A negative value disables the check.
@@ -92,8 +110,6 @@ MODULE cp_fm_diag
    INTEGER, PARAMETER, PUBLIC :: FM_DIAG_TYPE_DEFAULT = FM_DIAG_TYPE_CUSOLVER
 #elif defined(__ELPA)
    INTEGER, PARAMETER, PUBLIC :: FM_DIAG_TYPE_DEFAULT = FM_DIAG_TYPE_ELPA
-#elif defined(__DLAF)
-   INTEGER, PARAMETER, PUBLIC :: FM_DIAG_TYPE_DEFAULT = FM_DIAG_TYPE_DLAF
 #else
    INTEGER, PARAMETER, PUBLIC :: FM_DIAG_TYPE_DEFAULT = FM_DIAG_TYPE_SCALAPACK
 #endif
@@ -104,6 +120,7 @@ MODULE cp_fm_diag
              cp_fm_power, &
              cp_fm_syevd, &
              cp_fm_syevx, &
+             cp_fm_svd, &
              cp_fm_geeig, &
              cp_fm_geeig_canon, &
              diag_init, &
@@ -138,6 +155,8 @@ CONTAINS
       INTEGER, INTENT(IN)                                :: dlaf_neigvec_min_input
       REAL(KIND=dp), INTENT(IN)                          :: eps_check_diag_input
 
+      LOGICAL, SAVE                                      :: initialized = .FALSE.
+
       fallback_applied = .FALSE.
 
       IF (diag_lib == "ScaLAPACK") THEN
@@ -163,20 +182,25 @@ CONTAINS
          CPABORT("ERROR in diag_init: Initialization of unknown diagonalization library requested")
       END IF
 
-      ! Initialization of requested diagonalization library:
-      IF (diag_type == FM_DIAG_TYPE_ELPA) THEN
+      ! Initialization of requested diagonalization library
+      IF (.NOT. initialized .AND. diag_type == FM_DIAG_TYPE_ELPA) THEN
          CALL initialize_elpa_library()
          CALL set_elpa_kernel(elpa_kernel)
          CALL set_elpa_qr(elpa_qr, elpa_qr_unsafe)
          CALL set_elpa_print(elpa_print)
+         initialized = .TRUE.
       END IF
-
-      elpa_neigvec_min = elpa_neigvec_min_input
 #if defined(__DLAF)
+      IF (.NOT. initialized .AND. diag_type == FM_DIAG_TYPE_DLAF) THEN
+         CALL cp_dlaf_initialize()
+         initialized = .TRUE.
+      END IF
       dlaf_neigvec_min = dlaf_neigvec_min_input
 #else
       MARK_USED(dlaf_neigvec_min_input)
 #endif
+
+      elpa_neigvec_min = elpa_neigvec_min_input
       eps_check_diag = eps_check_diag_input
 
    END SUBROUTINE diag_init
@@ -188,6 +212,10 @@ CONTAINS
 #if defined (__ELPA)
       IF (diag_type == FM_DIAG_TYPE_ELPA) &
          CALL finalize_elpa_library()
+#endif
+#if defined (__DLAF)
+      IF (diag_type == FM_DIAG_TYPE_DLAF) &
+         CALL cp_dlaf_finalize()
 #endif
    END SUBROUTINE diag_finalize
 
@@ -221,7 +249,7 @@ CONTAINS
          CALL cp_fm_syevd(matrix, eigenvectors, eigenvalues, info)
 
       ELSE IF (diag_type == FM_DIAG_TYPE_ELPA) THEN
-         IF (SIZE(eigenvalues) < elpa_neigvec_min) THEN
+         IF (matrix%matrix_struct%nrow_global < elpa_neigvec_min) THEN
             ! We don't trust ELPA with very small matrices.
             CALL cp_fm_syevd(matrix, eigenvectors, eigenvalues, info)
          ELSE
@@ -229,7 +257,7 @@ CONTAINS
          END IF
 
       ELSE IF (diag_type == FM_DIAG_TYPE_CUSOLVER) THEN
-         IF (SIZE(eigenvalues) < 64) THEN
+         IF (matrix%matrix_struct%nrow_global < 64) THEN
             ! We don't trust cuSolver with very small matrices.
             CALL cp_fm_syevd(matrix, eigenvectors, eigenvalues, info)
          ELSE
@@ -238,7 +266,7 @@ CONTAINS
 
 #if defined(__DLAF)
       ELSE IF (diag_type == FM_DIAG_TYPE_DLAF) THEN
-         IF (SIZE(eigenvalues) < dlaf_neigvec_min) THEN
+         IF (matrix%matrix_struct%nrow_global < dlaf_neigvec_min) THEN
             ! Use ScaLAPACK for small matrices
             CALL cp_fm_syevd(matrix, eigenvectors, eigenvalues, info)
          ELSE
@@ -262,16 +290,16 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE check_diag(matrix, eigenvectors, nvec)
 
-      TYPE(cp_fm_type), INTENT(IN)                    :: matrix, eigenvectors
+      TYPE(cp_fm_type), INTENT(IN)                       :: matrix, eigenvectors
       INTEGER, INTENT(IN)                                :: nvec
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'check_diag'
 
       CHARACTER(LEN=default_string_length)               :: diag_type_name
-      REAL(KIND=dp)                                      :: eps_abort, eps_warning
+      REAL(KIND=dp)                                      :: eps, eps_abort, eps_warning, gold, test
       INTEGER                                            :: handle, i, j, ncol, nrow, output_unit
       LOGICAL                                            :: check_eigenvectors
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       TYPE(cp_blacs_env_type), POINTER                   :: context
       INTEGER                                            :: il, jl, ipcol, iprow, &
                                                             mypcol, myprow, npcol, nprow
@@ -280,20 +308,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      IF (diag_type == FM_DIAG_TYPE_SCALAPACK) THEN
-         diag_type_name = "SYEVD"
-      ELSE IF (diag_type == FM_DIAG_TYPE_ELPA) THEN
-         diag_type_name = "ELPA"
-      ELSE IF (diag_type == FM_DIAG_TYPE_CUSOLVER) THEN
-         diag_type_name = "CUSOLVER"
-      ELSE IF (diag_type == FM_DIAG_TYPE_DLAF) THEN
-         diag_type_name = "DLAF"
-      ELSE
-         CPABORT("Unknown diag_type")
-      END IF
-
       output_unit = default_output_unit
-
       eps_warning = eps_check_diag_default
 #if defined(__CHECK_DIAG)
       check_eigenvectors = .TRUE.
@@ -310,8 +325,12 @@ CONTAINS
 #endif
       eps_abort = 10.0_dp*eps_warning
 
+      gold = 0.0_dp
+      test = 0.0_dp
+      eps = 0.0_dp
+
       IF (check_eigenvectors) THEN
-#if defined(__SCALAPACK)
+#if defined(__parallel)
          nrow = eigenvectors%matrix_struct%nrow_global
          ncol = MIN(eigenvectors%matrix_struct%ncol_global, nvec)
          CALL cp_fm_gemm("T", "N", ncol, ncol, nrow, 1.0_dp, eigenvectors, eigenvectors, 0.0_dp, matrix)
@@ -321,38 +340,17 @@ CONTAINS
          nprow = context%num_pe(1)
          npcol = context%num_pe(2)
          desca(:) = matrix%matrix_struct%descriptor(:)
-         DO i = 1, ncol
-            DO j = 1, ncol
+         outer: DO j = 1, ncol
+            DO i = 1, ncol
                CALL infog2l(i, j, desca, nprow, npcol, myprow, mypcol, il, jl, iprow, ipcol)
                IF ((iprow == myprow) .AND. (ipcol == mypcol)) THEN
-                  IF (i == j) THEN
-                     IF (ABS(matrix%local_data(il, jl) - 1.0_dp) > eps_warning) THEN
-                        WRITE (UNIT=output_unit, FMT="(/,T2,A,/,T2,A,I0,A,I0,A,F0.15,/,T2,A,ES10.3)") &
-                           "The eigenvectors returned by "//TRIM(diag_type_name)//" are not orthonormal", &
-                           "Matrix element (", i, ", ", j, ") = ", matrix%local_data(il, jl), &
-                           "The deviation from the expected value 1 is", ABS(matrix%local_data(il, jl) - 1.0_dp)
-                        IF (ABS(matrix%local_data(il, jl) - 1.0_dp) > eps_abort) THEN
-                           CPABORT("ERROR in "//routineN//": Check of matrix diagonalization failed")
-                        ELSE
-                           CPWARN("Check of matrix diagonalization failed in routine "//routineN)
-                        END IF
-                     END IF
-                  ELSE
-                     IF (ABS(matrix%local_data(il, jl)) > eps_warning) THEN
-                        WRITE (UNIT=output_unit, FMT="(/,T2,A,/,T2,A,I0,A,I0,A,F0.15,/,T2,A,ES10.3)") &
-                           "The eigenvectors returned by "//TRIM(diag_type_name)//" are not orthonormal", &
-                           "Matrix element (", i, ", ", j, ") = ", matrix%local_data(il, jl), &
-                           "The deviation from the expected value 0 is", ABS(matrix%local_data(il, jl))
-                        IF (ABS(matrix%local_data(il, jl)) > eps_abort) THEN
-                           CPABORT("ERROR in "//routineN//": Check of matrix diagonalization failed")
-                        ELSE
-                           CPWARN("Check of matrix diagonalization failed in routine "//routineN)
-                        END IF
-                     END IF
-                  END IF
+                  gold = MERGE(0.0_dp, 1.0_dp, i .NE. j)
+                  test = matrix%local_data(il, jl)
+                  eps = ABS(test - gold)
+                  IF (eps > eps_warning) EXIT outer
                END IF
             END DO
-         END DO
+         END DO outer
 #else
          nrow = SIZE(eigenvectors%local_data, 1)
          ncol = MIN(SIZE(eigenvectors%local_data, 2), nvec)
@@ -360,36 +358,37 @@ CONTAINS
                     eigenvectors%local_data(1, 1), nrow, &
                     eigenvectors%local_data(1, 1), nrow, &
                     0.0_dp, matrix%local_data(1, 1), nrow)
-         DO i = 1, ncol
-            DO j = 1, ncol
-               IF (i == j) THEN
-                  IF (ABS(matrix%local_data(i, j) - 1.0_dp) > eps_warning) THEN
-                     WRITE (UNIT=output_unit, FMT="(/,T2,A,/,T2,A,I0,A,I0,A,F0.15,/,T2,A,ES10.3)") &
-                        "The eigenvectors returned by "//TRIM(diag_type_name)//" are not orthonormal", &
-                        "Matrix element (", i, ", ", j, ") = ", matrix%local_data(i, j), &
-                        "The deviation from the expected value 1 is", ABS(matrix%local_data(i, j) - 1.0_dp)
-                     IF (ABS(matrix%local_data(i, j) - 1.0_dp) > eps_abort) THEN
-                        CPABORT("ERROR in "//routineN//": Check of matrix diagonalization failed")
-                     ELSE
-                        CPWARN("Check of matrix diagonalization failed in routine "//routineN)
-                     END IF
-                  END IF
-               ELSE
-                  IF (ABS(matrix%local_data(i, j)) > eps_warning) THEN
-                     WRITE (UNIT=output_unit, FMT="(/,T2,A,/,T2,A,I0,A,I0,A,F0.15,/,T2,A,ES10.3)") &
-                        "The eigenvectors returned by "//TRIM(diag_type_name)//" are not orthonormal", &
-                        "Matrix element (", i, ", ", j, ") = ", matrix%local_data(i, j), &
-                        "The deviation from the expected value 0 is", ABS(matrix%local_data(i, j))
-                     IF (ABS(matrix%local_data(i, j)) > eps_abort) THEN
-                        CPABORT("ERROR in "//routineN//": Check of matrix diagonalization failed")
-                     ELSE
-                        CPWARN("Check of matrix diagonalization failed in routine "//routineN)
-                     END IF
-                  END IF
-               END IF
+         outer: DO j = 1, ncol
+            DO i = 1, ncol
+               gold = MERGE(0.0_dp, 1.0_dp, i .NE. j)
+               test = matrix%local_data(i, j)
+               eps = ABS(test - gold)
+               IF (eps > eps_warning) EXIT outer
             END DO
-         END DO
+         END DO outer
 #endif
+         IF (eps > eps_warning) THEN
+            IF (diag_type == FM_DIAG_TYPE_SCALAPACK) THEN
+               diag_type_name = "SYEVD"
+            ELSE IF (diag_type == FM_DIAG_TYPE_ELPA) THEN
+               diag_type_name = "ELPA"
+            ELSE IF (diag_type == FM_DIAG_TYPE_CUSOLVER) THEN
+               diag_type_name = "CUSOLVER"
+            ELSE IF (diag_type == FM_DIAG_TYPE_DLAF) THEN
+               diag_type_name = "DLAF"
+            ELSE
+               CPABORT("Unknown diag_type")
+            END IF
+            WRITE (UNIT=output_unit, FMT="(/,T2,A,/,T2,A,I0,A,I0,A,F0.15,/,T2,A,F0.0,A,ES10.3)") &
+               "The eigenvectors returned by "//TRIM(diag_type_name)//" are not orthonormal", &
+               "Matrix element (", i, ", ", j, ") = ", test, &
+               "The deviation from the expected value ", gold, " is", eps
+            IF (eps > eps_abort) THEN
+               CPABORT("ERROR in "//routineN//": Check of matrix diagonalization failed")
+            ELSE
+               CPWARN("Check of matrix diagonalization failed in routine "//routineN)
+            END IF
+         END IF
       END IF
 
       CALL timestop(handle)
@@ -411,7 +410,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE cp_fm_syevd(matrix, eigenvectors, eigenvalues, info)
 
-      TYPE(cp_fm_type), INTENT(IN)  :: matrix, eigenvectors
+      TYPE(cp_fm_type), INTENT(IN)             :: matrix, eigenvectors
       REAL(KIND=dp), DIMENSION(:), INTENT(OUT) :: eigenvalues
       INTEGER, INTENT(OUT), OPTIONAL           :: info
 
@@ -419,7 +418,7 @@ CONTAINS
 
       INTEGER                                  :: handle, myinfo, n, nmo
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:) :: eig
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       TYPE(cp_fm_type)                         :: eigenvectors_new, matrix_new
 #else
       CHARACTER(LEN=2*default_string_length)   :: message
@@ -436,7 +435,7 @@ CONTAINS
       n = matrix%matrix_struct%nrow_global
       ALLOCATE (eig(n))
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       ! Determine if the input matrix needs to be redistributed before diagonalization.
       ! Heuristics are used to determine the optimal number of CPUs for diagonalization.
       ! The redistributed matrix is stored in matrix_new, which is just a pointer
@@ -539,7 +538,7 @@ CONTAINS
 
       CHARACTER(LEN=2*default_string_length)   :: message
       INTEGER                                  :: handle, myinfo
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       TYPE(cp_blacs_env_type), POINTER         :: context
       INTEGER                                  :: liwork, lwork, &
                                                   mypcol, myprow, n
@@ -556,7 +555,7 @@ CONTAINS
 
       myinfo = 0
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 
       n = matrix%matrix_struct%nrow_global
       m => matrix%local_data
@@ -657,15 +656,15 @@ CONTAINS
 
       ! Diagonalise the symmetric n by n matrix using the LAPACK library.
 
-      TYPE(cp_fm_type), INTENT(IN)              :: matrix
-      TYPE(cp_fm_type), OPTIONAL, INTENT(IN)    :: eigenvectors
+      TYPE(cp_fm_type), INTENT(IN)                 :: matrix
+      TYPE(cp_fm_type), OPTIONAL, INTENT(IN)       :: eigenvectors
       REAL(KIND=dp), OPTIONAL, INTENT(IN)          :: work_syevx
       INTEGER, INTENT(IN), OPTIONAL                :: neig
       REAL(KIND=dp), DIMENSION(:), INTENT(OUT)     :: eigenvalues
 
       CHARACTER(LEN=*), PARAMETER                  :: routineN = "cp_fm_syevx"
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       REAL(KIND=dp), PARAMETER                     :: orfac = -1.0_dp
 #endif
       REAL(KIND=dp), PARAMETER                     :: vl = 0.0_dp, &
@@ -687,7 +686,7 @@ CONTAINS
 
       REAL(KIND=dp), EXTERNAL                      :: dlamch
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER                                      :: nn, np0, npe, nq0, nz
       INTEGER, DIMENSION(9)                        :: desca, descz
       INTEGER, DIMENSION(:), ALLOCATABLE           :: iclustr
@@ -737,7 +736,7 @@ CONTAINS
 
       ALLOCATE (w(n))
       eigenvalues(:) = 0.0_dp
-#if defined(__SCALAPACK)
+#if defined(__parallel)
 
       IF (matrix%matrix_struct%nrow_block /= matrix%matrix_struct%ncol_block) THEN
          CPABORT("ERROR in "//routineN//": Invalid blocksize (no square blocks) found")
@@ -883,6 +882,127 @@ CONTAINS
    END SUBROUTINE cp_fm_syevx
 
 ! **************************************************************************************************
+!> \brief decomposes a quadratic matrix into its singular value decomposition
+!> \param matrix_a ...
+!> \param matrix_eigvl ...
+!> \param matrix_eigvr_t ...
+!> \param eigval ...
+!> \param info ...
+!> \author Maximilian Graml
+! **************************************************************************************************
+   SUBROUTINE cp_fm_svd(matrix_a, matrix_eigvl, matrix_eigvr_t, eigval, info)
+
+      TYPE(cp_fm_type), INTENT(IN)             :: matrix_a
+      TYPE(cp_fm_type), INTENT(INOUT)          :: matrix_eigvl, matrix_eigvr_t
+      REAL(KIND=dp), DIMENSION(:), POINTER, &
+         INTENT(INOUT)                         :: eigval
+      INTEGER, INTENT(OUT), OPTIONAL           :: info
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'cp_fm_svd'
+
+      CHARACTER(LEN=2*default_string_length)   :: message
+      INTEGER                                  :: handle, n, m, myinfo, lwork
+      REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
+      TYPE(cp_fm_type)                         :: matrix_lu
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:) :: work
+
+#if defined(__parallel)
+      INTEGER, DIMENSION(9)                    :: desca, descu, descvt
+#endif
+      CALL timeset(routineN, handle)
+
+      CALL cp_fm_create(matrix=matrix_lu, &
+                        matrix_struct=matrix_a%matrix_struct, &
+                        name="A_lu"//TRIM(ADJUSTL(cp_to_string(1)))//"MATRIX")
+      CALL cp_fm_to_fm(matrix_a, matrix_lu)
+      a => matrix_lu%local_data
+      m = matrix_lu%matrix_struct%nrow_global
+      n = matrix_lu%matrix_struct%ncol_global
+      ! Assert that incoming matrix is quadratic
+      CPASSERT(m == n)
+
+      ! Prepare for workspace queries
+      myinfo = 0
+      lwork = -1
+      ALLOCATE (work(1))
+      work(:) = 0.0_dp
+#if defined(__parallel)
+      ! To do: That might need a redistribution check as in cp_fm_syevd
+      desca(:) = matrix_lu%matrix_struct%descriptor(:)
+      descu(:) = matrix_eigvl%matrix_struct%descriptor(:)
+      descvt(:) = matrix_eigvr_t%matrix_struct%descriptor(:)
+
+      ! Workspace query
+      CALL pdgesvd('V', 'V', m, m, matrix_lu%local_data, 1, 1, desca, eigval, matrix_eigvl%local_data, &
+                   1, 1, descu, matrix_eigvr_t%local_data, 1, 1, descvt, work, lwork, myinfo)
+
+      IF (matrix_lu%matrix_struct%para_env%is_source() .AND. (myinfo /= 0)) THEN
+         WRITE (message, "(A,I0,A)") "ERROR in PDGESVD: Work space query failed (INFO = ", myinfo, ")"
+         IF (PRESENT(info)) THEN
+            CPWARN(TRIM(message))
+         ELSE
+            CPABORT(TRIM(message))
+         END IF
+      END IF
+
+      lwork = INT(work(1))
+      DEALLOCATE (work)
+      ALLOCATE (work(lwork))
+      ! SVD
+      CALL pdgesvd('V', 'V', m, m, matrix_lu%local_data, 1, 1, desca, eigval, matrix_eigvl%local_data, &
+                   1, 1, descu, matrix_eigvr_t%local_data, 1, 1, descvt, work, lwork, myinfo)
+
+      IF (matrix_lu%matrix_struct%para_env%is_source() .AND. (myinfo /= 0)) THEN
+         WRITE (message, "(A,I0,A)") "ERROR in PDGESVD: Matrix diagonalization failed (INFO = ", myinfo, ")"
+         IF (PRESENT(info)) THEN
+            CPWARN(TRIM(message))
+         ELSE
+            CPABORT(TRIM(message))
+         END IF
+      END IF
+#else
+      ! Workspace query
+      CALL dgesvd('S', 'S', m, m, matrix_lu%local_data, m, eigval, matrix_eigvl%local_data, &
+                  m, matrix_eigvr_t%local_data, m, work, lwork, myinfo)
+
+      IF (myinfo /= 0) THEN
+         WRITE (message, "(A,I0,A)") "ERROR in DGESVD: Work space query failed (INFO = ", myinfo, ")"
+         IF (PRESENT(info)) THEN
+            CPWARN(TRIM(message))
+         ELSE
+            CPABORT(TRIM(message))
+         END IF
+      END IF
+
+      ! SVD
+      lwork = INT(work(1))
+      DEALLOCATE (work)
+      ALLOCATE (work(lwork))
+      work(:) = 0.0_dp
+
+      CALL dgesvd('S', 'S', m, m, matrix_lu%local_data, m, eigval, matrix_eigvl%local_data, &
+                  m, matrix_eigvr_t%local_data, m, work, lwork, myinfo)
+
+      IF (myinfo /= 0) THEN
+         WRITE (message, "(A,I0,A)") "ERROR in DGESVD: Matrix diagonalization failed (INFO = ", myinfo, ")"
+         IF (PRESENT(info)) THEN
+            CPWARN(TRIM(message))
+         ELSE
+            CPABORT(TRIM(message))
+         END IF
+      END IF
+
+#endif
+      ! Release intermediary matrices
+      DEALLOCATE (work)
+      CALL cp_fm_release(matrix_lu)
+
+      IF (PRESENT(info)) info = myinfo
+
+      CALL timestop(handle)
+   END SUBROUTINE cp_fm_svd
+
+! **************************************************************************************************
 !> \brief ...
 !> \param matrix ...
 !> \param work ...
@@ -901,7 +1021,7 @@ CONTAINS
       ! - Creation (29.03.1999, Matthias Krack)
       ! - Parallelised using BLACS and ScaLAPACK (06.06.2001,MK)
 
-      TYPE(cp_fm_type), INTENT(IN)            :: matrix, work
+      TYPE(cp_fm_type), INTENT(IN)               :: matrix, work
       REAL(KIND=dp), INTENT(IN)                  :: exponent, threshold
       INTEGER, INTENT(OUT)                       :: n_dependent
       LOGICAL, INTENT(IN), OPTIONAL              :: verbose
@@ -920,10 +1040,9 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:, :), POINTER    :: eigenvectors
       TYPE(cp_blacs_env_type), POINTER           :: context
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       INTEGER           :: icol_local, ipcol, iprow, irow_global, &
-                           irow_local, ncol_block, nrow_block
-      INTEGER, EXTERNAL :: indxg2l, indxg2p
+                           irow_local
 #endif
 
       CALL timeset(routineN, handle)
@@ -955,10 +1074,7 @@ CONTAINS
          eigvals(2) = eigenvalues(ncol_global)
       END IF
 
-#if defined(__SCALAPACK)
-      nrow_block = work%matrix_struct%nrow_block
-      ncol_block = work%matrix_struct%ncol_block
-
+#if defined(__parallel)
       eigenvectors => work%local_data
 
       ! Build matrix**exponent with eigenvector quenching
@@ -969,18 +1085,14 @@ CONTAINS
 
             n_dependent = n_dependent + 1
 
-            ipcol = indxg2p(icol_global, ncol_block, mypcol, &
-                            work%matrix_struct%first_p_pos(2), npcol)
+            ipcol = work%matrix_struct%g2p_col(icol_global)
 
             IF (mypcol == ipcol) THEN
-               icol_local = indxg2l(icol_global, ncol_block, mypcol, &
-                                    work%matrix_struct%first_p_pos(2), npcol)
+               icol_local = work%matrix_struct%g2l_col(icol_global)
                DO irow_global = 1, nrow_global
-                  iprow = indxg2p(irow_global, nrow_block, myprow, &
-                                  work%matrix_struct%first_p_pos(1), nprow)
+                  iprow = work%matrix_struct%g2p_row(irow_global)
                   IF (myprow == iprow) THEN
-                     irow_local = indxg2l(irow_global, nrow_block, myprow, &
-                                          work%matrix_struct%first_p_pos(1), nprow)
+                     irow_local = work%matrix_struct%g2l_row(irow_global)
                      eigenvectors(irow_local, icol_local) = 0.0_dp
                   END IF
                END DO
@@ -990,18 +1102,14 @@ CONTAINS
 
             f = eigenvalues(icol_global)**p
 
-            ipcol = indxg2p(icol_global, ncol_block, mypcol, &
-                            work%matrix_struct%first_p_pos(2), npcol)
+            ipcol = work%matrix_struct%g2p_col(icol_global)
 
             IF (mypcol == ipcol) THEN
-               icol_local = indxg2l(icol_global, ncol_block, mypcol, &
-                                    work%matrix_struct%first_p_pos(2), npcol)
+               icol_local = work%matrix_struct%g2l_col(icol_global)
                DO irow_global = 1, nrow_global
-                  iprow = indxg2p(irow_global, nrow_block, myprow, &
-                                  work%matrix_struct%first_p_pos(1), nprow)
+                  iprow = work%matrix_struct%g2p_row(irow_global)
                   IF (myprow == iprow) THEN
-                     irow_local = indxg2l(irow_global, nrow_block, myprow, &
-                                          work%matrix_struct%first_p_pos(1), nprow)
+                     irow_local = work%matrix_struct%g2l_row(irow_global)
                      eigenvectors(irow_local, icol_local) = &
                         f*eigenvectors(irow_local, icol_local)
                   END IF
@@ -1037,7 +1145,7 @@ CONTAINS
 
 #endif
       CALL cp_fm_syrk("U", "N", ncol_global, 1.0_dp, work, 1, 1, 0.0_dp, matrix)
-      CALL cp_fm_upper_to_full(matrix, work)
+      CALL cp_fm_uplo_to_full(matrix, work)
 
       ! Print some warnings/notes
       IF (matrix%matrix_struct%para_env%is_source() .AND. my_verbose) THEN
@@ -1082,7 +1190,7 @@ CONTAINS
       ! - Creation (07.10.2002, Martin Fengler)
       ! - Cosmetics (05.04.06, MK)
 
-      TYPE(cp_fm_type), INTENT(IN)           :: eigenvectors, matrix
+      TYPE(cp_fm_type), INTENT(IN)              :: eigenvectors, matrix
       REAL(KIND=dp), DIMENSION(:), INTENT(IN)   :: eigval
       INTEGER, INTENT(IN)                       :: start_sec_block
       REAL(KIND=dp), INTENT(IN)                 :: thresh
@@ -1090,31 +1198,31 @@ CONTAINS
       CHARACTER(len=*), PARAMETER               :: routineN = 'cp_fm_block_jacobi'
 
       INTEGER :: handle
-      REAL(KIND=dp), DIMENSION(:, :), POINTER    :: a, ev
+      REAL(KIND=dp), DIMENSION(:, :), POINTER   :: a, ev
 
       REAL(KIND=dp) :: tan_theta, tau, c, s
       INTEGER  :: q, p, N
-      REAL(KIND=dp), DIMENSION(:), ALLOCATABLE :: c_ip
+      REAL(KIND=dp), DIMENSION(:), ALLOCATABLE  :: c_ip
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       TYPE(cp_blacs_env_type), POINTER :: context
 
       INTEGER :: myprow, mypcol, nprow, npcol, block_dim_row, block_dim_col, &
                  info, ev_row_block_size, iam, mynumrows, mype, npe, &
                  q_loc
-      REAL(KIND=dp), DIMENSION(:, :), ALLOCATABLE :: a_loc, ev_loc
+      REAL(KIND=dp), DIMENSION(:, :), ALLOCATABLE  :: a_loc, ev_loc
       INTEGER, DIMENSION(9)                        :: desca, descz, desc_a_block, &
                                                       desc_ev_loc
       TYPE(mp_comm_type):: allgrp
       TYPE(cp_blacs_type) :: ictxt_loc
-      INTEGER, EXTERNAL :: numroc, indxl2g, indxg2l
+      INTEGER, EXTERNAL :: numroc
 #endif
 
       ! -------------------------------------------------------------------------
 
       CALL timeset(routineN, handle)
 
-#if defined(__SCALAPACK)
+#if defined(__parallel)
       context => matrix%matrix_struct%context
       allgrp = matrix%matrix_struct%para_env
 
@@ -1284,19 +1392,30 @@ CONTAINS
 
       CALL cp_fm_get_info(amatrix, nrow_global=nao)
       nmo = SIZE(eigenvalues)
-      ! Cholesky decompose S=U(T)U
-      CALL cp_fm_cholesky_decompose(bmatrix)
-      ! Invert to get U^(-1)
-      CALL cp_fm_triangular_invert(bmatrix)
-      ! Reduce to get U^(-T) * H * U^(-1)
-      CALL cp_fm_triangular_multiply(bmatrix, amatrix, side="R")
-      CALL cp_fm_triangular_multiply(bmatrix, amatrix, transpose_tr=.TRUE.)
-      ! Diagonalize
-      CALL choose_eigv_solver(matrix=amatrix, eigenvectors=work, &
-                              eigenvalues=eigenvalues)
-      ! Restore vectors C = U^(-1) * C*
-      CALL cp_fm_triangular_multiply(bmatrix, work)
-      CALL cp_fm_to_fm(work, eigenvectors, nmo)
+
+      IF (diag_type == FM_DIAG_TYPE_CUSOLVER .AND. nao >= 64) THEN
+         ! Use cuSolverMP generalized eigenvalue solver for large matrices
+         CALL cp_fm_general_cusolver(amatrix, bmatrix, eigenvectors, eigenvalues)
+#if defined(__DLAF)
+      ELSE IF (diag_type == FM_DIAG_TYPE_DLAF .AND. amatrix%matrix_struct%nrow_global >= dlaf_neigvec_min) THEN
+         ! Use DLA-Future generalized eigenvalue solver for large matrices
+         CALL cp_fm_diag_gen_dlaf(amatrix, bmatrix, eigenvectors, eigenvalues)
+#endif
+      ELSE
+         ! Cholesky decompose S=U(T)U
+         CALL cp_fm_cholesky_decompose(bmatrix)
+         ! Invert to get U^(-1)
+         CALL cp_fm_triangular_invert(bmatrix)
+         ! Reduce to get U^(-T) * H * U^(-1)
+         CALL cp_fm_triangular_multiply(bmatrix, amatrix, side="R")
+         CALL cp_fm_triangular_multiply(bmatrix, amatrix, transpose_tr=.TRUE.)
+         ! Diagonalize
+         CALL choose_eigv_solver(matrix=amatrix, eigenvectors=work, &
+                                 eigenvalues=eigenvalues)
+         ! Restore vectors C = U^(-1) * C*
+         CALL cp_fm_triangular_multiply(bmatrix, work)
+         CALL cp_fm_to_fm(work, eigenvectors, nmo)
+      END IF
 
       CALL timestop(handle)
 
@@ -1323,22 +1442,22 @@ CONTAINS
 
       INTEGER                                            :: handle, i, icol, irow, nao, nc, ncol, &
                                                             nmo, nx
-      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: seigval
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: evals
 
       CALL timeset(routineN, handle)
 
       ! Test sizees
       CALL cp_fm_get_info(amatrix, nrow_global=nao)
       nmo = SIZE(eigenvalues)
-      ALLOCATE (seigval(nao))
+      ALLOCATE (evals(nao))
 
       ! Diagonalize -S matrix, this way the NULL space is at the end of the spectrum
       CALL cp_fm_scale(-1.0_dp, bmatrix)
-      CALL choose_eigv_solver(matrix=bmatrix, eigenvectors=work, eigenvalues=seigval)
-      seigval(:) = -seigval(:)
+      CALL choose_eigv_solver(matrix=bmatrix, eigenvectors=work, eigenvalues=evals)
+      evals(:) = -evals(:)
       nc = nao
       DO i = 1, nao
-         IF (seigval(i) < epseig) THEN
+         IF (evals(i) < epseig) THEN
             nc = i - 1
             EXIT
          END IF
@@ -1358,11 +1477,11 @@ CONTAINS
             END DO
          END DO
          ! Set small eigenvalues to a dummy save value
-         seigval(nc + 1:nao) = 1.0_dp
+         evals(nc + 1:nao) = 1.0_dp
       END IF
       ! Calculate U*s**(-1/2)
-      seigval(:) = 1.0_dp/SQRT(seigval(:))
-      CALL cp_fm_column_scale(work, seigval)
+      evals(:) = 1.0_dp/SQRT(evals(:))
+      CALL cp_fm_column_scale(work, evals)
       ! Reduce to get U^(-T) * H * U^(-1)
       CALL cp_fm_gemm("T", "N", nao, nao, nao, 1.0_dp, work, amatrix, 0.0_dp, bmatrix)
       CALL cp_fm_gemm("N", "N", nao, nao, nao, 1.0_dp, bmatrix, work, 0.0_dp, amatrix)
@@ -1378,7 +1497,7 @@ CONTAINS
       ! Restore vectors C = U^(-1) * C*
       CALL cp_fm_gemm("N", "N", nao, nx, nc, 1.0_dp, work, bmatrix, 0.0_dp, eigenvectors)
 
-      DEALLOCATE (seigval)
+      DEALLOCATE (evals)
 
       CALL timestop(handle)
 

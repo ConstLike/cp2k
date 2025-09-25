@@ -96,8 +96,10 @@ proprietary software packages, like e.g. MKL, these have to be installed separat
 
 | Package   | License                                                                            | GPL Compatible                                                                   |
 | --------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| ace       | [GPL](https://github.com/ICAMS/lammps-user-pace/blob/main/LICENSE)                 | Yes                                                                              |
 | cmake     | [BSD 3-Clause](https://gitlab.kitware.com/cmake/cmake/raw/master/Copyright.txt)    | Yes                                                                              |
 | cosma     | [BSD 3-Clause](https://github.com/eth-cscs/COSMA/blob/master/LICENCE)              | Yes                                                                              |
+| deepmd    | [LGPL](https://github.com/deepmodeling/deepmd-kit/blob/master/LICENSE)             | Yes                                                                              |
 | elpa      | [LGPL](https://gitlab.mpcdf.mpg.de/elpa/elpa/blob/master/LICENSE)                  | Yes                                                                              |
 | fftw      | [GPL](http://www.fftw.org/doc/License-and-Copyright.html)                          | Yes                                                                              |
 | gcc       | [GPL](https://gcc.gnu.org/git/?p=gcc.git;a=blob_plain;f=COPYING;hb=HEAD)           | Yes                                                                              |
@@ -107,21 +109,16 @@ proprietary software packages, like e.g. MKL, these have to be installed separat
 | libvori   | LGPL-3                                                                             | Yes                                                                              |
 | libvdwxc  | [GPL](https://gitlab.com/libvdwxc/libvdwxc/blob/master/LICENSE)                    | Yes                                                                              |
 | libxc     | [MPL](https://gitlab.com/libxc/libxc/blob/master/COPYING)                          | Yes                                                                              |
-| libxsmm   | [BSD 3-Clause](https://github.com/hfp/libxsmm/blob/master/LICENSE.md)              | Yes                                                                              |
+| libxsmm   | [BSD 3-Clause](https://github.com/libxsmm/libxsmm/blob/master/LICENSE.md)          | Yes                                                                              |
 | mpich     | [MPICH](https://github.com/pmodels/mpich/blob/master/COPYRIGHT)                    | [Yes](https://enterprise.dejacode.com/licenses/public/mpich/#license-conditions) |
 | openblas  | [BSD 3-Clause](https://github.com/xianyi/OpenBLAS/blob/develop/LICENSE)            | Yes                                                                              |
 | openmpi   | [BSD 3-Clause](https://github.com/open-mpi/ompi/blob/master/LICENSE)               | Yes                                                                              |
-| pexsi     | [BSD 3-Clause](https://bitbucket.org/berkeleylab/pexsi/src/master/LICENSE)         | Yes                                                                              |
 | plumed    | [LGPL](https://github.com/plumed/plumed2/blob/master/COPYING.LESSER)               | Yes                                                                              |
-| ptscotch  | [CeCILL-C](https://www.labri.fr/perso/pelegrin/scotch/)                            | [Yes](https://cecill.info/faq.en.html#gpl)                                       |
-| quip      | [GPL](https://github.com/libAtoms/QUIP/blob/public/src/libAtoms/COPYRIGHT)         | Yes                                                                              |
-| fox       | [BSD 3-Clause](https://github.com/andreww/fox/blob/master/LICENSE)                 | Yes                                                                              |
 | reflapack | [BSD 3-Clause](http://www.netlib.org/lapack/LICENSE.txt)                           | Yes                                                                              |
 | scalapack | [BSD 3-Clause](http://www.netlib.org/scalapack/LICENSE)                            | Yes                                                                              |
 | sirius    | [BSD 2-Clause](https://github.com/electronic-structure/SIRIUS/blob/master/LICENSE) | Yes                                                                              |
 | spfft     | [BSD 3-Clause](https://github.com/eth-cscs/SpFFT/blob/master/LICENSE)              | Yes                                                                              |
 | spglib    | [BSD 3-Clause](https://github.com/atztogo/spglib/blob/master/COPYING)              | Yes                                                                              |
-| superlu   | [BSD 3-Clause](https://github.com/xiaoyeli/superlu/blob/master/License.txt)        | Yes                                                                              |
 | valgrind  | [GPL](https://sourceware.org/git/?p=valgrind.git;a=blob_plain;f=COPYING;hb=HEAD)   | Yes                                                                              |
 
 ## For Developers

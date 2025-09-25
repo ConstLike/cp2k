@@ -1,10 +1,17 @@
 #!/bin/bash -e
 
-# shellcheck disable=SC1091
-source /opt/cp2k-toolchain/install/setup
+if (($# != 1)); then
+  echo "ERROR: Script install_dbcsr.sh expects exactly one argument"
+  echo "Usage: install_dbcsr.sh <VERSION>"
+  exit 1
+fi
 
-DBCSR_ver="2.6.0"
-DBCSR_sha256="c67b02ff9abc7c1f529af446a9f01f3ef9e5b0574f220259128da8d5ca7e9dc6"
+VERSION=$1
+
+DBCSR_ver="2.8.0"
+DBCSR_sha256="d55e4f052f28d1ed0faeaa07557241439243287a184d1fd27f875c8b9ca6bd96"
+
+[[ -z "${INSTALL_PREFIX}" ]] && INSTALL_PREFIX="/opt/cp2k"
 
 echo "==================== Installing DBCSR ===================="
 
@@ -17,7 +24,16 @@ cd dbcsr-${DBCSR_ver}
 mkdir build
 cd build
 
-if ! cmake -DCMAKE_INSTALL_PREFIX=/opt/dbcsr -DUSE_MPI=ON -DUSE_OPENMP=ON -DUSE_SMM=blas .. &> cmake.log; then
+if [[ "${VERSION}" == "ssmp" ]]; then
+  USE_MPI="OFF"
+elif [[ "${VERSION}" == "psmp" ]]; then
+  USE_MPI="ON"
+else
+  echo "Unknown version: ${VERSION}."
+  exit 1
+fi
+
+if ! cmake -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" -DCMAKE_INSTALL_LIBDIR=lib -DUSE_MPI=${USE_MPI} -DUSE_OPENMP=ON .. &> cmake.log; then
   cat cmake.log
   exit 1
 fi
@@ -32,7 +48,7 @@ if ! make install VERBOSE=1 &> install.log; then
   exit 1
 fi
 
-cd ..
-rm -rf build "dbcsr-${DBCSR_ver}" "dbcsr-${DBCSR_ver}.tar.gz"
+cd ../..
+rm -rf "dbcsr-${DBCSR_ver}" "dbcsr-${DBCSR_ver}.tar.gz"
 
 #EOF

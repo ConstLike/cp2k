@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -169,7 +169,7 @@ CONTAINS
       DO iproc = 0, numnodes - 1
          DEALLOCATE (buffer_send(iproc)%blocks, buffer_send(iproc)%data)
       END DO
-!$OMP END DO
+!$OMP END DO NOWAIT
 
       nblks_recv_mythread = 0
       DO iproc = 0, numnodes - 1
@@ -208,11 +208,17 @@ CONTAINS
          END DO
 !$OMP END DO
       END DO
-!$OMP END PARALLEL
 
+!$OMP DO
       DO iproc = 0, numnodes - 1
          DEALLOCATE (buffer_recv(iproc)%blocks, buffer_recv(iproc)%data)
       END DO
+!$OMP END DO
+!$OMP END PARALLEL
+
+      DEALLOCATE (nblks_recv_total, ndata_recv_total)
+      DEALLOCATE (nblks_send_total, ndata_send_total)
+      DEALLOCATE (buffer_send, buffer_recv)
 
       IF (move_prv) CALL dbt_clear(tensor_in)
 
@@ -224,14 +230,14 @@ CONTAINS
 !> \author Patrick Seewald
 ! **************************************************************************************************
    SUBROUTINE dbt_communicate_buffer(mp_comm, buffer_recv, buffer_send)
-      TYPE(mp_comm_type), INTENT(IN)                    :: mp_comm
+      TYPE(mp_comm_type), INTENT(IN)                        :: mp_comm
       TYPE(block_buffer_type), DIMENSION(0:), INTENT(INOUT) :: buffer_recv, buffer_send
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'dbt_communicate_buffer'
 
       INTEGER                                               :: iproc, numnodes, &
                                                                rec_counter, send_counter, i
-      TYPE(mp_request_type), ALLOCATABLE, DIMENSION(:, :)                 :: req_array
+      TYPE(mp_request_type), ALLOCATABLE, DIMENSION(:, :)   :: req_array
       INTEGER                                               :: handle
 
       CALL timeset(routineN, handle)
@@ -269,12 +275,12 @@ CONTAINS
 !$OMP END MASTER
 
       ELSE
-!$OMP DO SCHEDULE(static, 512)
+!$OMP DO SCHEDULE(static)
          DO i = 1, SIZE(buffer_send(0)%blocks, 1)
             buffer_recv(0)%blocks(i, :) = buffer_send(0)%blocks(i, :)
          END DO
-!$OMP END DO
-!$OMP DO SCHEDULE(static, 512)
+!$OMP END DO NOWAIT
+!$OMP DO SCHEDULE(static)
          DO i = 1, SIZE(buffer_send(0)%data)
             buffer_recv(0)%data(i) = buffer_send(0)%data(i)
          END DO

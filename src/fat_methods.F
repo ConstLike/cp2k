@@ -24,7 +24,7 @@ MODULE fat_methods
                                               cp_pw_to_simple_volumetric
    USE cp_subsys_types,                 ONLY: cp_subsys_type,&
                                               cp_subsys_get
-   USE dbcsr_api,                       ONLY: dbcsr_p_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_p_type
    USE fat_types,                       ONLY: fat_env_create,&
                                               fat_env_release,&
                                               fat_env_type
@@ -52,11 +52,8 @@ MODULE fat_methods
    USE pw_poisson_methods,              ONLY: pw_poisson_solve
    USE pw_poisson_types,                ONLY: pw_poisson_type
    USE pw_pool_types,                   ONLY: pw_pool_type
-   USE pw_types,                        ONLY: COMPLEXDATA1D,&
-                                              REALDATA3D,&
-                                              REALSPACE,&
-                                              RECIPROCALSPACE,&
-                                              pw_type
+   USE pw_types,                        ONLY: pw_r3d_rs_type,&
+                                              pw_c1d_gs_type
    USE scf_control_types,               ONLY: scf_control_type
    USE qs_collocate_density,            ONLY: calculate_drho_core,&
                                               calculate_drho_elec_dR,&
@@ -105,9 +102,9 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_pw_create_frag(fat_env, pw_r, pw_g, rho0_s_pw, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pw_r
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pw_g
-      TYPE(pw_type), OPTIONAL, POINTER                   :: rho0_s_pw
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: pw_r
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: pw_g
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: rho0_s_pw
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_pw_create_frag'
@@ -126,25 +123,19 @@ CONTAINS
 
       IF (PRESENT(pw_r)) THEN
          ALLOCATE (pw_r)
-         CALL fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw_r, &
-                                                         use_data=realdata3d, &
-                                                         in_space=realspace)
+         CALL fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw_r)
          CALL pw_zero(pw_r)
       END IF
 
       IF (PRESENT(pw_g)) THEN
          ALLOCATE (pw_g)
-         CALL fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw_g, &
-                                                         use_data=complexdata1d, &
-                                                         in_space=reciprocalspace)
+         CALL fat_env%pw_pool_sub(i_frag)%pool%create_pw(pw_g)
          CALL pw_zero(pw_g)
       END IF
 
       IF (PRESENT(rho0_s_pw) .AND. fat_env%use_gapw) THEN
          ALLOCATE (rho0_s_pw)
-         CALL fat_env%pw_pool_sub(i_frag)%pool%create_pw(rho0_s_pw, &
-                                                         use_data=realdata3d, &
-                                                         in_space=realspace)
+         CALL fat_env%pw_pool_sub(i_frag)%pool%create_pw(rho0_s_pw)
          CALL pw_zero(rho0_s_pw)
       END IF
 
@@ -157,9 +148,9 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_pw_release_frag(fat_env, pw_r, pw_g, rho0_s_pw, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pw_r
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pw_g
-      TYPE(pw_type), OPTIONAL, POINTER                   :: rho0_s_pw
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: pw_r
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: pw_g
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: rho0_s_pw
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_pw_release_frag'
@@ -201,8 +192,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_pw_create_ref(fat_env, pw_r, pw_g)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), INTENT(out), OPTIONAL               :: pw_r
-      TYPE(pw_type), INTENT(out), OPTIONAL               :: pw_g
+      TYPE(pw_r3d_rs_type), INTENT(out), OPTIONAL        :: pw_r
+      TYPE(pw_c1d_gs_type), INTENT(out), OPTIONAL        :: pw_g
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_pw_create_ref'
 
@@ -218,16 +209,12 @@ CONTAINS
       CPASSERT(ASSOCIATED(fat_env%pw_pool_ref))
 
       IF (PRESENT(pw_r)) THEN
-         CALL fat_env%pw_pool_ref%create_pw(pw_r, &
-                                            use_data=realdata3d, &
-                                            in_space=realspace)
+         CALL fat_env%pw_pool_ref%create_pw(pw_r)
          CALL pw_zero(pw_r)
       END IF
 
       IF (PRESENT(pw_g)) THEN
-         CALL fat_env%pw_pool_ref%create_pw(pw_g, &
-                                            use_data=COMPLEXDATA1D, &
-                                            in_space=RECIPROCALSPACE)
+         CALL fat_env%pw_pool_ref%create_pw(pw_g)
          CALL pw_zero(pw_g)
       END IF
 
@@ -240,8 +227,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_pw_release_ref(fat_env, pw_r, pw_g)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), INTENT(inout), OPTIONAL             :: pw_r
-      TYPE(pw_type), INTENT(inout), OPTIONAL             :: pw_g
+      TYPE(pw_r3d_rs_type), INTENT(inout), OPTIONAL      :: pw_r
+      TYPE(pw_c1d_gs_type), INTENT(inout), OPTIONAL      :: pw_g
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_pw_release_ref'
 
@@ -272,8 +259,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_pws_create_ref(fat_env, pws_r, pws_g, n_pws)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pws_r(:)
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pws_g(:)
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: pws_r(:)
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: pws_g(:)
       INTEGER                                            :: n_pws
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_pws_create_ref'
@@ -311,8 +298,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_pws_release_ref(fat_env, pws_r, pws_g)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pws_r(:)
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pws_g(:)
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: pws_r(:)
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: pws_g(:)
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_pws_release_ref'
 
@@ -351,8 +338,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_pws_create_frag(fat_env, pws_r, pws_g, i_frag, n_pws)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pws_r(:)
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pws_g(:)
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: pws_r(:)
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: pws_g(:)
       INTEGER, INTENT(IN)                                :: i_frag, n_pws
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'fat_pws_create_frag'
@@ -370,9 +357,7 @@ CONTAINS
       IF (PRESENT(pws_r)) THEN
          ALLOCATE (pws_r(n_pws))
          DO i = 1, n_pws
-            CALL fat_env%pw_pool_sub(i_frag)%pool%create_pw(pws_r(i), &
-                                                            use_data=REALDATA3D, &
-                                                            in_space=REALSPACE)
+            CALL fat_env%pw_pool_sub(i_frag)%pool%create_pw(pws_r(i))
             CALL pw_zero(pws_r(i))
          END DO
       END IF
@@ -380,9 +365,7 @@ CONTAINS
       IF (PRESENT(pws_g)) THEN
          ALLOCATE (pws_g(n_pws))
          DO i = 1, n_pws
-            CALL fat_env%pw_pool_sub(i_frag)%pool%create_pw(pws_g(i), &
-                                                            use_data=COMPLEXDATA1D, &
-                                                            in_space=RECIPROCALSPACE)
+            CALL fat_env%pw_pool_sub(i_frag)%pool%create_pw(pws_g(i))
             CALL pw_zero(pws_g(i))
          END DO
       END IF
@@ -396,15 +379,15 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_pws_release_frag(fat_env, pws_r, pws_g, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pws_r(:)
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pws_g(:)
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: pws_r(:)
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: pws_g(:)
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_pws_release_frag'
 
       INTEGER                                            :: handle, i
-      TYPE(pw_type), POINTER                             :: pw_g_tmp
-      TYPE(pw_type), POINTER                             :: pw_r_tmp
+      TYPE(pw_c1d_gs_type), POINTER                      :: pw_g_tmp
+      TYPE(pw_r3d_rs_type), POINTER                      :: pw_r_tmp
 
       CALL timeset(routinen, handle)
 
@@ -439,10 +422,10 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_get_rho_frag(fat_env, rho_r, rho_g, rho0_s_r, rho0_s_g, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), OPTIONAL, POINTER                   :: rho_r(:)
-      TYPE(pw_type), OPTIONAL, POINTER                   :: rho_g(:)
-      TYPE(pw_type), OPTIONAL, POINTER                   :: rho0_s_r
-      TYPE(pw_type), OPTIONAL, POINTER                   :: rho0_s_g
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: rho_r(:)
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_g(:)
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: rho0_s_r
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho0_s_g
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_get_rho_frag'
@@ -467,15 +450,11 @@ CONTAINS
       IF (PRESENT(rho_r)) THEN
          NULLIFY (rho_r)
          CALL qs_rho_get(qs_rho, rho_r=rho_r)
-!        IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) &
-!           call print_pw_statistics(rho_r(1), "get_rho_r", i_frag)
       END IF
 
       IF (PRESENT(rho_g)) THEN
          NULLIFY (rho_g)
          CALL qs_rho_get(qs_rho, rho_g=rho_g)
-!        IF (is_debug .AND. fat_env%force_env_ref%para_env%is_source()) &
-!           call print_pw_statistics(rho_g(1), "get_rho_g", i_frag)
       END IF
 
       IF (PRESENT(rho0_s_r) .AND. fat_env%use_gapw) THEN
@@ -498,16 +477,16 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_get_rho_tot_frag(fat_env, rho_tot_r, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: rho_tot_r
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_tot_r
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_get_rho_tot_frag'
 
       INTEGER                                            :: handle, ispin
-      TYPE(pw_type), POINTER                             :: rho0_s_rs
-      TYPE(pw_type), POINTER                             :: rho_core_g
-      TYPE(pw_type), POINTER                             :: rho_core_r
-      TYPE(pw_type), POINTER                             :: rho_r(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho0_s_rs
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho_core_g
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_core_r
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_r(:)
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
       CALL timeset(routinen, handle)
@@ -541,8 +520,8 @@ CONTAINS
 
    SUBROUTINE write_pw_to_cube(fat_env, pw_r, pw_g, filename)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pw_r
-      TYPE(pw_type), OPTIONAL, POINTER                   :: pw_g
+      TYPE(pw_r3d_rs_type), OPTIONAL, POINTER            :: pw_r
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: pw_g
       CHARACTER(len=*), INTENT(in)                       :: filename
 
       INTEGER                                            :: unit_nr
@@ -553,7 +532,7 @@ CONTAINS
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: pw_pool
-      TYPE(pw_type), POINTER                             :: pw_r_tmp
+      TYPE(pw_r3d_rs_type), POINTER                      :: pw_r_tmp
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_subsys_type), POINTER                      :: subsys
 
@@ -627,141 +606,12 @@ CONTAINS
 
    END SUBROUTINE write_pw_to_cube
 
-   SUBROUTINE print_pw_statistics(pw, name, i_frag)
-      TYPE(pw_type), INTENT(in)                          :: pw
-      CHARACTER(len=*), INTENT(in)                       :: name
-      INTEGER, INTENT(in)                                :: i_frag
-
-      INTEGER                                            :: count, i
-      LOGICAL                                            :: print_grid = .TRUE.
-      REAL(dp)                                           :: max_val, mean, min_val, norm_2, std_dev, &
-                                                            sum_val
-      TYPE(pw_grid_type), POINTER                        :: grid
-
-      grid => pw%pw_grid
-
-      IF (pw%in_space == REALSPACE) THEN
-         sum_val = SUM(ABS(pw%cr3d))
-         count = SIZE(pw%cr3d)
-         mean = sum_val/count
-         std_dev = SQRT(SUM((ABS(pw%cr3d) - mean)**2)/count)
-         min_val = MINVAL(ABS(pw%cr3d))
-         max_val = MAXVAL(ABS(pw%cr3d))
-         norm_2 = SQRT(SUM(pw%cr3d**2))
-      ELSE IF (pw%in_space == RECIPROCALSPACE) THEN
-         sum_val = SUM(ABS(pw%cc))
-         count = SIZE(pw%cc)
-         mean = REAL(sum_val)/count
-         std_dev = SQRT(SUM(ABS(pw%cc - mean)**2)/count)
-         min_val = MINVAL(ABS(pw%cc))
-         max_val = MAXVAL(ABS(pw%cc))
-         norm_2 = SQRT(SUM(ABS(pw%cc)**2))
-      ELSE
-         PRINT *, "KKK| Error: Unknown space type for PW"
-         RETURN
-      END IF
-
-      ! PW Type Information
-      PRINT *, "KKK| Statistics for -> ", name, " <-(fragment ", i_frag, "):"
-      PRINT *, "KKK|  PW Type Information:"
-      PRINT *, "KKK|   In use:                ", pw%in_use
-      PRINT *, "KKK|   Space:                 ", MERGE("REALSPACE      ", &
-                                                       "RECIPROCALSPACE", &
-                                                       pw%in_space == REALSPACE)
-      PRINT *, "KKK|  Data Statistics:"
-      PRINT *, "KKK|   Mean(abs):             ", mean
-      PRINT *, "KKK|   Std Dev:               ", std_dev
-      PRINT *, "KKK|   Min(abs):              ", min_val
-      PRINT *, "KKK|   Max(abs):              ", max_val
-      PRINT *, "KKK|   Sum(abs):              ", sum_val
-      PRINT *, "KKK|   Norm-2:                ", norm_2
-      PRINT *, "KKK|   Num of grid p.         ", count
-
-      IF (print_grid) THEN
-         PRINT *, "KKK|  Grid Information:"
-         PRINT *, "KKK|   Total Grid Points:     ", grid%ngpts
-         PRINT *, "KKK|   Grid Points in Cutoff: ", grid%ngpts_cut
-         PRINT *, "KKK|   Dimensions:            ", grid%npts
-         PRINT *, "KKK|   Local Grid Points:     ", grid%ngpts_local
-         PRINT *, "KKK|   Local Points in Cutoff:", grid%ngpts_cut_local
-         PRINT *, "KKK|   Grid Bounds:           ", grid%bounds
-         PRINT *, "KKK|   Local Grid Bounds:     ", grid%bounds_local
-         PRINT *, "KKK|   Grid Spacing:          ", grid%dr
-         PRINT *, "KKK|   Cell Matrix:"
-         DO i = 1, 3
-            PRINT *, "KKK|                          ", grid%dh(:, i)
-         END DO
-         PRINT *, "KKK|   Inverse Cell Matrix:"
-         DO i = 1, 3
-            PRINT *, "KKK|                          ", grid%dh_inv(:, i)
-         END DO
-         PRINT *, "KKK|   Orthorhombic:          ", grid%orthorhombic
-         PRINT *, "KKK|   Volume Element:        ", grid%dvol
-         PRINT *, "KKK|   Total Volume:          ", grid%vol
-         PRINT *, "KKK|   Cutoff:                ", grid%cutoff
-         PRINT *, "KKK|   Grid Span:             ", MERGE("HALFSPACE", &
-                                                          "FULLSPACE", &
-                                                          grid%grid_span == HALFSPACE)
-         PRINT *, "KKK|   Has G=0:               ", grid%have_g0
-         PRINT *, "KKK|   First G≠0 index:       ", grid%first_gne0
-         PRINT *, "KKK|   Grid ID:               ", grid%id_nr
-         PRINT *, "KKK|   Reference Count:       ", grid%ref_count
-         PRINT *, "KKK|   Spherical Cutoff:      ", grid%spherical
-         PRINT *, "KKK|  Parallel Information:"
-         PRINT *, "KKK|   Mode:                  ", MERGE("Distributed", &
-                                                          "Local      ", &
-                                                          grid%para%mode == PW_MODE_DISTRIBUTED)
-         PRINT *, "KKK|   Ray Distribution:      ", grid%para%ray_distribution
-         PRINT *, "KKK|   Blocked:               ", grid%para%blocked
-         PRINT *, "KKK|   Group Size:            ", grid%para%group_size
-         PRINT *, "KKK|   My Position:           ", grid%para%my_pos
-         PRINT *, "KKK|   Group Head:            ", grid%para%group_head
-         PRINT *, "KKK|   Group Head ID:         ", grid%para%group_head_id
-         PRINT *, "KKK|   Real Space Dimensions: ", grid%para%rs_dims
-         PRINT *, "KKK|   Real Space Position:   ", grid%para%rs_pos
-      END IF
-
-      IF (ASSOCIATED(grid%g)) THEN
-         PRINT *, "KKK|  G-vector Statistics:"
-         PRINT *, "KKK|   Mean G magnitude:      ", SUM(SQRT(SUM(grid%g**2, dim=1)))/SIZE(grid%g, 2)
-         PRINT *, "KKK|   Max G magnitude:       ", SQRT(MAXVAL(SUM(grid%g**2, dim=1)))
-      END IF
-
-      IF (ASSOCIATED(grid%gsq)) THEN
-         PRINT *, "KKK|   Mean G^2:              ", SUM(grid%gsq)/SIZE(grid%gsq)
-         PRINT *, "KKK|   Max G^2:               ", MAXVAL(grid%gsq)
-      END IF
-
-!#if defined(__parallel)
-!      PRINT *, "KKK|  MPI Information:"
-!      PRINT *, "KKK|   MPI Mode:               ", MERGE("DISTRIBUTED", &
-!                                                        "LOCAL      ", &
-!                                                         grid%para%mode == PW_MODE_DISTRIBUTED)
-!      PRINT *, "KKK|   MPI Group Handle:       ", grid%para%group%get_handle()
-!      PRINT *, "KKK|   MPI Group Size:         ", grid%para%group_size
-!      PRINT *, "KKK|   MPI Position:           ", grid%para%my_pos
-!      PRINT *, "KKK|   MPI Dims:               ", grid%para%rs_dims
-!      PRINT *, "KKK|   MPI Ray Distribution:   ", grid%para%ray_distribution
-!      PRINT *, "KKK|   MPI Blocked:            ", grid%para%blocked
-!      PRINT *, "KKK|   MPI Task Rank:          ", grid%para%rs_dims
-!      PRINT *, "KKK|   Real Space Group:       ", grid%para%rs_group%get_handle()
-!      PRINT *, "KKK|   Real Space Position:    ", grid%para%rs_pos
-!      PRINT *, "KKK|   Real Space MPO:         ", grid%para%rs_mpo
-!      PRINT *, "KKK|   Has Bounds Array:       ", ALLOCATED(grid%para%bo)
-!      IF (ALLOCATED(grid%para%bo)) THEN
-!         PRINT *, "KKK|   Bounds Array Shape:     ", SHAPE(grid%para%bo)
-!      END IF
-!      PRINT *, "KKK|   Has YZ Ray Array:       ", ALLOCATED(grid%para%yzp)
-!      PRINT *, "KKK|   Has YZ Count Array:     ", ALLOCATED(grid%para%nyzray)
-!#endif
-   END SUBROUTINE print_pw_statistics
-
 ! **************************************************************************************************
 !> \brief Gets the nuclear density for one fragment in the freeze-and-thaw environment
 ! **************************************************************************************************
    SUBROUTINE fat_get_rhon_frag(fat_env, rhon_g, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: rhon_g
+      TYPE(pw_c1d_gs_type), POINTER                      :: rhon_g
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_get_rhon_frag'
@@ -789,7 +639,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_get_ppl_frag(fat_env, v_ppl, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: v_ppl
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_ppl
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_get_ppl_frag'
@@ -805,7 +655,6 @@ CONTAINS
 
       qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
       CALL calculate_ppl_grid(v_ppl, qs_env, do_erf_term=.TRUE.)
-!     IF (is_debug) CALL print_pw_statistics(v_ppl, "v_ppl", i_frag)
 
       CALL timestop(handle)
 
@@ -817,7 +666,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_get_drhon_frag(fat_env, drhon_g, i_frag, i_nuc, i_dir)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: drhon_g
+      TYPE(pw_c1d_gs_type), POINTER                      :: drhon_g
       INTEGER                                            :: i_frag, i_nuc, i_dir
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_get_drhon_frag'
@@ -844,8 +693,8 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_get_drho_frag(fat_env, drho_r, drho_g, i_frag, i_nuc, i_dir)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: drho_r
-      TYPE(pw_type), POINTER                             :: drho_g
+      TYPE(pw_r3d_rs_type), POINTER                      :: drho_r
+      TYPE(pw_c1d_gs_type), POINTER                      :: drho_g
       INTEGER                                            :: i_frag, i_nuc, i_dir
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_get_drho_frag'
@@ -883,13 +732,13 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_get_rho_ref(fat_env, rho_r, rho_g)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), OPTIONAL                            :: rho_r(:)
-      TYPE(pw_type), OPTIONAL, POINTER                   :: rho_g(:)
+      TYPE(pw_r3d_rs_type), OPTIONAL                     :: rho_r(:)
+      TYPE(pw_c1d_gs_type), OPTIONAL, POINTER            :: rho_g(:)
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_get_rho_ref'
 
       INTEGER                                            :: handle, i, j
-      TYPE(pw_type), POINTER                             :: rho_r_tmp(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_r_tmp(:)
 
       CALL timeset(routinen, handle)
 
@@ -920,16 +769,16 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_v_ts_frag(fat_env, rho_r, rho_g, v_kin_pot_frag, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: rho_r(:)
-      TYPE(pw_type), POINTER                             :: rho_g(:)
-      TYPE(pw_type), POINTER                             :: v_kin_pot_frag(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_r(:)
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho_g(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_kin_pot_frag(:)
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_v_ts_frag'
 
       INTEGER                                            :: handle
       REAL(dp)                                           :: e_kin_frag, virial(3, 3)
-      TYPE(pw_type), POINTER                             :: tau(:), v_tau(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: tau(:), v_tau(:)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(section_vals_type), POINTER                   :: input, kin_section
 
@@ -969,13 +818,14 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_v_ts_ref(fat_env, v_kin_pot_ref)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: v_kin_pot_ref(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_kin_pot_ref(:)
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_v_ts_ref'
 
       INTEGER                                            :: handle
       REAL(dp)                                           :: e_kin_ref, virial(3, 3)
-      TYPE(pw_type), POINTER                             :: rho_g(:), rho_r(:), tau(:), v_tau(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_r(:), tau(:), v_tau(:)
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho_g(:)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(section_vals_type), POINTER                   :: input, kin_section
 
@@ -1024,16 +874,16 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_v_xc_frag(fat_env, rho_r, rho_g, v_xc_pot_frag, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: rho_r(:)
-      TYPE(pw_type), POINTER                             :: rho_g(:)
-      TYPE(pw_type), POINTER                             :: v_xc_pot_frag(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_r(:)
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho_g(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_xc_pot_frag(:)
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_v_xc_frag'
 
       INTEGER                                            :: handle
       REAL(dp)                                           :: e_xc_frag, virial(3, 3)
-      TYPE(pw_type), POINTER                             :: tau(:), v_tau(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: tau(:), v_tau(:)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(section_vals_type), POINTER                   :: input, xc_section
 
@@ -1073,13 +923,14 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_v_xc_ref(fat_env, v_xc_pot_ref)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: v_xc_pot_ref(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_xc_pot_ref(:)
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_v_xc_ref'
 
       INTEGER                                            :: handle
       REAL(dp)                                           :: e_xc_ref, virial(3, 3)
-      TYPE(pw_type), POINTER                             :: rho_g(:), rho_r(:), tau(:), v_tau(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_r(:), tau(:), v_tau(:)
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho_g(:)
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(section_vals_type), POINTER                   :: input, xc_section
 
@@ -1131,7 +982,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_v_hartree_frag(fat_env, v_hartree, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: v_hartree
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_hartree
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_v_hartree_frag'
@@ -1141,7 +992,7 @@ CONTAINS
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_poisson_type), POINTER                     :: poisson_env
-      TYPE(pw_type), POINTER                             :: rho0_s_gs, rho_core, rho_g(:), &
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho0_s_gs, rho_core, rho_g(:), &
                                                             rho_tot_g, v_hartree_g
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
@@ -1200,15 +1051,15 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_vemb_tsna_frag(fat_env, rho_r, rho_g, v_emb, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: rho_r(:)
-      TYPE(pw_type), POINTER                             :: rho_g(:)
-      TYPE(pw_type), POINTER                             :: v_emb
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_r(:)
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho_g(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_emb
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_vemb_tsna_frag'
 
       INTEGER                                            :: handle
-      TYPE(pw_type), POINTER                             :: v(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: v(:)
 
       CALL timeset(routinen, handle)
 
@@ -1241,15 +1092,15 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_vemb_xcna_frag(fat_env, rho_r, rho_g, v_emb, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: rho_r(:)
-      TYPE(pw_type), POINTER                             :: rho_g(:)
-      TYPE(pw_type), POINTER                             :: v_emb
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_r(:)
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho_g(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_emb
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_vemb_xcna_frag'
 
       INTEGER                                            :: handle
-      TYPE(pw_type), POINTER                             :: v(:)
+      TYPE(pw_r3d_rs_type), POINTER                      :: v(:)
 
       CALL timeset(routinen, handle)
 
@@ -1281,13 +1132,13 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_vemb_hartree_frag(fat_env, v_emb, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: v_emb
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_emb
       INTEGER                                            :: i_frag
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_vemb_hartree_frag'
 
       INTEGER                                            :: handle, j_frag
-      TYPE(pw_type), POINTER                             :: v_hartree_j
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_hartree_j
 
       CALL timeset(routinen, handle)
 
@@ -1324,7 +1175,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_write_embedding_potential(fat_env, v_emb, work_tmp, i_frag)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: v_emb, work_tmp
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_emb, work_tmp
       INTEGER, INTENT(IN)                                :: i_frag
 
       CHARACTER(len=*), PARAMETER :: routineN = 'fat_write_embedding_potential'
@@ -1497,7 +1348,8 @@ CONTAINS
       CHARACTER(len=default_string_length)               :: label
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(qs_rho_type), POINTER                         :: qs_rho
-      TYPE(pw_type), DIMENSION(:), POINTER               :: rho_r, rho_g
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_r
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_g
       LOGICAL                                            :: file_exists
 
       CALL timeset(routinen, handle)
@@ -1511,7 +1363,6 @@ CONTAINS
       qs_env => fat_env%force_env_sub(i_frag)%force_env%qs_env
       CALL get_qs_env(qs_env=qs_env, rho=qs_rho)
       CALL qs_rho_get(qs_rho, rho_r=rho_r, rho_g=rho_g)
-!     IF (is_debug) CALL print_pw_statistics(rho_r(1), "before", i_frag)
 
       CALL integer_to_string(i_frag, label)
       IF (fat_env%force_env_ref%para_env%is_source()) THEN
@@ -1522,7 +1373,6 @@ CONTAINS
          END IF
       END IF
       CALL cp_cube_to_pw(rho_r(1), "extern_"//TRIM(label)//".cube", 1.0_dp)
-!     IF (is_debug) CALL print_pw_statistics(rho_r(1), "after", i_frag)
 
       CALL pw_transfer(rho_r(1), rho_g(1))
 
@@ -1541,14 +1391,15 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE fat_vemb_frag(fat_env, v_emb, i_frag, to_file)
       TYPE(fat_env_type), POINTER                        :: fat_env
-      TYPE(pw_type), POINTER                             :: v_emb
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_emb
       INTEGER                                            :: i_frag
       LOGICAL                                            :: to_file
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_vemb_frag'
 
       INTEGER                                            :: handle
-      TYPE(pw_type), POINTER                             :: rho_g(:), rho_r(:), vemb_tmp
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_r(:), vemb_tmp
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho_g(:)
 
       CALL timeset(routineN, handle)
 
@@ -1671,7 +1522,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'fat_eint_hartree'
 
       INTEGER                                            :: handle
-      TYPE(pw_type), POINTER                             :: rho_tot_i, rho_tot_j, v_hartree_i
+      TYPE(pw_r3d_rs_type), POINTER                             :: rho_tot_i, rho_tot_j, v_hartree_i
 
       CALL timeset(routinen, handle)
 
@@ -1841,10 +1692,10 @@ CONTAINS
       INTEGER                                            :: handle
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(force_env_type), POINTER                      :: force_env_tmp
-      TYPE(pw_type), POINTER                             :: rho(:), v_emb, weights
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho(:), v_emb, weights
       TYPE(qs_energy_type), POINTER                      :: energy
       TYPE(qs_environment_type), POINTER                 :: qs_env_tmp
-      TYPE(pw_type), POINTER                             :: rho_tmp
+      TYPE(pw_r3d_rs_type), POINTER                      :: rho_tmp
       CHARACTER(len=50)                                  :: filename
 
       CALL timeset(routinen, handle)
@@ -2213,7 +2064,8 @@ CONTAINS
 
       INTEGER                                            :: a, handle, i, j, k
       TYPE(particle_type), POINTER                       :: particles(:)
-      TYPE(pw_type), POINTER                             :: drho_g, drho_r, v_r
+      TYPE(pw_r3d_rs_type), POINTER                      :: drho_r, v_r
+      TYPE(pw_c1d_gs_type), POINTER                      :: drho_g
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
       CALL timeset(routinen, handle)
@@ -2269,7 +2121,8 @@ CONTAINS
 
       INTEGER                                            :: a, handle, i, j, k
       TYPE(particle_type), POINTER                       :: particles(:)
-      TYPE(pw_type), POINTER                             :: drho_g, drho_r, rho_g(:), rho_r(:), v_emb
+      TYPE(pw_r3d_rs_type), POINTER                      :: drho_r, rho_r(:), v_emb
+      TYPE(pw_c1d_gs_type), POINTER                      :: drho_g, rho_g(:)
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
       CALL timeset(routinen, handle)
@@ -2331,7 +2184,8 @@ CONTAINS
 
       INTEGER                                            :: a, handle, i, j, k
       TYPE(particle_type), POINTER                       :: particles(:)
-      TYPE(pw_type), POINTER                             :: drho_g, drho_r, rho_g(:), rho_r(:), v_emb
+      TYPE(pw_r3d_rs_type), POINTER                      :: drho_r, rho_r(:), v_emb
+      TYPE(pw_c1d_gs_type), POINTER                      :: drho_g, rho_g(:)
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
       CALL timeset(routinen, handle)
@@ -2393,8 +2247,8 @@ CONTAINS
 
       INTEGER                                            :: a, handle, i, j, k
       TYPE(particle_type), POINTER                       :: particles(:)
-      TYPE(pw_type), POINTER                             :: drho_g, drho_r, drhon_g, rho_r_tmp, &
-                                                            v_hartree
+      TYPE(pw_c1d_gs_type), POINTER                      :: drho_g, drhon_g
+      TYPE(pw_r3d_rs_type), POINTER                      :: drho_r, rho_r_tmp, v_hartree
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
       CALL timeset(routinen, handle)
@@ -2899,8 +2753,6 @@ CONTAINS
          force_env_tmp => fat_env%force_env_sub(i)%force_env
          qs_env_tmp => force_env_tmp%qs_env
          CALL get_qs_env(qs_env_tmp, scf_control=scf_control_tmp)
-!        scf_control_tmp%max_scf = 1
-!        scf_control_tmp%ignore_convergence_failure = .TRUE.
          CALL qs_calc_energy_force(qs_env=qs_env_tmp, &
                                    calc_force=.TRUE., &
                                    consistent_energies=.FALSE., &
@@ -2930,11 +2782,6 @@ CONTAINS
 
       ! Initialize iteration counter
       fat_env%i_iter = 0
-      ! Calculate initial energies for each fragment
-!     do i = 1, fat_env%n_frag
-!        call fat_iterate_frag(fat_env, i)
-!     end do
-!     if (is_debug) print *, "KKK| After initial calculations for all fragments i_iter", i, fat_env%i_iter
 
       ! Get convergence parameters from input
       CALL get_qs_env(fat_env%force_env_ref%qs_env, input=input)

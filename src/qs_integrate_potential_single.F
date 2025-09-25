@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -30,7 +30,8 @@
 MODULE qs_integrate_potential_single
    USE ao_util,                         ONLY: exp_radius_very_extended
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
-                                              get_atomic_kind
+                                              get_atomic_kind,&
+                                              get_atomic_kind_set
    USE atprop_types,                    ONLY: atprop_array_init,&
                                               atprop_type
    USE basis_set_types,                 ONLY: get_gto_basis_set,&
@@ -38,7 +39,7 @@ MODULE qs_integrate_potential_single
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
    USE cp_control_types,                ONLY: dft_control_type
-   USE dbcsr_api,                       ONLY: dbcsr_get_block_p,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_get_block_p,&
                                               dbcsr_type
    USE external_potential_types,        ONLY: get_potential,&
                                               gth_potential_type
@@ -54,11 +55,12 @@ MODULE qs_integrate_potential_single
    USE particle_types,                  ONLY: particle_type
    USE pw_env_types,                    ONLY: pw_env_get,&
                                               pw_env_type
-   USE pw_types,                        ONLY: pw_type
+   USE pw_types,                        ONLY: pw_r3d_rs_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
    USE qs_force_types,                  ONLY: qs_force_type
    USE qs_kind_types,                   ONLY: get_qs_kind,&
+                                              get_qs_kind_set,&
                                               qs_kind_type
    USE realspace_grid_types,            ONLY: map_gaussian_here,&
                                               realspace_grid_type,&
@@ -84,6 +86,7 @@ MODULE qs_integrate_potential_single
              integrate_v_rspace_diagonal, &
              integrate_v_core_rspace, &
              integrate_v_gaussian_rspace, &
+             integrate_function, &
              integrate_ppl_rspace, &
              integrate_rho_nlcc
 
@@ -95,7 +98,7 @@ CONTAINS
 !> \param qs_env ...
 ! **************************************************************************************************
    SUBROUTINE integrate_ppl_rspace(rho_rspace, qs_env)
-      TYPE(pw_type), INTENT(IN)                          :: rho_rspace
+      TYPE(pw_r3d_rs_type), INTENT(IN)                   :: rho_rspace
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
       CHARACTER(len=*), PARAMETER :: routineN = 'integrate_ppl_rspace'
@@ -280,7 +283,7 @@ CONTAINS
 !> \param qs_env ...
 ! **************************************************************************************************
    SUBROUTINE integrate_rho_nlcc(rho_rspace, qs_env)
-      TYPE(pw_type), INTENT(IN)                          :: rho_rspace
+      TYPE(pw_r3d_rs_type), INTENT(IN)                   :: rho_rspace
       TYPE(qs_environment_type), POINTER                 :: qs_env
 
       CHARACTER(len=*), PARAMETER :: routineN = 'integrate_rho_nlcc'
@@ -480,7 +483,7 @@ CONTAINS
 !> \param atecc ...
 ! **************************************************************************************************
    SUBROUTINE integrate_v_core_rspace(v_rspace, qs_env, atecc)
-      TYPE(pw_type), INTENT(IN)                          :: v_rspace
+      TYPE(pw_r3d_rs_type), INTENT(IN)                   :: v_rspace
       TYPE(qs_environment_type), POINTER                 :: qs_env
       REAL(KIND=dp), DIMENSION(:), OPTIONAL              :: atecc
 
@@ -552,11 +555,12 @@ CONTAINS
          DO ikind = 1, SIZE(atomic_kind_set)
 
             CALL get_atomic_kind(atomic_kind_set(ikind), natom=natom_of_kind, atom_list=atom_list)
-            CALL get_qs_kind(qs_kind_set(ikind), paw_atom=paw_atom, &
-                             alpha_core_charge=alpha_core_charge, &
-                             ccore_charge=ccore_charge)
+            CALL get_qs_kind(qs_kind_set(ikind), paw_atom=paw_atom)
 
             IF (dft_control%qs_control%gapw .AND. paw_atom) CYCLE
+
+            CALL get_qs_kind(qs_kind_set(ikind), alpha_core_charge=alpha_core_charge, &
+                             ccore_charge=ccore_charge)
 
             pab(1, 1) = -ccore_charge
             IF (alpha_core_charge == 0.0_dp .OR. pab(1, 1) == 0.0_dp) CYCLE
@@ -642,7 +646,7 @@ CONTAINS
 !> \param atecc ...
 ! **************************************************************************************************
    SUBROUTINE integrate_v_gaussian_rspace(v_rspace, qs_env, alpha, ccore, atecc)
-      TYPE(pw_type), INTENT(IN)                          :: v_rspace
+      TYPE(pw_r3d_rs_type), INTENT(IN)                   :: v_rspace
       TYPE(qs_environment_type), POINTER                 :: qs_env
       REAL(KIND=dp), DIMENSION(:), INTENT(IN)            :: alpha, ccore
       REAL(KIND=dp), DIMENSION(:)                        :: atecc
@@ -760,7 +764,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE integrate_v_rspace_one_center(v_rspace, qs_env, int_res, &
                                             calculate_forces, basis_type, atomlist)
-      TYPE(pw_type), INTENT(IN)                          :: v_rspace
+      TYPE(pw_r3d_rs_type), INTENT(IN)                   :: v_rspace
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(lri_kind_type), DIMENSION(:), POINTER         :: int_res
       LOGICAL, INTENT(IN)                                :: calculate_forces
@@ -828,8 +832,8 @@ CONTAINS
       eps_rho_rspace = dft_control%qs_control%eps_rho_rspace
 
       offset = 0
-      my_pos = v_rspace%pw_grid%para%my_pos
-      group_size = v_rspace%pw_grid%para%group_size
+      my_pos = v_rspace%pw_grid%para%group%mepos
+      group_size = v_rspace%pw_grid%para%group%num_pe
 
       DO ikind = 1, nkind
 
@@ -970,7 +974,7 @@ CONTAINS
 !> \author JGH
 ! **************************************************************************************************
    SUBROUTINE integrate_v_rspace_diagonal(v_rspace, ksmat, pmat, qs_env, calculate_forces, basis_type)
-      TYPE(pw_type), INTENT(IN)                          :: v_rspace
+      TYPE(pw_r3d_rs_type), INTENT(IN)                   :: v_rspace
       TYPE(dbcsr_type), INTENT(INOUT)                    :: ksmat, pmat
       TYPE(qs_environment_type), POINTER                 :: qs_env
       LOGICAL, INTENT(IN)                                :: calculate_forces
@@ -1029,8 +1033,8 @@ CONTAINS
       use_virial = virial%pv_availability .AND. (.NOT. virial%pv_numer)
 
       offset = 0
-      my_pos = v_rspace%pw_grid%para%my_pos
-      group_size = v_rspace%pw_grid%para%group_size
+      my_pos = v_rspace%pw_grid%para%group%mepos
+      group_size = v_rspace%pw_grid%para%group%num_pe
 
       DO ikind = 1, nkind
 
@@ -1174,5 +1178,185 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE integrate_v_rspace_diagonal
+
+! **************************************************************************************************
+!> \brief computes integrals of product of v_rspace times a basis function (vector function)
+!>        and possible forces
+!> \param qs_env ...
+!> \param v_rspace ...
+!> \param f_coef ...
+!> \param f_integral ...
+!> \param calculate_forces ...
+!> \param basis_type ...
+!> \author JGH [8.2024]
+! **************************************************************************************************
+   SUBROUTINE integrate_function(qs_env, v_rspace, f_coef, f_integral, calculate_forces, basis_type)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(pw_r3d_rs_type), INTENT(IN)                   :: v_rspace
+      REAL(KIND=dp), DIMENSION(:), INTENT(IN)            :: f_coef
+      REAL(KIND=dp), DIMENSION(:), INTENT(OUT)           :: f_integral
+      LOGICAL, INTENT(IN)                                :: calculate_forces
+      CHARACTER(len=*), INTENT(IN)                       :: basis_type
+
+      CHARACTER(len=*), PARAMETER :: routineN = 'integrate_function'
+
+      INTEGER :: atom_a, group_size, handle, i, iatom, igrid_level, ikind, ipgf, iset, maxco, &
+         maxsgf_set, my_pos, na1, natom, ncoa, nkind, nseta, offset, sgfa
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: atom_of_kind
+      INTEGER, DIMENSION(:), POINTER                     :: la_max, la_min, npgfa, nsgfa
+      INTEGER, DIMENSION(:, :), POINTER                  :: first_sgfa
+      LOGICAL                                            :: use_virial
+      REAL(KIND=dp)                                      :: eps_rho_rspace, radius
+      REAL(KIND=dp), DIMENSION(3)                        :: force_a, force_b, ra
+      REAL(KIND=dp), DIMENSION(3, 3)                     :: my_virial_a, my_virial_b
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: hab, pab, sphi_a, work, zeta
+      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      TYPE(cell_type), POINTER                           :: cell
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(gridlevel_info_type), POINTER                 :: gridlevel_info
+      TYPE(gto_basis_set_type), POINTER                  :: orb_basis_set
+      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
+      TYPE(pw_env_type), POINTER                         :: pw_env
+      TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
+      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      TYPE(realspace_grid_type), DIMENSION(:), POINTER   :: rs_v
+      TYPE(realspace_grid_type), POINTER                 :: rs_grid
+      TYPE(virial_type), POINTER                         :: virial
+
+      CALL timeset(routineN, handle)
+
+      CALL get_qs_env(qs_env=qs_env, pw_env=pw_env)
+      gridlevel_info => pw_env%gridlevel_info
+
+      CALL pw_env_get(pw_env, rs_grids=rs_v)
+      CALL potential_pw2rs(rs_v, v_rspace, pw_env)
+
+      CALL get_qs_env(qs_env=qs_env, &
+                      atomic_kind_set=atomic_kind_set, &
+                      qs_kind_set=qs_kind_set, &
+                      force=force, &
+                      cell=cell, &
+                      dft_control=dft_control, &
+                      nkind=nkind, &
+                      natom=natom, &
+                      particle_set=particle_set, &
+                      pw_env=pw_env, &
+                      virial=virial)
+      CALL get_atomic_kind_set(atomic_kind_set=atomic_kind_set, atom_of_kind=atom_of_kind)
+
+      use_virial = virial%pv_availability .AND. (.NOT. virial%pv_numer)
+      IF (use_virial) THEN
+         CPABORT("Virial NYA")
+      END IF
+
+      eps_rho_rspace = dft_control%qs_control%eps_rho_rspace
+
+      CALL get_qs_kind_set(qs_kind_set, &
+                           maxco=maxco, maxsgf_set=maxsgf_set, basis_type=basis_type)
+      ALLOCATE (hab(maxco, 1), pab(maxco, 1), work(maxco, 1))
+
+      offset = 0
+      my_pos = v_rspace%pw_grid%para%group%mepos
+      group_size = v_rspace%pw_grid%para%group%num_pe
+
+      DO iatom = 1, natom
+         ikind = particle_set(iatom)%atomic_kind%kind_number
+         atom_a = atom_of_kind(iatom)
+         CALL get_qs_kind(qs_kind_set(ikind), basis_set=orb_basis_set, basis_type=basis_type)
+         CALL get_gto_basis_set(gto_basis_set=orb_basis_set, &
+                                first_sgf=first_sgfa, &
+                                lmax=la_max, &
+                                lmin=la_min, &
+                                npgf=npgfa, &
+                                nset=nseta, &
+                                nsgf_set=nsgfa, &
+                                sphi=sphi_a, &
+                                zet=zeta)
+         ra(:) = pbc(particle_set(iatom)%r, cell)
+
+         force_a(:) = 0._dp
+         force_b(:) = 0._dp
+         my_virial_a(:, :) = 0._dp
+         my_virial_b(:, :) = 0._dp
+
+         DO iset = 1, nseta
+
+            ncoa = npgfa(iset)*ncoset(la_max(iset))
+            sgfa = first_sgfa(1, iset)
+
+            hab = 0._dp
+            pab = 0._dp
+
+            DO i = 1, nsgfa(iset)
+               work(i, 1) = f_coef(offset + i)
+            END DO
+
+            CALL dgemm("N", "N", ncoa, 1, nsgfa(iset), &
+                       1.0_dp, sphi_a(1, sgfa), SIZE(sphi_a, 1), &
+                       work(1, 1), SIZE(work, 1), &
+                       0.0_dp, pab(1, 1), SIZE(pab, 1))
+
+            DO ipgf = 1, npgfa(iset)
+
+               na1 = (ipgf - 1)*ncoset(la_max(iset))
+
+               igrid_level = gaussian_gridlevel(gridlevel_info, zeta(ipgf, iset))
+               rs_grid => rs_v(igrid_level)
+
+               IF (map_gaussian_here(rs_grid, cell%h_inv, ra, offset, group_size, my_pos)) THEN
+                  radius = exp_radius_very_extended(la_min=la_min(iset), la_max=la_max(iset), &
+                                                    lb_min=0, lb_max=0, ra=ra, rb=ra, rp=ra, &
+                                                    zetp=zeta(ipgf, iset), eps=eps_rho_rspace, &
+                                                    prefactor=1.0_dp, cutoff=1.0_dp)
+
+                  IF (calculate_forces) THEN
+                     CALL integrate_pgf_product(la_max=la_max(iset), &
+                                                zeta=zeta(ipgf, iset), la_min=la_min(iset), &
+                                                lb_max=0, zetb=0.0_dp, lb_min=0, &
+                                                ra=ra, rab=(/0.0_dp, 0.0_dp, 0.0_dp/), &
+                                                rsgrid=rs_grid, &
+                                                hab=hab, pab=pab, o1=na1, o2=0, radius=radius, &
+                                                calculate_forces=.TRUE., &
+                                                force_a=force_a, force_b=force_b, &
+                                                use_virial=use_virial, &
+                                                my_virial_a=my_virial_a, my_virial_b=my_virial_b)
+                  ELSE
+                     CALL integrate_pgf_product(la_max=la_max(iset), &
+                                                zeta=zeta(ipgf, iset), la_min=la_min(iset), &
+                                                lb_max=0, zetb=0.0_dp, lb_min=0, &
+                                                ra=ra, rab=(/0.0_dp, 0.0_dp, 0.0_dp/), &
+                                                rsgrid=rs_grid, &
+                                                hab=hab, o1=na1, o2=0, radius=radius, &
+                                                calculate_forces=.FALSE.)
+                  END IF
+
+               END IF
+
+            END DO
+            !
+            CALL dgemm("T", "N", nsgfa(iset), 1, ncoa, 1.0_dp, sphi_a(1, sgfa), &
+                       SIZE(sphi_a, 1), hab(1, 1), SIZE(hab, 1), 0.0_dp, work(1, 1), SIZE(work, 1))
+            DO i = 1, nsgfa(iset)
+               f_integral(offset + i) = work(i, 1)
+            END DO
+
+            offset = offset + nsgfa(iset)
+
+         END DO
+
+         IF (calculate_forces) THEN
+            force(ikind)%rho_elec(:, atom_a) = force(ikind)%rho_elec(:, atom_a) + force_a(:)
+            IF (use_virial) THEN
+               virial%pv_virial = virial%pv_virial + my_virial_a
+            END IF
+         END IF
+
+      END DO
+
+      DEALLOCATE (hab, pab, work)
+
+      CALL timestop(handle)
+
+   END SUBROUTINE integrate_function
 
 END MODULE qs_integrate_potential_single

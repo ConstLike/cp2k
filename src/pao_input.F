@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -214,7 +214,7 @@ CONTAINS
 ! **************************************************************************************************
    FUNCTION id2str(id) RESULT(s)
       INTEGER                                            :: id
-      CHARACTER(LEN=11)                                  :: s
+      CHARACTER(LEN=20)                                  :: s
 
       SELECT CASE (id)
       CASE (pao_gth_param)
@@ -292,7 +292,7 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="MAX_CYCLES", &
                           description="Maximum number of PAO line search cycles for a given hamiltonian.", &
-                          default_i_val=1000)
+                          default_i_val=75)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -330,7 +330,7 @@ CONTAINS
          description="Screens the near field part of the electronic repulsion "// &
          "integrals using the Schwarz inequality for the given "// &
          "threshold. This will be approximately the accuracy of the forces, "// &
-         "and should normally be similar to EPS_SCF", &
+         "and should normally be similar to EPS_SCF. Default value is 100*EPS_SCHWARZ.", &
          usage="EPS_SCHWARZ_FORCES 1.0E-5", &
          default_r_val=1.0E-6_dp)
       CALL section_add_keyword(section, keyword)
@@ -341,7 +341,8 @@ CONTAINS
          keyword, __LOCATION__, &
          name="SCREEN_P_FORCES", &
          description="Screens the electronic repulsion integrals for the forces "// &
-         "using the density matrix. "// &
+         "using the density matrix. Will be disabled for the "// &
+         "response part of forces in MP2/RPA/TDDFT. "// &
          "This results in a significant speedup for large systems, "// &
          "but might require a somewhat tigher EPS_SCHWARZ_FORCES.", &
          usage="SCREEN_P_FORCES TRUE", &
@@ -483,7 +484,9 @@ CONTAINS
 
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="RI", &
-                          description="Parameters for RI method in HFX (experimental, forces not yet implemented).")
+                          description="Parameters for RI methods in HFX, including RI-HFXk with "// &
+                          "k-point sampling. All keywords relevant to RI-HFXk have an "// &
+                          "alias starting with KP_")
 
       CALL keyword_create(keyword, __LOCATION__, name="_SECTION_PARAMETERS_", &
                           description="controls the activation of RI", &
@@ -494,7 +497,8 @@ CONTAINS
       CALL keyword_release(keyword)
 
       CALL keyword_create(keyword, __LOCATION__, name="EPS_FILTER", &
-                          description="Filter threshold for DBCSR tensor contraction.", &
+                          description="Filter threshold for DBT tensor contraction.", &
+                          variants=(/"KP_EPS_FILTER"/), &
                           default_r_val=1.0E-09_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -523,6 +527,7 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="OMEGA", &
                           description="The range parameter for the short range operator (in 1/a0). "// &
                           "Default is OMEGA from INTERACTION_POTENTIAL. ", &
+                          variants=(/"KP_OMEGA"/), &
                           default_r_val=0.0_dp, &
                           repeats=.FALSE.)
       CALL section_add_keyword(section, keyword)
@@ -531,9 +536,26 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="CUTOFF_RADIUS", &
                           description="The cutoff radius (in Angstroms) for the truncated Coulomb operator. "// &
                           "Default is CUTOFF_RADIUS from INTERACTION_POTENTIAL. ", &
+                          variants=(/"KP_CUTOFF_RADIUS"/), &
                           default_r_val=0.0_dp, &
                           repeats=.FALSE., &
                           unit_str="angstrom")
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="SCALE_COULOMB", &
+                          description="Scales Hartree-Fock contribution arising from a coulomb potential. "// &
+                          "Only valid when doing a mixed potential calculation. "// &
+                          "Default is SCALE_COULOMB from INTERACTION_POTENTIAL", &
+                          usage="SCALE_COULOMB 1.0", default_r_val=1.0_dp)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="SCALE_LONGRANGE", &
+                          description="Scales Hartree-Fock contribution arising from a longrange potential. "// &
+                          "Only valid when doing a mixed potential calculation. "// &
+                          "Default if SCALE_LONGRANGE from INTERACTION_POTENTIAL", &
+                          usage="SCALE_LONGRANGE 1.0", default_r_val=1.0_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -573,23 +595,7 @@ CONTAINS
                           variants=(/"STACK_SIZE"/), &
                           usage="KP_STACK_SIZE {int}", &
                           repeats=.FALSE., &
-                          default_i_val=32)
-      CALL section_add_keyword(section, keyword)
-      CALL keyword_release(keyword)
-
-      CALL keyword_create(keyword, __LOCATION__, name="KP_RI_EXTENSION_FACTOR", &
-                          variants=s2a("RI_EXTENSION_FACTOR", "RI_EXT", "RI_EXT_FACT", "KP_RI_EXT", &
-                                       "KP_RI_EXT_FACT", "KP_RI_BASIS_EXT", "RI_BASIS_EXT"), &
-                          description="In KP-RI-HFX, each atom has its own local RI basis. The RI "// &
-                          "basis is defined by a sphere of radius R centered on the atom, "// &
-                          "whereby all neighboring atoms within that sphere contribute their "// &
-                          "RI basis elements. The radius of that sphere is calculated based "// &
-                          "on the systems' most diffuse orbital PGF (with exponant alpha), such "// &
-                          "that EPS_PGF_ORB * KP_RI_EXTENSION_FACTOR  = exp(-alpha*R^2). "// &
-                          "The default value of 1.0 is safe. More accurate results can be "// &
-                          "obtained with a value < 1.0, at greated computational cost.", &
-                          default_r_val=1.0_dp, &
-                          repeats=.FALSE.)
+                          default_i_val=16)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 
@@ -611,8 +617,9 @@ CONTAINS
                           "Default is POTENTIAL_TYPE from INTERACTION_POTENTIAL. "// &
                           "The standard "// &
                           "Coulomb operator cannot be used in periodic systems.", &
-                          usage="OPERATOR {string}", &
+                          usage="RI_METRIC {string}", &
                           repeats=.FALSE., &
+                          variants=(/"KP_RI_METRIC"/), &
                           default_i_val=0, &
                           enum_c_vals=s2a("HFX", "COULOMB", "IDENTITY", "TRUNCATED", "SHORTRANGE"), &
                           enum_desc=s2a("Same as HFX operator", &
@@ -676,6 +683,7 @@ CONTAINS
 
       CALL keyword_create(keyword, __LOCATION__, name="EPS_PGF_ORB", &
                           description="Sets precision of the integral tensors.", &
+                          variants=(/"KP_EPS_PGF_ORB"/), &
                           default_r_val=1.0E-5_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -727,6 +735,33 @@ CONTAINS
                           description="Section of possible print options in the RI-HFX code.", &
                           n_keywords=0, n_subsections=1, repeats=.FALSE.)
 
+      CALL keyword_create(keyword, __LOCATION__, name="KP_RI_PROGRESS_BAR", &
+                          variants=s2a("PROGRESS_BAR", "PROGRESS", "KP_PROGRESS", "KP_PROGRESS_BAR"), &
+                          description="Whether a progress bar for individual SCF steps should be printed. "// &
+                          "In RI-HFXk, an expensive triple loop runs over periodic images and "// &
+                          "atomic pairs. This printing option tracks the progress of this loop "// &
+                          "in real time. Note that some work also takes place before the loop "// &
+                          "starts, and the time spent doing it depends on the value of "// &
+                          "KP_STACK_SIZE (larger = faster, but more memory used).", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
+      !TODO: add a incentive to restart from GGA calculation? Test that it improves things
+      CALL keyword_create(keyword, __LOCATION__, name="KP_RI_MEMORY_ESTIMATE", &
+                          variants=s2a("MEMORY_ESTIMATE"), &
+                          description="Calculate and print a rough upper bound estimate of the memory "// &
+                          "required to run a RI-HFXk ENERGY calculation. Note that a fair "// &
+                          "amount of computing must take place before this estimate can be "// &
+                          "produced. If the calculation runs out of memory beforehand, "// &
+                          "use more resources, or change the value of memory related keywords "// &
+                          "(e.g. KP_NGROUPS, interaction potential parameters, KP_STACK_SIZE). "// &
+                          "The estimate is more accurate when restarting from a (GGA) wavefunction. "// &
+                          "Calculations involving forces will require more memory than this estimate.", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(subsection, keyword)
+      CALL keyword_release(keyword)
+
       CALL cp_print_key_section_create(print_key, __LOCATION__, "RI_INFO", &
                                        description="Controls the printing of DBCSR tensor log in RI HFX.", &
                                        print_level=high_print_level, add_last=add_last_numeric, filename="__STD_OUT__")
@@ -743,8 +778,26 @@ CONTAINS
       CALL keyword_create(keyword, __LOCATION__, name="MULTIPLY_BY_RI_2C_INTEGRALS", &
                           variants=s2a("MULT_BY_RI", "MULT_BY_S", "MULT_BY_RI_INTS"), &
                           description="Whether the RI density coefficients to be printed should "// &
-                          "be pre-multiplied by the RI_METRIC 2c-integrals: (r|s)*C_s.", &
+                          "be pre-multiplied by the RI_METRIC 2c-integrals: (r|s)*C_s. "// &
+                          "Not compatible with the SKIP_RI_METRIC keyword.", &
                           default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="SKIP_RI_METRIC", &
+                          variants=s2a("SKIP_INVERSE", "SKIP_2C_INTS", "SKIP_2C_INTEGRALS"), &
+                          description="Skip the calculation, inversion, and contraction of the 2-center RI "// &
+                          "metric integrals. The printed coefficients are only the contraction of the "// &
+                          "density matrix with the 3-center integrals, i.e. c_r = sum_pq P_pq (pq|r) "// &
+                          "Allows for memory savings when printing the RI density coefficients.", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="FILE_FORMAT", &
+                          description="Format of file containing density fitting coefficients: "// &
+                          "BASIC(default)-original format; EXTENDED-format with basis set info.", &
+                          default_c_val="BASIC")
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 

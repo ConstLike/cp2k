@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,15 +13,23 @@ MODULE rt_propagation_methods
    USE bibliography,                    ONLY: Kolafa2004,&
                                               Kuhne2007,&
                                               cite_reference
-   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_cholesky_decompose,&
-                                              cp_cfm_triangular_multiply
+   USE cell_types,                      ONLY: cell_type
+   USE cp_cfm_basic_linalg,             ONLY: cp_cfm_triangular_multiply
+   USE cp_cfm_cholesky,                 ONLY: cp_cfm_cholesky_decompose
    USE cp_cfm_types,                    ONLY: cp_cfm_create,&
                                               cp_cfm_release,&
                                               cp_cfm_type
    USE cp_control_types,                ONLY: dft_control_type,&
                                               rtp_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_desymmetrize, &
+        dbcsr_filter, dbcsr_get_block_p, dbcsr_init_p, dbcsr_iterator_blocks_left, &
+        dbcsr_iterator_next_block, dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, &
+        dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_transposed, &
+        dbcsr_type, dbcsr_type_antisymmetric
    USE cp_dbcsr_cholesky,               ONLY: cp_dbcsr_cholesky_decompose,&
                                               cp_dbcsr_cholesky_invert
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_frobenius_norm
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply,&
                                               dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
@@ -39,12 +47,6 @@ MODULE rt_propagation_methods
                                               cp_logger_get_default_unit_nr,&
                                               cp_logger_type,&
                                               cp_to_string
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_deallocate_matrix, dbcsr_desymmetrize, &
-        dbcsr_filter, dbcsr_frobenius_norm, dbcsr_get_block_p, dbcsr_init_p, &
-        dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, dbcsr_iterator_start, &
-        dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_multiply, dbcsr_p_type, dbcsr_release, &
-        dbcsr_scale, dbcsr_set, dbcsr_transposed, dbcsr_type, dbcsr_type_antisymmetric
    USE efield_utils,                    ONLY: efield_potential_lengh_gauge
    USE input_constants,                 ONLY: do_arnoldi,&
                                               do_bch,&
@@ -109,6 +111,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'propagation_step'
 
       INTEGER                                            :: aspc_order, handle, i, im, re, unit_nr
+      TYPE(cell_type), POINTER                           :: cell
       TYPE(cp_fm_type), DIMENSION(:), POINTER            :: delta_mos, mos_new
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: delta_P, H_last_iter, ks_mix, ks_mix_im, &
@@ -125,10 +128,10 @@ CONTAINS
          unit_nr = -1
       END IF
 
-      NULLIFY (delta_P, rho_new, delta_mos, mos_new)
+      NULLIFY (cell, delta_P, rho_new, delta_mos, mos_new)
       NULLIFY (ks_mix, ks_mix_im)
       ! get everything needed and set some values
-      CALL get_qs_env(qs_env, matrix_s=matrix_s, dft_control=dft_control)
+      CALL get_qs_env(qs_env, cell=cell, matrix_s=matrix_s, dft_control=dft_control)
 
       IF (rtp%iter == 1) THEN
          CALL qs_energies_init(qs_env, .FALSE.)
@@ -137,10 +140,12 @@ CONTAINS
 
          ! add additional terms to matrix_h and matrix_h_im in the case of applied electric field,
          ! either in the lengh or velocity gauge.
-         ! should be called imediately after qs_energies_init and before qs_ks_update_qs_env
-         IF (dft_control%apply_efield_field) &
+         ! should be called  after qs_energies_init and before qs_ks_update_qs_env
+         IF (dft_control%apply_efield_field) THEN
+            IF (ANY(cell%perd(1:3) /= 0)) &
+               CPABORT("Length gauge (efield) and periodicity are not compatible")
             CALL efield_potential_lengh_gauge(qs_env)
-         IF (rtp_control%velocity_gauge) THEN
+         ELSE IF (rtp_control%velocity_gauge) THEN
             IF (dft_control%apply_vector_potential) &
                CALL update_vector_potential(qs_env, dft_control)
             CALL velocity_gauge_ks_matrix(qs_env, subtract_nl_term=.FALSE.)
@@ -506,7 +511,7 @@ CONTAINS
          CALL cp_dbcsr_cholesky_decompose(S_inv, para_env=rtp%ao_ao_fmstruct%para_env, &
                                           blacs_env=rtp%ao_ao_fmstruct%context)
          CALL cp_dbcsr_cholesky_invert(S_inv, para_env=rtp%ao_ao_fmstruct%para_env, &
-                                       blacs_env=rtp%ao_ao_fmstruct%context, upper_to_full=.TRUE.)
+                                       blacs_env=rtp%ao_ao_fmstruct%context, uplo_to_full=.TRUE.)
       END IF
 
       CALL timestop(handle)
@@ -530,7 +535,7 @@ CONTAINS
 
       INTEGER                                            :: col_atom, handle, row_atom
       LOGICAL                                            :: found
-      REAL(dp), DIMENSION(:), POINTER                    :: block_values, block_values2
+      REAL(dp), DIMENSION(:, :), POINTER                 :: block_values, block_values2
       TYPE(dbcsr_iterator_type)                          :: iter
       TYPE(dbcsr_type), POINTER                          :: tmp
 

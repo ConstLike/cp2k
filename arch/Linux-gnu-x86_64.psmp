@@ -2,21 +2,14 @@
 #
 # CP2K (GNU x86_64) arch file for Linux clusters
 #
-# Tested with: GNU 13.1.0, MPICH 4.0.3 and OpenMPI 4.1.5,
-#              ScaLAPACK 2.2.1, OpenBLAS 0.3.25,
-#              FFTW 3.3.10, ELPA 2023.05.001, HDF5 1.14.2,
-#              LIBINT 2.6.0, LIBXC 6.2.2, PLUMED 2.9.0,
-#              SPGLIB 1.16.2, LIBVORI 220621, GSL 2.7,
-#              COSMA 2.6.6, SIRIUS 7.4.3, LIBTORCH 1.12.1,
-#              LIBGRPP 20231215
-# on the Merlin cluster (PSI)
+# Tested with: GNU 14.2.0, MPICH 4.3.0 and OpenMPI 5.0.7 on the Merlin cluster (PSI)
 #
 # Usage: Source this arch file and then run make as instructed.
 #        A full toolchain installation is performed as default.
 #        Optionally, GNU compiler and MPI implementation can be specified as arguments.
 #        Replace or adapt the "module add" commands below if needed.
 #
-# Last update: 15.12.2023
+# Last update: 12.06.2025
 #
 # \
    if [[ "${0}" == "${BASH_SOURCE}" ]]; then \
@@ -26,8 +19,11 @@
    fi; \
    this_file=${BASH_SOURCE##*/}; \
    cd tools/toolchain; \
+   rm -rf build; \
    [[ -z "${mpi_implementation}" ]] && mpi_implementation="mpich"; \
    [[ -z "${target_cpu}" ]] && target_cpu="native"; \
+   echo "Found GCC $(gcc -dumpfullversion) compiler"; \
+   echo "Building for target CPU ${target_cpu} using ${mpi_implementation}"; \
    if [[ -n "${1}" ]]; then \
       module add ${1}; \
       if [[ -n "${2}" ]]; then \
@@ -47,14 +43,14 @@
    echo "Check the output above for error messages and consistency!"; \
    echo; \
    echo "If everything is OK, you can build a CP2K production binary with"; \
-   echo "   make -j ARCH=${this_file%.*} VERSION=${this_file##*.}"; \
+   echo "   make -j ARCH=${this_file%.*} VERSION=${this_file##*.} TARGET_CPU=${target_cpu}"; \
    echo; \
    echo "Alternatively, you can add further checks, e.g. for regression testing, with"; \
-   echo "   make -j ARCH=${this_file%.*} VERSION=${this_file##*.} DO_CHECKS=yes"; \
+   echo "   make -j ARCH=${this_file%.*} VERSION=${this_file##*.} TARGET_CPU=${target_cpu} DO_CHECKS=yes"; \
    echo "or build CP2K only with shared libraries using"; \
-   echo "   make -j ARCH=${this_file%.*} VERSION=${this_file##*.} SHARED=yes"; \
+   echo "   make -j ARCH=${this_file%.*} VERSION=${this_file##*.} TARGET_CPU=${target_cpu} SHARED=yes"; \
    echo "or build CP2K as a library with"; \
-   echo "   make -j ARCH=${this_file%.*} VERSION=${this_file##*.} libcp2k"; \
+   echo "   make -j ARCH=${this_file%.*} VERSION=${this_file##*.} TARGET_CPU=${target_cpu} libcp2k"; \
    echo; \
    echo "Run always the following command before using the CP2K binary"; \
    echo "   source ${PWD}/tools/toolchain/install/setup"; \
@@ -65,30 +61,33 @@
 DO_CHECKS      := no
 SHARED         := no
 TARGET_CPU     := native
-USE_COSMA      := 2.6.6
-USE_ELPA       := 2023.05.001
-USE_FFTW       := 3.3.10
-USE_HDF5       := 1.14.2
-USE_LIBGRPP    := 20231215
-USE_LIBINT     := 2.6.0
-USE_LIBPEXSI   := 1.2.0
-USE_LIBTORCH   := 1.12.1
-USE_LIBVORI    := 220621
-USE_LIBXC      := 6.2.2
-USE_LIBXSMM    := 1.17
-USE_OPENBLAS   := 0.3.25
-USE_PLUMED     := 2.9.0
-USE_QUIP       := 0.9.10
-USE_SCALAPACK  := 2.2.1
-USE_SIRIUS     := 7.4.3
-USE_SPGLIB     := 1.16.2
-# Only needed for SIRIUS
-LIBVDWXC_VER   := 0.4.0
-SPFFT_VER      := 1.0.6
-SPLA_VER       := 1.5.5
-# Only needed for LIBPEXSI
-SCOTCH_VER     := 6.0.0
-SUPERLU_VER    := 6.1.0
+
+# Retrieve package versions
+GNU_VER        := $(shell gcc -dumpfullversion)
+USE_ACE        := $(ACE_VER)
+USE_COSMA      := $(COSMA_VER)
+USE_DEEPMD     := $(DEEPMD_VER)
+USE_DFTD4      := $(DFTD4_VER)
+USE_ELPA       := $(ELPA_VER)
+USE_FFTW       := $(FFTW_VER)
+USE_GREENX     := $(GREENX_VER)
+USE_HDF5       := $(HDF5_VER)
+USE_LIBGRPP    := install
+USE_LIBINT     := $(LIBINT_VER)
+USE_LIBSMEAGOL := $(LIBSMEAGOL_VER)
+USE_LIBTORCH   := $(LIBTORCH_VER)
+USE_LIBVORI    := $(LIBVORI_VER)
+USE_LIBXC      := $(LIBXC_VER)
+USE_LIBXSMM    := $(LIBXSMM_VER)
+USE_OPENBLAS   := $(OPENBLAS_VER)
+USE_PLUMED     := $(PLUMED_VER)
+USE_SCALAPACK  := $(SCALAPACK_VER)
+USE_SIRIUS     := $(SIRIUS_VER)
+USE_SPFFT      := $(SPFFT_VER)
+USE_SPGLIB     := $(SPGLIB_VER)
+USE_SPLA       := $(SPLA_VER)
+USE_TBLITE     := $(TBLITE_VER)
+USE_TREXIO     := $(TREXIO_VER)
 
 LMAX           := 5
 MAX_CONTR      := 4
@@ -98,10 +97,14 @@ FC             := mpifort
 LD             := mpifort
 AR             := ar -r
 
-CFLAGS         := -O2 -fopenmp -fopenmp-simd -ftree-vectorize -funroll-loops -g -mtune=$(TARGET_CPU)
+ifeq ($(TARGET_CPU), generic)
+   CFLAGS         := -O2 -fopenmp -fopenmp-simd -ftree-vectorize -funroll-loops -g -mtune=$(TARGET_CPU)
+else
+   CFLAGS         := -O2 -fopenmp -fopenmp-simd -ftree-vectorize -funroll-loops -g -march=$(TARGET_CPU) -mtune=$(TARGET_CPU)
+endif
 
 DFLAGS         := -D__parallel
-DFLAGS         += -D__SCALAPACK
+DFLAGS         += -D__MPI_F08
 DFLAGS         += -D__HAS_IEEE_EXCEPTIONS
 DFLAGS         += -D__MAX_CONTR=$(strip $(MAX_CONTR))
 
@@ -147,9 +150,9 @@ endif
 
 ifneq ($(USE_PLUMED),)
    USE_PLUMED     := $(strip $(USE_PLUMED))
+   USE_GSL        := ${GSL_VER}
    PLUMED_LIB     := $(INSTALL_PATH)/plumed-$(USE_PLUMED)/lib
    DFLAGS         += -D__PLUMED2
-   USE_GSL        := 2.7
    ifeq ($(SHARED), yes)
       LIBS           += -Wl,-rpath=$(PLUMED_LIB) -L$(PLUMED_LIB) -lplumed -lplumedKernel
    else
@@ -168,41 +171,6 @@ ifneq ($(USE_ELPA),)
    else
       LIBS           += $(ELPA_LIB)/libelpa_openmp.a
    endif
-endif
-
-ifneq ($(USE_QUIP),)
-   USE_QUIP       := $(strip $(USE_QUIP))
-   QUIP_INC       := $(INSTALL_PATH)/quip-$(USE_QUIP)/include
-   QUIP_LIB       := $(INSTALL_PATH)/quip-$(USE_QUIP)/lib
-   CFLAGS         += -I$(QUIP_INC)
-   DFLAGS         += -D__QUIP
-   LIBS           += $(QUIP_LIB)/libquip_core.a
-   LIBS           += $(QUIP_LIB)/libatoms.a
-   LIBS           += $(QUIP_LIB)/libFoX_sax.a
-   LIBS           += $(QUIP_LIB)/libFoX_common.a
-   LIBS           += $(QUIP_LIB)/libFoX_utils.a
-   LIBS           += $(QUIP_LIB)/libFoX_fsys.a
-endif
-
-ifneq ($(USE_LIBPEXSI),)
-   USE_LIBPEXSI   := $(strip $(USE_LIBPEXSI))
-   SCOTCH_VER     := $(strip $(SCOTCH_VER))
-   SUPERLU_VER    := $(strip $(SUPERLU_VER))
-   LIBPEXSI_INC   := $(INSTALL_PATH)/pexsi-$(USE_LIBPEXSI)/include
-   LIBPEXSI_LIB   := $(INSTALL_PATH)/pexsi-$(USE_LIBPEXSI)/lib
-   SCOTCH_INC     := $(INSTALL_PATH)/scotch-$(SCOTCH_VER)/include
-   SCOTCH_LIB     := $(INSTALL_PATH)/scotch-$(SCOTCH_VER)/lib
-   SUPERLU_INC    := $(INSTALL_PATH)/superlu_dist-$(SUPERLU_VER)/include
-   SUPERLU_LIB    := $(INSTALL_PATH)/superlu_dist-$(SUPERLU_VER)/lib
-   CFLAGS         += -I$(LIBPEXSI_INC) -I$(SCOTCH_INC) -I$(SUPERLU_INC)
-   DFLAGS         += -D__LIBPEXSI
-   LIBS           += $(LIBPEXSI_LIB)/libpexsi.a
-   LIBS           += $(SUPERLU_LIB)/libsuperlu_dist.a
-   LIBS           += $(SCOTCH_LIB)/libptscotchparmetis.a
-   LIBS           += $(SCOTCH_LIB)/libptscotch.a
-   LIBS           += $(SCOTCH_LIB)/libptscotcherr.a
-   LIBS           += $(SCOTCH_LIB)/libscotchmetis.a
-   LIBS           += $(SCOTCH_LIB)/libscotch.a
 endif
 
 ifneq ($(USE_LIBVORI),)
@@ -230,13 +198,27 @@ ifneq ($(USE_LIBXC),)
    endif
 endif
 
+ifeq ($(USE_TBLITE),)
+  ifneq ($(USE_DFTD4),)
+     USE_DFTD4      := $(strip $(USE_DFTD4))
+     DFTD4_INC      := $(INSTALL_PATH)/dftd4-$(USE_DFTD4)/include
+     DFTD4_LIB      := $(INSTALL_PATH)/dftd4-$(USE_DFTD4)/lib
+     CFLAGS         += -I$(DFTD4_INC)/dftd4/GNU-$(GNU_VER)
+     DFLAGS         += -D__DFTD4
+     ifeq ($(SHARED), yes)
+        LIBS           += -Wl,-rpath=$(DFTD4_LIB) -L$(DFTD4_LIB) -ldftd4 -lmstore -lmulticharge -lmctc-lib
+     else
+        LIBS           += $(DFTD4_LIB)/libdftd4.a
+        LIBS           += $(DFTD4_LIB)/libmstore.a
+        LIBS           += $(DFTD4_LIB)/libmulticharge.a
+        LIBS           += $(DFTD4_LIB)/libmctc-lib.a
+     endif
+  endif
+endif
+
 ifneq ($(USE_LIBGRPP),)
    USE_LIBGRPP    := $(strip $(USE_LIBGRPP))
-   LIBGRPP_INC    := $(INSTALL_PATH)/libgrpp-main-$(USE_LIBGRPP)/include
-   LIBGRPP_LIB    := $(INSTALL_PATH)/libgrpp-main-$(USE_LIBGRPP)/lib
-   CFLAGS         += -I$(LIBGRPP_INC)
    DFLAGS         += -D__LIBGRPP
-   LIBS           += $(LIBGRPP_LIB)/liblibgrpp.a
 endif
 
 ifneq ($(USE_LIBINT),)
@@ -273,44 +255,136 @@ ifneq ($(USE_LIBXSMM),)
    CFLAGS         += -I$(LIBXSMM_INC)
    DFLAGS         += -D__LIBXSMM
    ifeq ($(SHARED), yes)
-      LIBS           += -Wl,-rpath=$(LIBXSMM_LIB) -L$(LIBXSMM_LIB) -lxsmmf -lxsmm
+      LIBS           += -Wl,-rpath=$(LIBXSMM_LIB) -L$(LIBXSMM_LIB) -lxsmmf -lxsmmext -lxsmm
    else
       LIBS           += $(LIBXSMM_LIB)/libxsmmf.a
+      LIBS           += $(LIBXSMM_LIB)/libxsmmext.a
       LIBS           += $(LIBXSMM_LIB)/libxsmm.a
    endif
 endif
 
+ifneq ($(USE_ACE),)
+   USE_ACE        := $(strip $(USE_ACE))
+   ACE_INC        := $(INSTALL_PATH)/lammps-user-pace-$(USE_ACE)/include
+   ACE_LIB        := $(INSTALL_PATH)/lammps-user-pace-$(USE_ACE)/lib
+   CFLAGS         += -I$(ACE_INC)
+   DFLAGS         += -D__ACE
+   LIBS           += $(ACE_LIB)/libpace.a
+   LIBS           += $(ACE_LIB)/libyaml-cpp-pace.a
+   LIBS           += $(ACE_LIB)/libcnpy.a
+endif
+
+ifneq ($(USE_GREENX),)
+   USE_GREENX     := $(strip $(USE_GREENX))
+   GREENX_INC     := $(INSTALL_PATH)/greenX-$(USE_GREENX)/include/modules
+   GREENX_LIB     := $(INSTALL_PATH)/greenX-$(USE_GREENX)/lib
+   CFLAGS         += -I$(GREENX_INC)
+   DFLAGS         += -D__GREENX
+   LIBS           += -Wl,-rpath,$(GREENX_LIB) -L$(GREENX_LIB) -lGXCommon -lgx_ac -lgx_minimax
+endif
+
 ifneq ($(USE_SIRIUS),)
    USE_SIRIUS     := $(strip $(USE_SIRIUS))
-   LIBVDWXC_VER   := $(strip $(LIBVDWXC_VER))
+   USE_GSL        := ${GSL_VER}
    LIBVDWXC_INC   := $(INSTALL_PATH)/libvdwxc-$(LIBVDWXC_VER)/include
    LIBVDWXC_LIB   := $(INSTALL_PATH)/libvdwxc-$(LIBVDWXC_VER)/lib
-   SPFFT_VER      := $(strip $(SPFFT_VER))
-   SPFFT_INC      := $(INSTALL_PATH)/SpFFT-$(SPFFT_VER)/include
-   SPFFT_LIB      := $(INSTALL_PATH)/SpFFT-$(SPFFT_VER)/lib
-   SPLA_VER       := $(strip $(SPLA_VER))
-   SPLA_INC       := $(INSTALL_PATH)/SpLA-$(SPLA_VER)/include/spla
-   SPLA_LIB       := $(INSTALL_PATH)/SpLA-$(SPLA_VER)/lib
-   SIRIUS_INC     := $(INSTALL_PATH)/sirius-$(USE_SIRIUS)/include
+   PUGIXML_LIB    := $(INSTALL_PATH)/pugixml-$(PUGIXML_VER)/lib
+   SIRIUS_INC     := $(INSTALL_PATH)/sirius-$(USE_SIRIUS)/include/sirius
    SIRIUS_LIB     := $(INSTALL_PATH)/sirius-$(USE_SIRIUS)/lib
    CFLAGS         += -I$(LIBVDWXC_INC)
-   CFLAGS         += -I$(SPFFT_INC)
-   CFLAGS         += -I$(SPLA_INC)
    CFLAGS         += -I$(SIRIUS_INC)
    DFLAGS         += -D__LIBVDWXC
-   DFLAGS         += -D__SPFFT
-   DFLAGS         += -D__SPLA
    DFLAGS         += -D__SIRIUS
    ifeq ($(SHARED), yes)
-      LIBS           += -Wl,-rpath=$(SIRIUS_LIB) -L$(SIRIUS_LIB) -lsirius
-      LIBS           += -Wl,-rpath=$(SPLA_LIB) -L$(SPLA_LIB) -lspla
-      LIBS           += -Wl,-rpath=$(SPFFT_LIB) -L$(SPFFT_LIB) -lspfft
+      LIBS           += -Wl,-rpath=$(SIRIUS_LIB) -L$(SIRIUS_LIB) -lsirius -lsirius_cxx
+      LIBS           += -Wl,-rpath=$(PUGIXML_LIB) -L$(PUGIXML_LIB) -lpugixml
       LIBS           += -Wl,-rpath=$(LIBVDWXC_LIB) -L$(LIBVDWXC_LIB) -lvdwxc
    else
       LIBS           += $(SIRIUS_LIB)/libsirius.a
-      LIBS           += $(SPLA_LIB)/libspla.a
-      LIBS           += $(SPFFT_LIB)/libspfft.a
+      LIBS           += $(SIRIUS_LIB)/libsirius_cxx.a
+      LIBS           += $(PUGIXML_LIB)/libpugixml.a
       LIBS           += $(LIBVDWXC_LIB)/libvdwxc.a
+   endif
+endif
+
+ifneq ($(USE_SPFFT),)
+   USE_SPFFT      := $(strip $(USE_SPFFT))
+   SPFFT_INC      := $(INSTALL_PATH)/SpFFT-$(USE_SPFFT)/include
+   SPFFT_LIB      := $(INSTALL_PATH)/SpFFT-$(USE_SPFFT)/lib
+   CFLAGS         += -I$(SPFFT_INC)
+   DFLAGS         += -D__SPFFT
+   ifeq ($(SHARED), yes)
+      LIBS           += -Wl,-rpath=$(SPFFT_LIB) -L$(SPFFT_LIB) -lspfft
+   else
+      LIBS           += $(SPFFT_LIB)/libspfft.a
+   endif
+endif
+
+ifneq ($(USE_SPLA),)
+   USE_SPLA       := $(strip $(USE_SPLA))
+   SPLA_INC       := $(INSTALL_PATH)/SpLA-$(USE_SPLA)/include/spla
+   SPLA_LIB       := $(INSTALL_PATH)/SpLA-$(USE_SPLA)/lib
+   CFLAGS         += -I$(SPLA_INC)
+   DFLAGS         += -D__SPLA
+   ifeq ($(SHARED), yes)
+      LIBS           += -Wl,-rpath=$(SPLA_LIB) -L$(SPLA_LIB) -lspla
+   else
+      LIBS           += $(SPLA_LIB)/libspla.a
+   endif
+endif
+
+ifneq ($(USE_LIBSMEAGOL),)
+   USE_LIBSMEAGOL := $(strip $(USE_LIBSMEAGOL))
+   LIBSMEAGOL_LIB := $(INSTALL_PATH)/libsmeagol-$(USE_LIBSMEAGOL)/lib
+   LIBSMEAGOL_INC := $(INSTALL_PATH)/libsmeagol-$(USE_LIBSMEAGOL)/include
+   CFLAGS         += -I$(LIBSMEAGOL_INC)
+   DFLAGS         += -D__SMEAGOL
+   LIBS           += $(LIBSMEAGOL_LIB)/libsmeagol.a
+endif
+
+ifneq ($(USE_TREXIO),)
+   USE_TREXIO     := $(strip $(USE_TREXIO))
+   TREXIO_INC     := $(INSTALL_PATH)/trexio-$(USE_TREXIO)/include
+   TREXIO_LIB     := $(INSTALL_PATH)/trexio-$(USE_TREXIO)/lib
+   CFLAGS         += -I$(TREXIO_INC)
+   DFLAGS         += -D__TREXIO
+   ifeq ($(SHARED), yes)
+      LIBS           += -Wl,-rpath=$(TREXIO_LIB) -L$(TREXIO_LIB) -ltrexio
+   else
+      LIBS           += $(TREXIO_LIB)/libtrexio.a
+   endif
+endif
+
+ifneq ($(USE_TBLITE),)
+   USE_TBLITE     := $(strip $(USE_TBLITE))
+   TBLITE_INC     := $(INSTALL_PATH)/tblite-$(USE_TBLITE)/include
+   TBLITE_LIB     := $(INSTALL_PATH)/tblite-$(USE_TBLITE)/lib
+   CFLAGS         += -I$(TBLITE_INC)/toml-f/modules
+   CFLAGS         += -I$(TBLITE_INC)/mctc-lib/modules
+   CFLAGS         += -I$(TBLITE_INC)/s-dftd3/GNU-$(GNU_VER)
+   CFLAGS         += -I$(TBLITE_INC)/dftd4/GNU-$(GNU_VER)
+   CFLAGS         += -I$(TBLITE_INC)/tblite/GNU-$(GNU_VER)
+   DFLAGS         += -D__TBLITE
+   DFLAGS         += -D__DFTD4
+   LIBS           += $(TBLITE_LIB)/libtblite.a
+   LIBS           += $(TBLITE_LIB)/libdftd4.a
+   LIBS           += $(TBLITE_LIB)/libs-dftd3.a
+   LIBS           += $(TBLITE_LIB)/libmulticharge.a
+   LIBS           += $(TBLITE_LIB)/libmctc-lib.a
+   LIBS           += $(TBLITE_LIB)/libtoml-f.a
+endif
+
+ifneq ($(USE_DEEPMD),)
+   USE_DEEPMD     := $(strip $(USE_DEEPMD))
+   DEEPMD_INC     := $(INSTALL_PATH)/deepmd-kit-$(USE_DEEPMD)/include
+   DEEPMD_LIB     := $(INSTALL_PATH)/deepmd-kit-$(USE_DEEPMD)/lib
+   CFLAGS         += -I$(DEEPMD_INC)
+   DFLAGS         += -D__DEEPMD
+   ifeq ($(SHARED), yes)
+      LIBS           += -Wl,-rpath=$(DEEPMD_LIB) -L$(DEEPMD_LIB) -ldeepmd_c
+   else
+      #LIBS          += $(DEEPMD_LIB)/libdeepmd_c.a
+      LIBS           += -Wl,-rpath=$(DEEPMD_LIB) -L$(DEEPMD_LIB) -ldeepmd_c
    endif
 endif
 
@@ -321,10 +395,10 @@ ifneq ($(USE_HDF5),)
    CFLAGS         += -I$(HDF5_INC)
    DFLAGS         += -D__HDF5
    ifeq ($(SHARED), yes)
-      LIBS           += -Wl,-rpath,$(HDF5_LIB) -L$(HDF5_LIB) -lhdf5_fortran -lhdf5_hl -lhdf5
+      LIBS           += -Wl,-rpath,$(HDF5_LIB) -L$(HDF5_LIB) -lhdf5_fortran -lhdf5
    else
       LIBS           += $(HDF5_LIB)/libhdf5_fortran.a
-      LIBS           += $(HDF5_LIB)/libhdf5_hl.a
+      LIBS           += $(HDF5_LIB)/libhdf5_f90cstub.a
       LIBS           += $(HDF5_LIB)/libhdf5.a
    endif
 endif
@@ -406,7 +480,7 @@ endif
 
 CFLAGS         += $(DFLAGS) $(CFLAGS_DEBUG)
 
-CXXFLAGS       := $(CFLAGS) --std=c++14
+CXXFLAGS       := $(CFLAGS)
 
 FCFLAGS        := $(CFLAGS) $(FCFLAGS_DEBUG) $(WFLAGS)
 ifeq ($(shell [ $(shell gcc -dumpversion | cut -d. -f1) -gt 9 ] && echo yes), yes)
@@ -417,6 +491,9 @@ FCFLAGS        += -ffree-form
 FCFLAGS        += -ffree-line-length-none
 FCFLAGS        += -fno-omit-frame-pointer
 FCFLAGS        += -std=f2008
+
+CFLAGS         += -std=c17
+CXXFLAGS       += -std=c++17
 
 LDFLAGS        += $(FCFLAGS)
 

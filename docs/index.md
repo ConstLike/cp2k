@@ -16,7 +16,10 @@ caption: Getting Started
 titlesonly:
 maxdepth: 1
 ---
-getting-started/spack.md
+getting-started/build-from-source
+getting-started/build-with-spack
+getting-started/distributions
+getting-started/first-calculation
 ```
 
 ```{toctree}
@@ -36,6 +39,15 @@ methods/optimization/index
 methods/properties/index
 ```
 
+```{toctree}
+---
+caption: Technologies
+titlesonly:
+maxdepth: 1
+---
+technologies/eigensolvers/index
+```
+
 % TODO: `{toctree} % :caption: How-to guides % % dummy % `
 
 ```{toctree}
@@ -46,6 +58,7 @@ maxdepth: 1
 ---
 CP2K_INPUT
 bibliography
+acronyms
 units
 ```
 
@@ -57,7 +70,7 @@ caption: Release Versions
 titlesonly:
 maxdepth: 1
 ---
-2023.2 <https://manual.cp2k.org/cp2k-2023_2-branch/index.html>
-2023.1 <https://manual.cp2k.org/cp2k-2023_1-branch/index.html>
+2025.2 <https://manual.cp2k.org/cp2k-2025_2-branch/index.html>
+2025.1 <https://manual.cp2k.org/cp2k-2025_1-branch/index.html>
 All versions <versions>
 ```

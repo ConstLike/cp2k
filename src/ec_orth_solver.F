@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -16,14 +16,16 @@ MODULE ec_orth_solver
    USE admm_types,                      ONLY: admm_type,&
                                               get_admm_env
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_add, dbcsr_copy, dbcsr_create, dbcsr_desymmetrize, dbcsr_filter, dbcsr_finalize, &
+        dbcsr_get_info, dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, &
+        dbcsr_transposed, dbcsr_type, dbcsr_type_no_symmetry
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_add_on_diag,&
+                                              dbcsr_checksum,&
+                                              dbcsr_dot
    USE cp_dbcsr_operations,             ONLY: dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
    USE cp_external_control,             ONLY: external_control
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_add, dbcsr_add_on_diag, dbcsr_checksum, dbcsr_copy, dbcsr_create, &
-        dbcsr_desymmetrize, dbcsr_dot, dbcsr_filter, dbcsr_finalize, dbcsr_get_info, &
-        dbcsr_multiply, dbcsr_p_type, dbcsr_release, dbcsr_scale, dbcsr_set, dbcsr_transposed, &
-        dbcsr_type, dbcsr_type_no_symmetry
    USE ec_methods,                      ONLY: create_kernel
    USE input_constants,                 ONLY: do_admm_aux_exch_func_none,&
                                               kg_tnadd_embed,&
@@ -52,11 +54,8 @@ MODULE ec_orth_solver
    USE pw_poisson_types,                ONLY: pw_poisson_type
    USE pw_pool_types,                   ONLY: pw_pool_p_type,&
                                               pw_pool_type
-   USE pw_types,                        ONLY: COMPLEXDATA1D,&
-                                              REALDATA3D,&
-                                              REALSPACE,&
-                                              RECIPROCALSPACE,&
-                                              pw_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
    USE qs_integrate_potential,          ONLY: integrate_v_rspace
@@ -107,8 +106,8 @@ CONTAINS
 !> \date    01.2020
 !> \author  Fabian Belleflamme
 ! **************************************************************************************************
-   SUBROUTINE preconditioner(qs_env, matrix_ks, matrix_p, matrix_rhs, &
-                             matrix_cg_z, eps_filter, iounit)
+   SUBROUTINE ec_preconditioner(qs_env, matrix_ks, matrix_p, matrix_rhs, &
+                                matrix_cg_z, eps_filter, iounit)
 
       TYPE(qs_environment_type), POINTER                 :: qs_env
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(IN), &
@@ -118,7 +117,7 @@ CONTAINS
       REAL(KIND=dp), INTENT(IN)                          :: eps_filter
       INTEGER, INTENT(IN)                                :: iounit
 
-      CHARACTER(len=*), PARAMETER                        :: routineN = 'preconditioner'
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'ec_preconditioner'
 
       INTEGER                                            :: handle, i, ispin, max_iter, nao, nspins
       LOGICAL                                            :: converged
@@ -337,7 +336,7 @@ CONTAINS
 
       CALL timestop(handle)
 
-   END SUBROUTINE preconditioner
+   END SUBROUTINE ec_preconditioner
 
 ! **************************************************************************************************
 !> \brief AO-based conjugate gradient linear response solver.
@@ -559,13 +558,13 @@ CONTAINS
       IF (linres_control%preconditioner_type == precond_mlp) THEN
          ! M * z_0 = r_0
          ! Conjugate gradient returns z_0
-         CALL preconditioner(qs_env=qs_env, &
-                             matrix_ks=matrix_ks, &
-                             matrix_p=matrix_p, &
-                             matrix_rhs=matrix_res, &
-                             matrix_cg_z=matrix_z0, &
-                             eps_filter=eps_filter, &
-                             iounit=iounit)
+         CALL ec_preconditioner(qs_env=qs_env, &
+                                matrix_ks=matrix_ks, &
+                                matrix_p=matrix_p, &
+                                matrix_rhs=matrix_res, &
+                                matrix_cg_z=matrix_z0, &
+                                eps_filter=eps_filter, &
+                                iounit=iounit)
          linres_control%flag = "PCG-AO"
       ELSE
          ! z_0 = r_0
@@ -758,13 +757,13 @@ CONTAINS
          IF (linres_control%preconditioner_type == precond_mlp) THEN
             ! M * z_j+1 = r_j+1
             ! Conjugate gradient returns z_j+1
-            CALL preconditioner(qs_env=qs_env, &
-                                matrix_ks=matrix_ks, &
-                                matrix_p=matrix_p, &
-                                matrix_rhs=matrix_res, &
-                                matrix_cg_z=matrix_z0, &
-                                eps_filter=eps_filter, &
-                                iounit=iounit)
+            CALL ec_preconditioner(qs_env=qs_env, &
+                                   matrix_ks=matrix_ks, &
+                                   matrix_p=matrix_p, &
+                                   matrix_rhs=matrix_res, &
+                                   matrix_cg_z=matrix_z0, &
+                                   eps_filter=eps_filter, &
+                                   iounit=iounit)
             linres_control%flag = "PCG-AO"
          ELSE
             DO ispin = 1, nspins
@@ -1134,14 +1133,14 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_G, matrix_s, rho1_ao, rho_ao
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(mp_para_env_type), POINTER                    :: para_env
+      TYPE(pw_c1d_gs_type)                               :: rho_tot_gspace, v_hartree_gspace
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho1_g
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_poisson_type), POINTER                     :: poisson_env
       TYPE(pw_pool_p_type), DIMENSION(:), POINTER        :: pw_pools
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_type)                                      :: rho_tot_gspace, v_hartree_gspace, &
-                                                            v_hartree_rspace
-      TYPE(pw_type), DIMENSION(:), POINTER               :: rho1_g, rho1_r, rho_r, tau1_r, v_xc, &
-                                                            v_xc_tau
+      TYPE(pw_r3d_rs_type)                               :: v_hartree_rspace
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, rho_r, tau1_r, v_xc, v_xc_tau
       TYPE(qs_kpp1_env_type), POINTER                    :: kpp1_env
       TYPE(qs_rho_type), POINTER                         :: rho, rho_aux
       TYPE(section_vals_type), POINTER                   :: input, xc_section, xc_section_aux
@@ -1180,15 +1179,9 @@ CONTAINS
                       poisson_env=poisson_env)
 
       ! Calculate the NSC Hartree potential
-      CALL auxbas_pw_pool%create_pw(pw=v_hartree_gspace, &
-                                    use_data=COMPLEXDATA1D, &
-                                    in_space=RECIPROCALSPACE)
-      CALL auxbas_pw_pool%create_pw(pw=rho_tot_gspace, &
-                                    use_data=COMPLEXDATA1D, &
-                                    in_space=RECIPROCALSPACE)
-      CALL auxbas_pw_pool%create_pw(pw=v_hartree_rspace, &
-                                    use_data=REALDATA3D, &
-                                    in_space=REALSPACE)
+      CALL auxbas_pw_pool%create_pw(pw=v_hartree_gspace)
+      CALL auxbas_pw_pool%create_pw(pw=rho_tot_gspace)
+      CALL auxbas_pw_pool%create_pw(pw=v_hartree_rspace)
 
       ! XC-Kernel
       NULLIFY (v_xc, v_xc_tau, xc_section)

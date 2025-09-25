@@ -18,19 +18,29 @@ T = TypeVar("T")
 CP2K_DIR = pathlib.Path(__file__).resolve().parents[2]
 
 FLAG_EXCEPTIONS = (
-    r"\$\{.*\}\$",
-    r"__.*__",
+    r"\$\{.+\}\$",
+    r"__.+__",
+    r"_M_.+",
+    r"__ARM_ARCH",
+    r"__ARM_FEATURE_.+",
     r"CUDA_VERSION",
-    r"DBM_VALIDATE_AGAINST_DBCSR",
+    r"DBM_.+",
+    r"OPENMP_TRACE_SYMBOL",
+    r"OPENCL_.+",
+    r"ACC_OPENCL_.+",
     r"FD_DEBUG",
     r"GRID_DO_COLLOCATE",
     r"INTEL_MKL_VERSION",
     r"LIBINT2_MAX_AM_eri",
+    r"LIBGRPP",
+    r"M_",
     r"LIBINT_CONTRACTED_INTS",
     r"XC_MAJOR_VERSION",
     r"XC_MINOR_VERSION",
     r"NDEBUG",
+    r"M_PI",
     r"OMP_DEFAULT_NONE_WITH_OOP",
+    r"FTN_NO_DEFAULT_INIT",
     r"_OPENMP",
     r"__COMPILE_ARCH",
     r"__COMPILE_DATE",
@@ -40,38 +50,31 @@ FLAG_EXCEPTIONS = (
     r"__DATA_DIR",
     r"__FFTW3_UNALIGNED",
     r"__FORCE_USE_FAST_MATH",
-    r"__HAS_smm_cnt",
-    r"__HAS_smm_ctn",
-    r"__HAS_smm_ctt",
-    r"__HAS_smm_dnt",
-    r"__HAS_smm_dtn",
-    r"__HAS_smm_dtt",
-    r"__HAS_smm_snt",
-    r"__HAS_smm_stn",
-    r"__HAS_smm_stt",
-    r"__HAS_smm_znt",
-    r"__HAS_smm_ztn",
-    r"__HAS_smm_ztt",
+    r"__INTEL_LLVM_COMPILER",
     r"__INTEL_COMPILER",
+    r"OFFLOAD_CHECK",
     r"__OFFLOAD_CUDA",
     r"__OFFLOAD_HIP",
     r"__PILAENV_BLOCKSIZE",
-    r"__PW_CUDA_NO_HOSTALLOC",
     r"__PW_CUDA_NO_HOSTALLOC",
     r"__T_C_G0",
     r"__YUKAWA",
     r"__cplusplus",
     r"HIP_VERSION",
     r"LIBXSMM_GEMM_PREFETCH_NONE",
+    r"LIBXSMM_.*VERSION_MAJOR",
+    r"LIBXSMM_.*VERSION_MINOR",
+    r"LIBXSMM_.*VERSION_UPDATE",
+    r"LIBXSMM_.*VERSION_PATCH",
     r"LIBXSMM_VERSION_NUMBER",
-    r"LIBXSMM_VERSION_MAJOR",
-    r"LIBXSMM_VERSION_MINOR",
-    r"LIBXSMM_VERSION_PATCH",
     r"LIBXSMM_VERSION2",
     r"LIBXSMM_VERSION3",
     r"LIBXSMM_VERSION4",
-    r"DBM_LIBXSMM_PREFETCH",
-    r"__PW_CUDA_HIP_KERNELS",
+    r"LIBGRPP_.+",
+    r"TEST_LIBGRPP_.+",
+    r"__LIBXSMM2",
+    r"CPVERSION",
+    r"_WIN32",
 )
 
 FLAG_EXCEPTIONS_RE = re.compile(r"|".join(FLAG_EXCEPTIONS))
@@ -117,7 +120,9 @@ BANNER_C = """\
 
 C_EXTENSIONS = (".c", ".cu", ".cpp", ".cc", ".h", ".hpp")
 
-BSD_DIRECTORIES = ("src/offload/", "src/grid/", "src/dbm/")
+BSD_PATHS = ("src/offload/", "src/grid/", "src/dbm/", "src/base/openmp_trace.c")
+
+MIT_PATHS = ("src/grpp/",)
 
 
 @lru_cache(maxsize=None)
@@ -136,8 +141,9 @@ def get_flags_src() -> str:
 @lru_cache(maxsize=None)
 def get_bibliography_dois() -> List[str]:
     bib = CP2K_DIR.joinpath("src/common/bibliography.F").read_text(encoding="utf8")
-    matches = re.findall(r'DOI="([^"]+)"', bib, flags=re.IGNORECASE)
-    return [doi for doi in matches if "/" in doi]  # filter invalid DOIs.
+    matches = re.findall(r'doi="([^"]+)"', bib, flags=re.IGNORECASE)
+    assert len(matches) > 260 and "10.1016/j.cpc.2004.12.014" in matches
+    return matches
 
 
 def check_file(path: pathlib.Path) -> List[str]:
@@ -148,7 +154,7 @@ def check_file(path: pathlib.Path) -> List[str]:
     - undocumented preprocessor flags
     - stray unicode characters
     """
-    warnings = []
+    warnings: List[str] = []
 
     fn_ext = path.suffix
     abspath = path.resolve()
@@ -191,8 +197,15 @@ def check_file(path: pathlib.Path) -> List[str]:
 
     # check banner
     year = datetime.now(timezone.utc).year
-    bsd_licensed = any(str(path).startswith(d) for d in BSD_DIRECTORIES)
-    spdx = "BSD-3-Clause    " if bsd_licensed else "GPL-2.0-or-later"
+    bsd_licensed = any(str(path).startswith(p) for p in BSD_PATHS)
+    mit_licensed = any(str(path).startswith(p) for p in MIT_PATHS)
+    if bsd_licensed:
+        spdx = "BSD-3-Clause    "
+    elif mit_licensed:
+        spdx = "MIT             "
+    else:
+        spdx = "GPL-2.0-or-later"
+
     if fn_ext == ".F" and not content.startswith(BANNER_F.format(year, spdx)):
         warnings += [f"{path}: Copyright banner malformed"]
     if fn_ext == ".fypp" and not content.startswith(BANNER_SHELL.format(year, spdx)):
@@ -211,7 +224,6 @@ def check_file(path: pathlib.Path) -> List[str]:
     PY_SHEBANG = "#!/usr/bin/env python3"
     if fn_ext == ".py" and is_executable and not content.startswith(f"{PY_SHEBANG}\n"):
         warnings += [f"{path}: Wrong shebang, please use '{PY_SHEBANG}'"]
-
     # find all flags
     flags = set()
     line_continuation = False
@@ -224,7 +236,8 @@ def check_file(path: pathlib.Path) -> List[str]:
             if line.split()[0] not in ("#if", "#ifdef", "#ifndef", "#elif"):
                 continue
 
-        line = line.split("//", 1)[0]
+        line = line.split("/*", 1)[0]  # C comment
+        line = line.split("//", 1)[0]  # C++ comment
         line_continuation = line.rstrip().endswith("\\")
         line = OP_RE.sub(" ", line)
         line = line.replace("defined", " ")
@@ -240,6 +253,8 @@ def check_file(path: pathlib.Path) -> List[str]:
     flags = {flag for flag in flags if not FLAG_EXCEPTIONS_RE.match(flag)}
 
     for flag in sorted(flags):
+        if fn_ext == ".cl":  # usually compiled at RT (no direct user-control)
+            continue
         if flag == "_OMP_H" and fn_ext == ".cu":
             continue
         if flag not in get_install_txt():

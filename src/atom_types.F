@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -106,6 +106,9 @@ MODULE atom_types
       INTEGER, DIMENSION(0:lmat)                    :: nl = 0
       REAL(dp), DIMENSION(0:lmat)                   :: rcnl = 0.0_dp
       REAL(dp), DIMENSION(4, 4, 0:lmat)             :: hnl = 0.0_dp
+      ! SOC
+      LOGICAL                                       :: soc = .FALSE.
+      REAL(dp), DIMENSION(4, 4, 0:lmat)             :: knl = 0.0_dp
       ! type extensions
       ! NLCC
       LOGICAL                                       :: nlcc = .FALSE.
@@ -2374,7 +2377,7 @@ CONTAINS
       ! Normalization
       DO j = 0, lmat
          expzet = 0.25_dp*REAL(2*j + 3, dp)
-         prefac = SQRT(SQRT(pi)/2._dp**(j + 2)*dfac(2*j + 1))
+         prefac = SQRT(rootpi/2._dp**(j + 2)*dfac(2*j + 1))
          DO ipgf = 1, basis%nprim(j)
             DO ii = 1, basis%nbas(j)
                gcca = basis%cm(ipgf, ii, j)
@@ -2569,6 +2572,8 @@ CONTAINS
       potential%nl = 0
       potential%rcnl = 0._dp
       potential%hnl = 0._dp
+      potential%soc = .FALSE.
+      potential%knl = 0._dp
 
       potential%lpotextended = .FALSE.
       potential%lsdpot = .FALSE.
@@ -2675,6 +2680,7 @@ CONTAINS
          ! Read the parameters for the non-local part of the GTH pseudopotential (ppnl)
          READ (line_att, *) nlmax
          CALL remove_word(line_att)
+         IF (INDEX(line_att, "SOC") /= 0) potential%soc = .TRUE.
          IF (nlmax > 0) THEN
             ! Load the parameter for nlmax non-local projectors
             DO l = 0, nlmax - 1
@@ -2703,6 +2709,29 @@ CONTAINS
                      CALL remove_word(line_att)
                   END DO
                END DO
+               IF (potential%soc .AND. l /= 0) THEN
+                  is_ok = cp_sll_val_next(list, val)
+                  CPASSERT(is_ok)
+                  CALL val_get(val, c_val=line_att)
+                  DO i = 1, potential%nl(l)
+                     IF (i == 1) THEN
+                        READ (line_att, *) potential%knl(1, 1, l)
+                        CALL remove_word(line_att)
+                     ELSE
+                        CPASSERT(LEN_TRIM(line_att) == 0)
+                        is_ok = cp_sll_val_next(list, val)
+                        CPASSERT(is_ok)
+                        CALL val_get(val, c_val=line_att)
+                        READ (line_att, *) potential%knl(i, i, l)
+                        CALL remove_word(line_att)
+                     END IF
+                     DO j = i + 1, potential%nl(l)
+                        READ (line_att, *) potential%knl(i, j, l)
+                        potential%knl(j, i, l) = potential%knl(i, j, l)
+                        CALL remove_word(line_att)
+                     END DO
+                  END DO
+               END IF
                CPASSERT(LEN_TRIM(line_att) == 0)
             END DO
          END IF
@@ -2797,6 +2826,10 @@ CONTAINS
                      ! Read the parameters for the non-local part of the GTH pseudopotential (ppnl)
                      CALL parser_get_object(parser, nlmax)
                      IF (nlmax > 0) THEN
+                        IF (parser_test_next_token(parser) == "STR") THEN
+                           CALL parser_get_object(parser, line)
+                           IF (INDEX(LINE, "SOC") /= 0) potential%soc = .TRUE.
+                        END IF
                         ! Load the parameter for n non-local projectors
                         DO l = 0, nlmax - 1
                            CALL parser_get_object(parser, potential%rcnl(l), newline=.TRUE.)
@@ -2812,6 +2845,15 @@ CONTAINS
                                  potential%hnl(j, i, l) = potential%hnl(i, j, l)
                               END DO
                            END DO
+                           IF (potential%soc .AND. l /= 0) THEN
+                              DO i = 1, potential%nl(l)
+                                 CALL parser_get_object(parser, potential%knl(i, i, l), newline=.TRUE.)
+                                 DO j = i + 1, potential%nl(l)
+                                    CALL parser_get_object(parser, potential%knl(i, j, l))
+                                    potential%knl(j, i, l) = potential%knl(i, j, l)
+                                 END DO
+                              END DO
+                           END IF
                         END DO
                      END IF
                      EXIT search_loop
@@ -2980,6 +3022,7 @@ CONTAINS
       SELECT CASE (nel)
       CASE DEFAULT
          CPABORT("Unknown Core State")
+      CASE (0)
       CASE (2)
          potential%econf(0:3) = potential%econf(0:3) - ptable(2)%e_conv(0:3)
       CASE (10)

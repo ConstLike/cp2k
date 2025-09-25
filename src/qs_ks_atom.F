@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -19,7 +19,7 @@ MODULE qs_ks_atom
                                               gto_basis_set_type
    USE cp_array_utils,                  ONLY: cp_2d_r_p_type
    USE cp_control_types,                ONLY: dft_control_type
-   USE dbcsr_api,                       ONLY: dbcsr_get_block_p,&
+   USE cp_dbcsr_api,                    ONLY: dbcsr_get_block_p,&
                                               dbcsr_p_type
    USE kinds,                           ONLY: dp,&
                                               int_8
@@ -317,7 +317,7 @@ CONTAINS
 !$OMP                 , ikind, jkind, iatom, jatom, cell_b           &
 !$OMP                 , basis_set_a, basis_set_b, img                &
 !$OMP                 , found, next_task                             &
-!$OMP                 , kkind, paw_atom                              &
+!$OMP                 , kkind, paw_atom, lock_num                    &
 !$OMP                 , iac, alist_ac, kac, n_cont_a, list_a         &
 !$OMP                 , ibc, alist_bc, kbc, n_cont_b, list_b         &
 !$OMP                 , katom, rho_at, nsoctot                       &

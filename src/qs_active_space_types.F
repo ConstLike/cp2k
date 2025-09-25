@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,12 +13,12 @@
 ! **************************************************************************************************
 MODULE qs_active_space_types
 
+   USE cp_dbcsr_api,                    ONLY: dbcsr_csr_destroy,&
+                                              dbcsr_csr_p_type,&
+                                              dbcsr_p_type
    USE cp_dbcsr_operations,             ONLY: dbcsr_deallocate_matrix_set
    USE cp_fm_types,                     ONLY: cp_fm_release,&
                                               cp_fm_type
-   USE dbcsr_api,                       ONLY: dbcsr_csr_destroy,&
-                                              dbcsr_csr_p_type,&
-                                              dbcsr_p_type
    USE input_constants,                 ONLY: eri_method_gpw_ht
    USE kinds,                           ONLY: default_path_length,&
                                               dp
@@ -53,9 +53,12 @@ MODULE qs_active_space_types
 
    TYPE eri_type
       INTEGER                       :: method = 0
-      INTEGER                       :: OPERATOR = 0
-      REAL(KIND=dp)                 :: operator_parameter = 0.0_dp
+      INTEGER                       :: operator = 0
+      LOGICAL                       :: enlarge_cell = .FALSE.
+      REAL(KIND=dp)                 :: omega = 0.0_dp
       INTEGER, DIMENSION(3)         :: periodicity = 0
+      REAL(KIND=dp), DIMENSION(3)   :: eri_cell = 0
+      REAL(KIND=dp), DIMENSION(3)   :: eri_cell_angles = 0
       REAL(KIND=dp)                 :: cutoff_radius = 0.0_dp
       REAL(KIND=dp)                 :: eps_integral = 0.0_dp
       TYPE(eri_gpw_type)            :: eri_gpw = eri_gpw_type()
@@ -91,6 +94,7 @@ MODULE qs_active_space_types
       REAL(KIND=dp)                                :: energy_ref = 0.0_dp
       REAL(KIND=dp)                                :: energy_inactive = 0.0_dp
       REAL(KIND=dp)                                :: energy_active = 0.0_dp
+      REAL(KIND=dp)                                :: alpha = 0.0_dp
       LOGICAL                                      :: do_scf_embedding = .FALSE.
       LOGICAL                                      :: qcschema = .FALSE.
       LOGICAL                                      :: fcidump = .FALSE.
@@ -103,6 +107,7 @@ MODULE qs_active_space_types
       TYPE(cp_fm_type), DIMENSION(:), POINTER      :: vxc_sub => NULL()
       TYPE(cp_fm_type), DIMENSION(:), POINTER      :: h_sub => NULL()
       TYPE(cp_fm_type), DIMENSION(:), POINTER      :: fock_sub => NULL()
+      TYPE(cp_fm_type), DIMENSION(:), POINTER      :: sab_sub => NULL()
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER    :: pmat_inactive => NULL()
    END TYPE active_space_type
 
@@ -189,6 +194,7 @@ CONTAINS
          CALL cp_fm_release(active_space_env%vxc_sub)
          CALL cp_fm_release(active_space_env%h_sub)
          CALL cp_fm_release(active_space_env%fock_sub)
+         CALL cp_fm_release(active_space_env%sab_sub)
 
          IF (ASSOCIATED(active_space_env%pmat_inactive)) &
             CALL dbcsr_deallocate_matrix_set(active_space_env%pmat_inactive)

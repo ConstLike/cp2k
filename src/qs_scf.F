@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -47,6 +47,13 @@
 MODULE qs_scf
    USE atomic_kind_types,               ONLY: atomic_kind_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
+                                              dbcsr_deallocate_matrix,&
+                                              dbcsr_get_info,&
+                                              dbcsr_init_p,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set,&
+                                              dbcsr_type
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               dbcsr_deallocate_matrix_set
    USE cp_files,                        ONLY: close_file
@@ -69,13 +76,6 @@ MODULE qs_scf
    USE cp_result_methods,               ONLY: get_results,&
                                               test_for_result
    USE cp_result_types,                 ONLY: cp_result_type
-   USE dbcsr_api,                       ONLY: dbcsr_copy,&
-                                              dbcsr_deallocate_matrix,&
-                                              dbcsr_get_info,&
-                                              dbcsr_init_p,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set,&
-                                              dbcsr_type
    USE ec_env_types,                    ONLY: energy_correction_type
    USE input_constants,                 ONLY: &
         broyden_type_1, broyden_type_1_explicit, broyden_type_1_explicit_ls, broyden_type_1_ls, &
@@ -123,8 +123,10 @@ MODULE qs_scf
                                               set_qs_env
    USE qs_integrate_potential,          ONLY: integrate_v_rspace
    USE qs_kind_types,                   ONLY: qs_kind_type
-   USE qs_ks_methods,                   ONLY: qs_ks_update_qs_env
-   USE qs_ks_types,                     ONLY: qs_ks_did_change,&
+   USE qs_ks_methods,                   ONLY: evaluate_core_matrix_p_mix_new,&
+                                              qs_ks_update_qs_env
+   USE qs_ks_types,                     ONLY: get_ks_env,&
+                                              qs_ks_did_change,&
                                               qs_ks_env_type
    USE qs_mo_io,                        ONLY: write_mo_set_to_restart
    USE qs_mo_methods,                   ONLY: make_basis_simple,&
@@ -162,17 +164,17 @@ MODULE qs_scf
                                               qs_scf_outer_loop_info,&
                                               qs_scf_write_mos
    USE qs_scf_post_scf,                 ONLY: qs_scf_compute_properties
-   USE qs_scf_types,                    ONLY: block_davidson_diag_method_nr,&
-                                              block_krylov_diag_method_nr,&
-                                              filter_matrix_diag_method_nr,&
-                                              general_diag_method_nr,&
-                                              ot_diag_method_nr,&
-                                              ot_method_nr,&
-                                              qs_scf_env_type,&
-                                              special_diag_method_nr
+   USE qs_scf_types,                    ONLY: &
+        block_davidson_diag_method_nr, block_krylov_diag_method_nr, filter_matrix_diag_method_nr, &
+        general_diag_method_nr, ot_diag_method_nr, ot_method_nr, qs_scf_env_type, &
+        smeagol_method_nr, special_diag_method_nr
    USE qs_wf_history_methods,           ONLY: wfi_purge_history,&
                                               wfi_update
    USE scf_control_types,               ONLY: scf_control_type
+   USE smeagol_interface,               ONLY: run_smeagol_bulktrans,&
+                                              run_smeagol_emtrans
+   USE tblite_interface,                ONLY: tb_get_energy,&
+                                              tb_update_charges
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -183,7 +185,7 @@ MODULE qs_scf
    LOGICAL, PRIVATE                     :: reuse_precond = .FALSE.
    LOGICAL, PRIVATE                     :: used_history = .FALSE.
 
-   PUBLIC :: scf, scf_env_cleanup, scf_env_do_scf, cdft_scf
+   PUBLIC :: scf, scf_env_cleanup, scf_env_do_scf, cdft_scf, init_scf_loop
 
 CONTAINS
 
@@ -300,6 +302,14 @@ CONTAINS
          ! *** compute properties that depend on the converged wavefunction
          IF (.NOT. (should_stop)) CALL qs_scf_compute_properties(qs_env)
 
+         ! *** SMEAGOL interface ***
+         IF (.NOT. (should_stop)) THEN
+            ! compute properties that depend on the converged wavefunction ..
+            CALL run_smeagol_emtrans(qs_env, last=.TRUE., iter=0)
+            ! .. or save matrices related to bulk leads
+            CALL run_smeagol_bulktrans(qs_env)
+         END IF
+
          ! *** cleanup
          CALL scf_env_cleanup(scf_env)
          IF (dft_control%qs_control%cdft) &
@@ -354,6 +364,7 @@ CONTAINS
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_result_type), POINTER                      :: results
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ks
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: rho_ao_kp
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(energy_correction_type), POINTER              :: ec_env
@@ -411,7 +422,7 @@ CONTAINS
       IF (output_unit > 0) WRITE (UNIT=output_unit, FMT="(/,/,T2,A)") &
          "SCF WAVEFUNCTION OPTIMIZATION"
 
-! when switch_surf_dip is switched on, indicate storing mos from the last converged step
+      ! when switch_surf_dip is switched on, indicate storing mos from the last converged step
       IF (dft_control%switch_surf_dip) THEN
          CALL get_qs_env(qs_env, mos_last_converged=mos_last_converged)
          DO ispin = 1, dft_control%nspins
@@ -460,7 +471,7 @@ CONTAINS
          CALL qs_scf_set_loop_flags(scf_env, diis_step, &
                                     energy_only, just_energy, exit_inner_loop)
 
-! decide whether to switch off dipole correction for convergence purposes
+         ! decide whether to switch off dipole correction for convergence purposes
          dft_control%surf_dip_correct_switch = dft_control%correct_surf_dip
          IF ((dft_control%correct_surf_dip) .AND. (scf_control%outer_scf%have_scf) .AND. &
              (scf_env%outer_scf%iter_count > FLOOR(scf_control%outer_scf%max_scf/2.0_dp))) THEN
@@ -470,11 +481,12 @@ CONTAINS
                   "SURFACE DIPOLE CORRECTION switched off"
             END IF
          END IF
+
          scf_loop: DO
 
             CALL timeset(routineN//"_inner_loop", handle2)
 
-            scf_env%iter_count = scf_env%iter_count + 1
+            IF (.NOT. just_energy) scf_env%iter_count = scf_env%iter_count + 1
             iter_count = iter_count + 1
             CALL cp_iterate(logger%iter_info, last=.FALSE., iter_nr=iter_count)
 
@@ -491,14 +503,31 @@ CONTAINS
 
             IF (do_kpoints) THEN
                ! kpoints
-               CALL qs_scf_new_mos_kp(qs_env, scf_env, scf_control, diis_step)
+               IF (dft_control%hairy_probes .EQV. .TRUE.) THEN
+                  scf_control%smear%do_smear = .FALSE.
+                  CALL qs_scf_new_mos_kp(qs_env, scf_env, scf_control, diis_step, dft_control%probe)
+               ELSE
+                  CALL qs_scf_new_mos_kp(qs_env, scf_env, scf_control, diis_step)
+               END IF
             ELSE
                ! Gamma points only
-               CALL qs_scf_new_mos(qs_env, scf_env, scf_control, scf_section, diis_step, energy_only)
+               IF (dft_control%hairy_probes .EQV. .TRUE.) THEN
+                  scf_control%smear%do_smear = .FALSE.
+                  CALL qs_scf_new_mos(qs_env, scf_env, scf_control, scf_section, diis_step, energy_only, &
+                                      dft_control%probe)
+               ELSE
+                  CALL qs_scf_new_mos(qs_env, scf_env, scf_control, scf_section, diis_step, energy_only)
+               END IF
             END IF
 
             ! Print requested MO information (can be computationally expensive with OT)
             CALL qs_scf_write_mos(qs_env, scf_env, final_mos=.FALSE.)
+
+            IF (dft_control%qs_control%xtb_control%do_tblite) THEN
+               CALL tb_update_charges(qs_env, dft_control, qs_env%tb_tblite, .FALSE., .FALSE.)
+               CALL evaluate_core_matrix_p_mix_new(qs_env)
+               CALL tb_get_energy(qs_env, qs_env%tb_tblite, energy)
+            END IF
 
             CALL qs_scf_density_mixing(scf_env, rho, para_env, diis_step)
 
@@ -513,8 +542,8 @@ CONTAINS
                CALL external_comm%send(energy%total, ext_master_id, scf_energy_message_tag)
             END IF
 
-            CALL qs_scf_check_inner_exit(qs_env, scf_env, scf_control, should_stop, exit_inner_loop, &
-                                         inner_loop_converged, output_unit)
+            CALL qs_scf_check_inner_exit(qs_env, scf_env, scf_control, should_stop, just_energy, &
+                                         exit_inner_loop, inner_loop_converged, output_unit)
 
             ! In case we decide to exit we perform few more check to see if this one
             ! is really the last SCF step
@@ -533,8 +562,16 @@ CONTAINS
             IF (do_kpoints) THEN
                CALL write_kpoints_restart(rho_ao_kp, kpoints, scf_env, dft_section, particle_set, qs_kind_set)
             ELSE
-               ! Write Wavefunction restart file
-               CALL write_mo_set_to_restart(mos, particle_set, dft_section=dft_section, qs_kind_set=qs_kind_set)
+               ! Write wavefunction restart file
+               IF (scf_env%method == ot_method_nr) THEN
+                  ! With OT: provide the Kohn-Sham matrix for the calculation of the MO eigenvalues
+                  CALL get_ks_env(ks_env=ks_env, matrix_ks=matrix_ks)
+                  CALL write_mo_set_to_restart(mos, particle_set, dft_section=dft_section, qs_kind_set=qs_kind_set, &
+                                               matrix_ks=matrix_ks)
+               ELSE
+                  CALL write_mo_set_to_restart(mos, particle_set, dft_section=dft_section, qs_kind_set=qs_kind_set)
+               END IF
+
             END IF
 
             ! Exit if we have finished with the SCF inner loop
@@ -570,7 +607,7 @@ CONTAINS
          CALL qs_scf_outer_loop_info(output_unit, scf_control, scf_env, &
                                      energy, total_steps, should_stop, outer_loop_converged)
 
-!  save mos to converged mos if outer_loop_converged and surf_dip_correct_switch is true
+         ! Save MOs to converged MOs if outer_loop_converged and surf_dip_correct_switch is true
          IF (exit_outer_loop) THEN
             IF ((dft_control%switch_surf_dip) .AND. (outer_loop_converged) .AND. &
                 (dft_control%surf_dip_correct_switch)) THEN
@@ -683,9 +720,21 @@ CONTAINS
       ! this just guarantees that all mo_occupations match the eigenvalues, if smear
       DO ispin = 1, dft_control%nspins
          ! do not reset mo_occupations if the maximum overlap method is in use
-         IF (.NOT. scf_control%diagonalization%mom) &
-            CALL set_mo_occupation(mo_set=mos(ispin), &
-                                   smear=scf_control%smear)
+         IF (.NOT. scf_control%diagonalization%mom) THEN
+            !if the hair probes section is present, this sends hairy_probes to set_mo_occupation subroutine
+            !and switches off the standard smearing
+            IF (dft_control%hairy_probes .EQV. .TRUE.) THEN
+               IF (scf_env%outer_scf%iter_count > 0) THEN
+                  scf_control%smear%do_smear = .FALSE.
+                  CALL set_mo_occupation(mo_set=mos(ispin), &
+                                         smear=scf_control%smear, &
+                                         probe=dft_control%probe)
+               END IF
+            ELSE
+               CALL set_mo_occupation(mo_set=mos(ispin), &
+                                      smear=scf_control%smear)
+            END IF
+         END IF
       END DO
 
       SELECT CASE (scf_env%method)
@@ -703,7 +752,7 @@ CONTAINS
             CALL qs_diis_b_clear(scf_env%scf_diis_buffer)
          END IF
 
-      CASE (general_diag_method_nr, special_diag_method_nr, block_krylov_diag_method_nr)
+      CASE (general_diag_method_nr, special_diag_method_nr, block_krylov_diag_method_nr, smeagol_method_nr)
          IF (.NOT. scf_env%skip_diis) THEN
             IF (do_kpoints) THEN
                IF (.NOT. ASSOCIATED(kpoints%scf_diis_buffer)) THEN
@@ -787,7 +836,20 @@ CONTAINS
             ALLOCATE (scf_env%qs_ot_env(number_of_OT_envs))
 
             ! XXX Joost XXX should disentangle reading input from this part
+            IF (scf_env%outer_scf%iter_count > 0) THEN
+               IF (scf_env%iter_delta < scf_control%eps_diis) THEN
+                  scf_env%qs_ot_env(1)%settings%ot_state = 1
+               END IF
+            END IF
+            !
             CALL ot_scf_read_input(scf_env%qs_ot_env, scf_section)
+            !
+            IF (scf_env%outer_scf%iter_count > 0) THEN
+               IF (scf_env%qs_ot_env(1)%settings%ot_state == 1) THEN
+                  scf_control%max_scf = MAX(scf_env%qs_ot_env(1)%settings%max_scf_diis, &
+                                            scf_control%max_scf)
+               END IF
+            END IF
 
             ! keep a note that we are restricted
             IF (dft_control%restricted) THEN
@@ -903,17 +965,38 @@ CONTAINS
       ! Release SCF work storage
       CALL cp_fm_release(scf_env%scf_work1)
 
+      IF (ASSOCIATED(scf_env%scf_work1_red)) THEN
+         CALL cp_fm_release(scf_env%scf_work1_red)
+      END IF
       IF (ASSOCIATED(scf_env%scf_work2)) THEN
          CALL cp_fm_release(scf_env%scf_work2)
          DEALLOCATE (scf_env%scf_work2)
+         NULLIFY (scf_env%scf_work2)
+      END IF
+      IF (ASSOCIATED(scf_env%scf_work2_red)) THEN
+         CALL cp_fm_release(scf_env%scf_work2_red)
+         DEALLOCATE (scf_env%scf_work2_red)
+         NULLIFY (scf_env%scf_work2_red)
       END IF
       IF (ASSOCIATED(scf_env%ortho)) THEN
          CALL cp_fm_release(scf_env%ortho)
          DEALLOCATE (scf_env%ortho)
+         NULLIFY (scf_env%ortho)
+      END IF
+      IF (ASSOCIATED(scf_env%ortho_red)) THEN
+         CALL cp_fm_release(scf_env%ortho_red)
+         DEALLOCATE (scf_env%ortho_red)
+         NULLIFY (scf_env%ortho_red)
       END IF
       IF (ASSOCIATED(scf_env%ortho_m1)) THEN
          CALL cp_fm_release(scf_env%ortho_m1)
          DEALLOCATE (scf_env%ortho_m1)
+         NULLIFY (scf_env%ortho_m1)
+      END IF
+      IF (ASSOCIATED(scf_env%ortho_m1_red)) THEN
+         CALL cp_fm_release(scf_env%ortho_m1_red)
+         DEALLOCATE (scf_env%ortho_m1_red)
+         NULLIFY (scf_env%ortho_m1_red)
       END IF
 
       IF (ASSOCIATED(scf_env%ortho_dbcsr)) THEN
@@ -948,6 +1031,8 @@ CONTAINS
       CASE (block_davidson_diag_method_nr)
          CALL block_davidson_deallocate(scf_env%block_davidson_env)
       CASE (filter_matrix_diag_method_nr)
+         !
+      CASE (smeagol_method_nr)
          !
       CASE DEFAULT
          CPABORT("unknown scf method method:"//cp_to_string(scf_env%method))

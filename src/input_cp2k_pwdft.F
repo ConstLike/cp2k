@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -72,6 +72,7 @@ CONTAINS
    SUBROUTINE create_pwdft_section(section)
       TYPE(section_type), POINTER                        :: section
 
+      TYPE(keyword_type), POINTER                        :: keyword
       TYPE(section_type), POINTER                        :: subsection
 
 !     ------------------------------------------------------------------------
@@ -85,6 +86,18 @@ CONTAINS
                           "pseudo-potentials and full-potentials, spin-orbit coupling, collinear and "// &
                           "non collinear magnetism, Hubbard correction, all exchange functionals "// &
                           "supported by libxc and Van der Waals corrections (libvdwxc).")
+
+      NULLIFY (keyword)
+      CALL keyword_create(keyword, __LOCATION__, &
+                          name='ignore_convergence_failure', &
+                          description="when set to true, calculation will continue irrespectively "// &
+                          "of the convergence status of SIRIUS", &
+                          type_of_var=logical_t, &
+                          repeats=.FALSE., &
+                          default_l_val=.FALSE., &
+                          lone_keyword_l_val=.TRUE.)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
 
       NULLIFY (subsection)
       CALL create_sirius_section(subsection, 'control')
@@ -110,10 +123,27 @@ CONTAINS
       !
       ! uncomment these lines when nlcg is officialy supported in cp2k
       !
+#if defined(__SIRIUS_NLCG)
+      CALL create_sirius_section(subsection, 'nlcg')
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+#endif
 
-      !      CALL create_sirius_section(subsection, 'nlcg')
-      !      CALL section_add_subsection(section, subsection)
-      !      CALL section_release(subsection)
+#if defined(__SIRIUS_VCSQNM)
+      CALL create_sirius_section(subsection, 'vcsqnm')
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+#endif
+
+#if defined(__SIRIUS_DFTD4)
+      CALL create_sirius_section(subsection, "dftd4")
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
+      CALL create_sirius_section(subsection, "dftd3")
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+#endif
 
       CALL create_print_section(subsection)
       CALL section_add_subsection(section, subsection)

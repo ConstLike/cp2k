@@ -1,11 +1,10 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
 MODULE fftw3_lib
-
    USE ISO_C_BINDING, ONLY: C_ASSOCIATED, &
                             C_CHAR, &
                             C_DOUBLE, &
@@ -38,12 +37,8 @@ MODULE fftw3_lib
    PUBLIC :: fftw3_destroy_plan, fftw3_create_plan_1dm, fftw3_create_plan_3d
    PUBLIC :: fftw_alloc, fftw_dealloc
 
-#if defined ( __FFTW3 )
-#if defined ( __FFTW3_MKL )
-#include "fftw/fftw3.f03"
-#else
+#if defined(__FFTW3)
 #include "fftw3.f03"
-#endif
 #endif
 
    INTERFACE fftw_alloc
@@ -93,7 +88,7 @@ CONTAINS
       END SUBROUTINE fftw_dealloc_complex_${dim}$d
    #:endfor
 
-#if defined ( __FFTW3 )
+#if defined(__FFTW3)
 ! **************************************************************************************************
 !> \brief A workaround that allows us to compile with -Werror=unused-parameter
 ! **************************************************************************************************
@@ -147,19 +142,28 @@ CONTAINS
       CHARACTER(LEN=*), INTENT(IN)             :: wisdom_file
       LOGICAL                                  :: ionode
 
-#if defined ( __FFTW3 )
-      INTEGER                                  :: iunit, istat
+#if defined(__FFTW3)
+      CHARACTER(LEN=1, KIND=C_CHAR), DIMENSION(:), ALLOCATABLE :: wisdom_file_name_c
+      INTEGER                                  :: file_name_length, i, iunit, istat
       INTEGER(KIND=C_INT)                      :: isuccess
       ! Write out FFTW3 wisdom to file (if we can)
       ! only the ionode updates the wisdom
       IF (ionode) THEN
          iunit = get_unit_number()
+         ! Check whether the file can be opened in the necessary manner
          OPEN (UNIT=iunit, FILE=wisdom_file, STATUS="UNKNOWN", FORM="FORMATTED", ACTION="WRITE", IOSTAT=istat)
          IF (istat == 0) THEN
-            isuccess = fftw_export_wisdom_to_filename(wisdom_file//C_NULL_CHAR)
-            IF (isuccess == 0) &
-               CPABORT("Error exporting wisdom to file "//wisdom_file)
             CLOSE (iunit)
+            file_name_length = LEN_TRIM(wisdom_file)
+            ALLOCATE (wisdom_file_name_c(file_name_length + 1))
+            DO i = 1, file_name_length
+               wisdom_file_name_c(i) = wisdom_file(i:i)
+            END DO
+            wisdom_file_name_c(file_name_length + 1) = C_NULL_CHAR
+            isuccess = fftw_export_wisdom_to_filename(wisdom_file_name_c)
+            IF (isuccess == 0) &
+               CALL cp_warn(__LOCATION__, "Error exporting wisdom to file "//TRIM(wisdom_file)//". "// &
+                            "Wisdom was not exported.")
          END IF
       END IF
 
@@ -179,82 +183,40 @@ CONTAINS
 
       CHARACTER(LEN=*), INTENT(IN)             :: wisdom_file
 
-#if defined ( __FFTW3 )
-      INTEGER                                  :: istat, iunit
-      INTEGER(KIND=C_INT) :: isuccess
-      LOGICAL                                  :: exist
+#if defined(__FFTW3)
+      CHARACTER(LEN=1, KIND=C_CHAR), DIMENSION(:), ALLOCATABLE :: wisdom_file_name_c
+      INTEGER                                  :: file_name_length, i, istat, iunit
+      INTEGER(KIND=C_INT)                      :: isuccess
+      LOGICAL :: file_exists
 
-#if defined(__MKL)
-!$    LOGICAL                                  :: mkl_is_safe
-#endif
-
-! If using the Intel compiler then we need to declare
-! a C interface to a global variable in MKL that sets
-! the number of threads which can concurrently execute
-! an FFT
-! We need __INTEL_COMPILER so we can be sure that the compiler
-! understands the !DEC$ version definitions
-#if defined (__INTEL_COMPILER) && defined (__MKL)
-!$    include "mkl.fi"
-!DEC$ IF DEFINED (INTEL_MKL_VERSION)
-!DEC$ IF INTEL_MKL_VERSION .EQ. 110100
-!DIR$ ATTRIBUTES ALIGN : 8 :: fftw3_mkl
-!$    COMMON/fftw3_mkl/ignore(4), mkl_dft_number_of_user_threads, ignore2(7)
-!$    INTEGER*4 :: ignore, mkl_dft_number_of_user_threads, ignore2
-!$    BIND(c) :: /fftw3_mkl/
-!DEC$ ENDIF
-!DEC$ ENDIF
-#elif defined (__MKL)
-! Preprocessing is enabled by default, and below header is not language specific
-#include <mkl_version.h>
-#endif
+      isuccess = fftw_init_threads()
+      IF (isuccess == 0) &
+         CPABORT("Error initializing FFTW with threads")
 
       ! Read FFTW wisdom (if available)
       ! all nodes are opening the file here...
-      INQUIRE (FILE=wisdom_file, exist=exist)
-      IF (exist) THEN
+      INQUIRE (FILE=wisdom_file, exist=file_exists)
+      IF (file_exists) THEN
          iunit = get_unit_number()
+         file_name_length = LEN_TRIM(wisdom_file)
+         ! Check whether the file can be opened in the necessary manner
          OPEN (UNIT=iunit, FILE=wisdom_file, STATUS="OLD", FORM="FORMATTED", POSITION="REWIND", &
                ACTION="READ", IOSTAT=istat)
          IF (istat == 0) THEN
-            isuccess = fftw_import_wisdom_from_filename(wisdom_file//C_NULL_CHAR)
-            IF (isuccess == 0) &
-               CPABORT("Error importing wisdom from file "//wisdom_file)
-            ! write(*,*) "FFTW3 import wisdom from file ....",MERGE((/"OK    "/),(/"NOT OK"/),(/isuccess==1/))
             CLOSE (iunit)
+            file_name_length = LEN_TRIM(wisdom_file)
+            ALLOCATE (wisdom_file_name_c(file_name_length + 1))
+            DO i = 1, file_name_length
+               wisdom_file_name_c(i) = wisdom_file(i:i)
+            END DO
+            wisdom_file_name_c(file_name_length + 1) = C_NULL_CHAR
+            isuccess = fftw_import_wisdom_from_filename(wisdom_file_name_c)
+            IF (isuccess == 0) &
+               CALL cp_warn(__LOCATION__, "Error importing wisdom from file "//TRIM(wisdom_file)//". "// &
+                            "Maybe the file was created with a different configuration than CP2K is run with. "// &
+                            "CP2K continues without importing wisdom.")
          END IF
       END IF
-
-#if defined (__MKL)
-      ! Now check if we have a real FFTW3 library, or are using MKL wrappers
-
-!$    IF (fftw3_is_mkl_wrapper() .and. omp_get_max_threads() .gt. 1) THEN
-! If we are not using the Intel compiler, there is no way to tell which
-! MKL version is in use, so fail safe...
-!$       mkl_is_safe = .FALSE.
-#if defined(INTEL_MKL_VERSION) && (110100 < INTEL_MKL_VERSION)
-!$       mkl_is_safe = .TRUE.
-#elif defined (__INTEL_COMPILER)
-! If we have an Intel compiler (__INTEL_COMPILER is defined) then check the
-! MKL version and make the appropriate action
-!DEC$ IF DEFINED (INTEL_MKL_VERSION)
-!DEC$ IF INTEL_MKL_VERSION .EQ. 110100
-!$       mkl_dft_number_of_user_threads = omp_get_max_threads()
-!DEC$ ENDIF
-!DEC$ IF INTEL_MKL_VERSION .GE. 110100
-!$       mkl_is_safe = .TRUE.
-!DEC$ ENDIF
-!DEC$ ENDIF
-#endif
-!$       IF (.NOT. mkl_is_safe) THEN
-!$          STOP "Intel's FFTW3 interface to MKL is not "// &
-!$             "thread-safe prior to MKL 11.1.0!  Please "// &
-!$             "rebuild CP2K, linking against FFTW 3 from "// &
-!$             "www.fftw.org or a newer version of MKL. "// &
-!$             "Now exiting..."
-!$       END IF
-!$    END IF
-#endif
 #else
       MARK_USED(wisdom_file)
 #endif
@@ -455,7 +417,7 @@ CONTAINS
          INDEX(l) = INDEX(j)
          INDEX(j) = ib
          jstack = jstack + 2
-         IF (jstack > nstack) CPABORT(" Nstack too small in sortr")
+         IF (jstack > nstack) CPABORT("Nstack too small in sortint")
          IF (ir - i + 1 >= j - l) THEN
             istack(jstack) = ir
             istack(jstack - 1) = i
@@ -505,7 +467,7 @@ CONTAINS
                              fft_direction, fftw_plan_type, hm_rank
       LOGICAL, INTENT(OUT)                               :: valid
 
-#if defined (__FFTW3)
+#if defined(__FFTW3)
       TYPE(fftw_iodim) :: dim(2), hm(2)
       INTEGER :: i
 
@@ -544,27 +506,28 @@ CONTAINS
 ! **************************************************************************************************
 
 ! **************************************************************************************************
-!> \brief ...
+!> \brief Attempt to create a plan with the guru interface for a 2d sub-space.
+!>        If this fails, fall back to the FFTW3 threaded 3D transform instead
+!>        of the hand-optimised version.
 !> \return ...
 ! **************************************************************************************************
-   FUNCTION fftw3_is_mkl_wrapper() RESULT(is_mkl)
+   FUNCTION fftw3_is_guru_supported() RESULT(guru_supported)
 
       IMPLICIT NONE
 
-      LOGICAL :: is_mkl
-#if defined ( __FFTW3 )
       LOGICAL :: guru_supported
+#if defined(__FFTW3)
       INTEGER :: dim_n(2), dim_istride(2), dim_ostride(2), &
                  howmany_n(2), howmany_istride(2), howmany_ostride(2)
       TYPE(C_PTR)                          :: test_plan
       COMPLEX(KIND=dp), DIMENSION(1, 1, 1) :: zin
 
-      ! Attempt to create a plan with the guru interface for a 2d sub-space
-      ! If this fails (e.g. for MKL's FFTW3 interface), fall back to the
-      ! FFTW3 threaded 3D transform instead of the hand-optimised version
       dim_n(1) = 1
+      dim_n(2) = 1
       dim_istride(1) = 1
+      dim_istride(2) = 1
       dim_ostride(1) = 1
+      dim_ostride(2) = 1
       howmany_n(1) = 1
       howmany_n(2) = 1
       howmany_istride(1) = 1
@@ -579,13 +542,10 @@ CONTAINS
                                   FFTW_FORWARD, FFTW_ESTIMATE, guru_supported)
       IF (guru_supported) THEN
          CALL fftw_destroy_plan(test_plan)
-         is_mkl = .FALSE.
-      ELSE
-         is_mkl = .TRUE.
       END IF
 
 #else
-      is_mkl = .FALSE.
+      guru_supported = .FALSE.
 #endif
 
    END FUNCTION
@@ -698,7 +658,7 @@ CONTAINS
       COMPLEX(KIND=dp), DIMENSION(*), INTENT(INOUT)      :: zin
       COMPLEX(KIND=dp), DIMENSION(*), INTENT(INOUT)      :: zout
       INTEGER                                            :: plan_style
-#if defined ( __FFTW3 )
+#if defined(__FFTW3)
       INTEGER                                            :: n1, n2, n3
       INTEGER                                            :: nt
       INTEGER                                            :: rows_per_th
@@ -725,7 +685,7 @@ CONTAINS
          CPABORT("fftw3_create_plan_3d")
       END SELECT
 
-#if defined (__FFTW3_UNALIGNED)
+#if defined(__FFTW3_UNALIGNED)
       fftw_plan_type = fftw_plan_type + FFTW_UNALIGNED
 #endif
 
@@ -746,7 +706,7 @@ CONTAINS
 !$OMP END MASTER
 !$OMP END PARALLEL
 
-      IF ((fftw3_is_mkl_wrapper()) .OR. &
+      IF ((.NOT. fftw3_is_guru_supported()) .OR. &
           (.NOT. plan_style == 1) .OR. &
           (n1 < 256 .AND. n2 < 256 .AND. n3 < 256 .AND. nt == 1)) THEN
          ! If the plan type is MEASURE, PATIENT and EXHAUSTIVE or
@@ -883,7 +843,7 @@ CONTAINS
       INTEGER, INTENT(IN)                           :: istride, ostride
       COMPLEX(KIND=dp), DIMENSION(*), INTENT(INOUT) :: input, output
       TYPE(C_PTR)                                   :: plan, plan_r
-#if defined (__FFTW3)
+#if defined(__FFTW3)
       INTEGER                                     :: i_off, o_off
       INTEGER                                     :: th_planA, th_planB
       INTEGER :: rows_per_thread, rows_per_thread_r
@@ -950,7 +910,7 @@ CONTAINS
       COMPLEX(KIND=dp), DIMENSION(*), INTENT(INOUT), TARGET:: zin
       COMPLEX(KIND=dp), DIMENSION(*), INTENT(INOUT), TARGET:: zout
       INTEGER, INTENT(OUT)                                 :: stat
-#if defined ( __FFTW3 )
+#if defined(__FFTW3)
       COMPLEX(KIND=dp), POINTER                            :: xout(:)
       COMPLEX(KIND=dp), ALLOCATABLE                        :: tmp1(:)
       INTEGER                                              :: n1, n2, n3
@@ -1042,7 +1002,7 @@ CONTAINS
       COMPLEX(KIND=dp), DIMENSION(*), INTENT(IN)         :: zin
       COMPLEX(KIND=dp), DIMENSION(*), INTENT(IN)         :: zout
       INTEGER, INTENT(IN)                                :: plan_style
-#if defined ( __FFTW3 )
+#if defined(__FFTW3)
       INTEGER                                            :: ii, di, io, DO, num_threads, num_rows
 
       INTEGER :: fftw_plan_type
@@ -1059,7 +1019,7 @@ CONTAINS
          CPABORT("fftw3_create_plan_1dm")
       END SELECT
 
-#if defined (__FFTW3_UNALIGNED)
+#if defined(__FFTW3_UNALIGNED)
       fftw_plan_type = fftw_plan_type + FFTW_UNALIGNED
 #endif
       num_threads = 1
@@ -1134,7 +1094,7 @@ CONTAINS
 
       TYPE(fft_plan_type), INTENT(INOUT)   :: plan
 
-#if defined ( __FFTW3 )
+#if defined(__FFTW3)
 !$    IF (plan%need_alt_plan) THEN
 !$       CALL fftw_destroy_plan(plan%alt_fftw_plan)
 !$    END IF
@@ -1212,7 +1172,7 @@ CONTAINS
 !$          num_rows = plan%num_rows
 !$       END IF
 
-#if defined ( __FFTW3 )
+#if defined(__FFTW3)
 !$OMP MASTER
          stat = 1
 !$OMP END MASTER

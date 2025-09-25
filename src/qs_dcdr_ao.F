@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -12,13 +12,14 @@
 
 MODULE qs_dcdr_ao
 
-   USE atomic_kind_types,               ONLY: atomic_kind_type
    USE basis_set_types,                 ONLY: gto_basis_set_p_type,&
                                               gto_basis_set_type
-   USE core_ae,                         ONLY: build_core_ae
-   USE core_ppl,                        ONLY: build_core_ppl
-   USE core_ppnl,                       ONLY: build_core_ppnl
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: dbcsr_copy,&
+                                              dbcsr_get_block_p,&
+                                              dbcsr_p_type,&
+                                              dbcsr_set,&
+                                              dbcsr_type
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr
    USE cp_fm_types,                     ONLY: cp_fm_create,&
@@ -26,19 +27,12 @@ MODULE qs_dcdr_ao
                                               cp_fm_type
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_type
-   USE dbcsr_api,                       ONLY: dbcsr_copy,&
-                                              dbcsr_get_block_p,&
-                                              dbcsr_p_type,&
-                                              dbcsr_set,&
-                                              dbcsr_type
-   USE input_constants,                 ONLY: do_ppl_analytic
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type
    USE kinds,                           ONLY: default_string_length,&
                                               dp
    USE orbital_pointers,                ONLY: ncoset
    USE parallel_gemm_api,               ONLY: parallel_gemm
-   USE particle_types,                  ONLY: particle_type
    USE pw_env_types,                    ONLY: pw_env_get,&
                                               pw_env_type
    USE pw_methods,                      ONLY: pw_axpy,&
@@ -50,17 +44,14 @@ MODULE qs_dcdr_ao
    USE pw_poisson_types,                ONLY: pw_poisson_type
    USE pw_pool_types,                   ONLY: pw_pool_p_type,&
                                               pw_pool_type
-   USE pw_types,                        ONLY: COMPLEXDATA1D,&
-                                              REALDATA3D,&
-                                              REALSPACE,&
-                                              RECIPROCALSPACE,&
-                                              pw_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
    USE qs_collocate_density,            ONLY: calculate_drho_core,&
                                               calculate_drho_elec_dR
+   USE qs_core_matrices,                ONLY: core_matrices
    USE qs_energy_types,                 ONLY: qs_energy_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
-   USE qs_force_types,                  ONLY: qs_force_type
    USE qs_integral_utils,               ONLY: basis_set_list_setup,&
                                               get_memory_usage
    USE qs_integrate_potential,          ONLY: integrate_v_dbasis,&
@@ -83,7 +74,6 @@ MODULE qs_dcdr_ao
                                               qs_rho_release,&
                                               qs_rho_type
    USE qs_vxc,                          ONLY: qs_vxc_create
-   USE virial_types,                    ONLY: virial_type
    USE xc,                              ONLY: xc_calc_2nd_deriv,&
                                               xc_prep_2nd_deriv
    USE xc_derivative_set_types,         ONLY: xc_derivative_set_type,&
@@ -128,13 +118,14 @@ CONTAINS
       TYPE(cp_fm_type)                                   :: rho_ao_fm, rho_ao_s1, rho_ao_s1_rho_ao, &
                                                             s1_ao
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho1_ao, rho_ao
+      TYPE(pw_c1d_gs_type)                               :: rho1_tot_gspace, v_hartree_gspace
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho1_g, rho1_g_pw
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_poisson_type), POINTER                     :: poisson_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_type)                                      :: rho1_tot_gspace, v_hartree_gspace, &
-                                                            v_hartree_rspace
-      TYPE(pw_type), DIMENSION(:), POINTER               :: rho1_g, rho1_g_pw, rho1_r, rho_r, &
-                                                            tau1_r, v_rspace_new, v_xc, v_xc_tau
+      TYPE(pw_r3d_rs_type)                               :: v_hartree_rspace
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, rho_r, tau1_r, v_rspace_new, &
+                                                            v_xc, v_xc_tau
       TYPE(qs_rho_type), POINTER                         :: perturbed_density, rho
       TYPE(section_vals_type), POINTER                   :: input, xc_section
       TYPE(xc_derivative_set_type)                       :: deriv_set
@@ -240,17 +231,11 @@ CONTAINS
       ! Done with deriv_set and rho_set
 
       ALLOCATE (v_rspace_new(dcdr_env%nspins))
-      CALL auxbas_pw_pool%create_pw(v_hartree_gspace, &
-                                    use_data=COMPLEXDATA1D, &
-                                    in_space=RECIPROCALSPACE)
-      CALL auxbas_pw_pool%create_pw(v_hartree_rspace, &
-                                    use_data=REALDATA3D, &
-                                    in_space=REALSPACE)
+      CALL auxbas_pw_pool%create_pw(v_hartree_gspace)
+      CALL auxbas_pw_pool%create_pw(v_hartree_rspace)
 
       ! Calculate the Hartree potential on the total density
-      CALL auxbas_pw_pool%create_pw(rho1_tot_gspace, &
-                                    use_data=COMPLEXDATA1D, &
-                                    in_space=RECIPROCALSPACE)
+      CALL auxbas_pw_pool%create_pw(rho1_tot_gspace)
 
       CALL qs_rho_get(perturbed_density, rho_g=rho1_g, rho_r=rho1_r, tau_r=tau1_r)
       CALL pw_copy(rho1_g(1), rho1_tot_gspace)
@@ -343,12 +328,12 @@ CONTAINS
       INTEGER                                            :: beta, handle
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(pw_c1d_gs_type)                               :: drho_g, v_hartree_gspace
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_poisson_type), POINTER                     :: poisson_env
       TYPE(pw_pool_p_type), DIMENSION(:), POINTER        :: pw_pools
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_type)                                      :: drho_g, v_hartree_gspace, &
-                                                            v_hartree_rspace
+      TYPE(pw_r3d_rs_type)                               :: v_hartree_rspace
       TYPE(qs_rho_type), POINTER                         :: rho
 
       CALL timeset(routineN, handle)
@@ -365,15 +350,10 @@ CONTAINS
                       pw_pools=pw_pools)
 
       ! Create the Hartree potential grids in real and reciprocal space.
-      CALL auxbas_pw_pool%create_pw(v_hartree_gspace, &
-                                    use_data=COMPLEXDATA1D, &
-                                    in_space=RECIPROCALSPACE)
-      CALL auxbas_pw_pool%create_pw(v_hartree_rspace, &
-                                    use_data=REALDATA3D, &
-                                    in_space=REALSPACE)
+      CALL auxbas_pw_pool%create_pw(v_hartree_gspace)
+      CALL auxbas_pw_pool%create_pw(v_hartree_rspace)
       ! Create the grid for the derivative of the core potential
-      CALL auxbas_pw_pool%create_pw(drho_g, &
-                                    use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+      CALL auxbas_pw_pool%create_pw(drho_g)
 
       DO beta = 1, 3
          CALL pw_zero(v_hartree_gspace)
@@ -416,95 +396,30 @@ CONTAINS
 
       CHARACTER(LEN=default_string_length)               :: my_basis_type
       INTEGER                                            :: handle, nder
-      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index
-      LOGICAL                                            :: calculate_forces, failure, ppl_present, &
-                                                            ppnl_present, use_virial
-      REAL(KIND=dp)                                      :: eps_ppnl
-      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: deltaR
-      TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
+      LOGICAL                                            :: calculate_forces
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao
-      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_hc_pass, matrix_p_pass, &
-                                                            matrix_ppnl_1_pass
-      TYPE(dft_control_type), POINTER                    :: dft_control
-      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-         POINTER                                         :: sab_orb, sac_ae, sac_ppl, sap_ppnl
-      TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
-      TYPE(qs_force_type), DIMENSION(:), POINTER         :: force
-      TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_h, matrix_p_pass
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(qs_rho_type), POINTER                         :: rho
-      TYPE(virial_type), POINTER                         :: virial
 
       CALL timeset(routineN, handle)
 
-      failure = .FALSE.
-
-      NULLIFY (atomic_kind_set, qs_kind_set, ks_env, dft_control, particle_set, &
-               sab_orb, sac_ae, sac_ppl, sap_ppnl, virial, rho, rho_ao)
-
-      CALL get_qs_env(qs_env=qs_env, &
-                      atomic_kind_set=atomic_kind_set, &
-                      qs_kind_set=qs_kind_set, &
-                      ks_env=ks_env, &
-                      dft_control=dft_control, &
-                      particle_set=particle_set, &
-                      sab_orb=sab_orb, &
-                      sac_ae=sac_ae, &
-                      sac_ppl=sac_ppl, &
-                      sap_ppnl=sap_ppnl, &
-                      virial=virial)
+      CALL get_qs_env(qs_env=qs_env, ks_env=ks_env)
       CALL get_ks_env(ks_env=ks_env, rho=rho)
       CALL qs_rho_get(rho, rho_ao=rho_ao)
-      deltaR => dcdr_env%delta_basis_function
 
       nder = 1
       calculate_forces = .FALSE.
 
       my_basis_type = "ORB"
 
-      ! ECP/AE contribution to the core hamiltonian
-      IF (ASSOCIATED(sac_ae)) THEN
-         CPABORT("ECP/AE functionality in qs_dcdr_ao missing")
-         ! Missing feature: deltaR weighting factors of the derivatives wrt. nuclear positions
-         matrix_hc_pass(1:3, 1:1) => dcdr_env%matrix_hc(1:3)
-         matrix_p_pass(1:1, 1:1) => rho_ao(1:1)
-         CALL build_core_ae(matrix_h=matrix_hc_pass, matrix_p=matrix_p_pass, &
-                            force=force, virial=virial, calculate_forces=calculate_forces, &
-                            use_virial=use_virial, nder=nder, qs_kind_set=qs_kind_set, &
-                            atomic_kind_set=atomic_kind_set, particle_set=particle_set, &
-                            sab_orb=sab_orb, sac_ae=sac_ae, nimages=1, &
-                            cell_to_index=cell_to_index)
-      END IF
-      ! *** compute the ppl contribution to the core hamiltonian ***
-      ppl_present = ASSOCIATED(sac_ppl)
-      IF (ppl_present) THEN
-         IF (dft_control%qs_control%do_ppl_method == do_ppl_analytic) THEN
-            matrix_hc_pass(1:3, 1:1) => dcdr_env%matrix_hc(1:3)
-            matrix_p_pass(1:1, 1:1) => rho_ao(1:1)
-            CALL build_core_ppl(matrix_h=matrix_hc_pass, matrix_p=matrix_p_pass, &
-                                force=force, virial=virial, calculate_forces=calculate_forces, &
-                                use_virial=use_virial, nder=nder, qs_kind_set=qs_kind_set, &
-                                atomic_kind_set=atomic_kind_set, particle_set=particle_set, &
-                                sab_orb=sab_orb, sac_ppl=sac_ppl, basis_type=my_basis_type, &
-                                nimages=1, cell_to_index=cell_to_index, deltaR=deltaR)
-
-         END IF ! ppl_analytic
-      END IF ! ppl_present
-
-      ! *** compute the ppnl contribution to the core hamiltonian ***
-      eps_ppnl = dft_control%qs_control%eps_ppnl
-      ppnl_present = ASSOCIATED(sap_ppnl)
-      IF (ppnl_present) THEN
-         matrix_ppnl_1_pass(1:3, 1:1) => dcdr_env%matrix_ppnl_1(1:3)
-         CALL build_core_ppnl(matrix_h=matrix_ppnl_1_pass, matrix_p=matrix_p_pass, force=force, virial=virial, &
-                              calculate_forces=calculate_forces, use_virial=use_virial, nder=nder, &
-                              qs_kind_set=qs_kind_set, atomic_kind_set=atomic_kind_set, &
-                              particle_set=particle_set, sab_orb=sab_orb, sap_ppnl=sap_ppnl, &
-                              eps_ppnl=eps_ppnl, nimages=1, cell_to_index=cell_to_index, &
-                              basis_type=my_basis_type, deltaR=deltaR)
-      END IF
+      NULLIFY (matrix_h)
+      matrix_p_pass(1:1, 1:1) => rho_ao(1:1)
+      CALL core_matrices(qs_env, matrix_h, matrix_p_pass, calculate_forces, nder, &
+                         dcdr_env=dcdr_env)
 
       CALL timestop(handle)
+
    END SUBROUTINE core_dR
 
 ! **************************************************************************************************
@@ -521,14 +436,14 @@ CONTAINS
 
       INTEGER                                            :: handle, idir, ispin
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao
+      TYPE(pw_c1d_gs_type)                               :: drho_g_total, v_hartree_gspace
+      TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: drho_g
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_poisson_type), POINTER                     :: poisson_env
       TYPE(pw_pool_p_type), DIMENSION(:), POINTER        :: pw_pools
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_type)                                      :: drho_g_total, drho_r_total, &
-                                                            v_hartree_gspace, v_hartree_rspace
-      TYPE(pw_type), DIMENSION(:), POINTER               :: drho_g, drho_r, dtau_r, rho_r, v_xc, &
-                                                            v_xc_tau
+      TYPE(pw_r3d_rs_type)                               :: drho_r_total, v_hartree_rspace
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: drho_r, dtau_r, rho_r, v_xc, v_xc_tau
       TYPE(qs_rho_type), POINTER                         :: rho
       TYPE(section_vals_type), POINTER                   :: input, xc_section
       TYPE(xc_derivative_set_type)                       :: my_deriv_set
@@ -550,23 +465,15 @@ CONTAINS
 
       CALL pw_env_get(pw_env, auxbas_pw_pool=auxbas_pw_pool, &
                       pw_pools=pw_pools, poisson_env=poisson_env)
-      CALL auxbas_pw_pool%create_pw(v_hartree_gspace, &
-                                    use_data=COMPLEXDATA1D, &
-                                    in_space=RECIPROCALSPACE)
-      CALL auxbas_pw_pool%create_pw(v_hartree_rspace, &
-                                    use_data=REALDATA3D, &
-                                    in_space=REALSPACE)
+      CALL auxbas_pw_pool%create_pw(v_hartree_gspace)
+      CALL auxbas_pw_pool%create_pw(v_hartree_rspace)
 
       DO ispin = 1, dcdr_env%nspins
-         CALL auxbas_pw_pool%create_pw(drho_r(ispin), &
-                                       use_data=REALDATA3D, in_space=REALSPACE)
-         CALL auxbas_pw_pool%create_pw(drho_g(ispin), &
-                                       use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+         CALL auxbas_pw_pool%create_pw(drho_r(ispin))
+         CALL auxbas_pw_pool%create_pw(drho_g(ispin))
       END DO
-      CALL auxbas_pw_pool%create_pw(drho_g_total, &
-                                    use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
-      CALL auxbas_pw_pool%create_pw(drho_r_total, &
-                                    use_data=REALDATA3D, in_space=REALSPACE)
+      CALL auxbas_pw_pool%create_pw(drho_g_total)
+      CALL auxbas_pw_pool%create_pw(drho_r_total)
 
       DO idir = 1, 3
          CALL pw_zero(v_hartree_gspace)
@@ -660,8 +567,8 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_p
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_type), DIMENSION(:), POINTER               :: v_hxc_r, v_tau_rspace
-      TYPE(pw_type), POINTER                             :: v_hartree_r
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: v_hxc_r, v_tau_rspace
+      TYPE(pw_r3d_rs_type), POINTER                      :: v_hartree_r
       TYPE(qs_energy_type), POINTER                      :: energy
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(qs_rho_type), POINTER                         :: rho_struct

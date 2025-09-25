@@ -6,8 +6,10 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-gcc_ver="13.2.0"
-gcc_sha256="8cb4be3796651976f94b9356fa08d833524f62420d6292c5033a9a26af315078"
+gcc_ver="14.3.0"
+gcc_sha256="ace8b8b0dbfe6abfc22f821cb093e195aa5498b7ccf7cd23e4424b9f14afed22"
+#gcc_ver="15.1.0"
+#gcc_sha256="51b9919ea69c980d7a381db95d4be27edf73b21254eb13d752a08003b4d013b1"
 
 source "${SCRIPT_DIR}"/common_vars.sh
 source "${SCRIPT_DIR}"/tool_kit.sh
@@ -58,7 +60,7 @@ case "${with_gcc}" in
       # TODO: Unfortunately, we can not simply use --disable-shared, because
       # it would break OpenBLAS build and probably others too.
       COMMON_FLAGS="-O2 -fPIC -fno-omit-frame-pointer -fopenmp -g"
-      CFLAGS="${COMMON_FLAGS} -std=gnu99"
+      CFLAGS="${COMMON_FLAGS}"
       CXXFLAGS="${CFLAGS}"
       FCFLAGS="${COMMON_FLAGS} -fbacktrace"
       ${GCCROOT}/configure --prefix="${pkg_install_dir}" \
@@ -122,6 +124,7 @@ case "${with_gcc}" in
     check_command gcc "gcc" && CC="$(command -v gcc)" || exit 1
     check_command g++ "gcc" && CXX="$(command -v g++)" || exit 1
     check_command gfortran "gcc" && FC="$(command -v gfortran)" || exit 1
+    echo "GCC compiler version $(gcc -dumpfullversion) found"
     F90="${FC}"
     F77="${FC}"
     add_include_from_paths -p GCC_CFLAGS "c++" ${INCLUDE_PATHS}

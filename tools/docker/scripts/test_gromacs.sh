@@ -5,39 +5,33 @@
 # shellcheck disable=SC1091
 source /opt/cp2k-toolchain/install/setup
 
-cd /opt/cp2k
-echo -n "Compiling libcp2k... "
-if make -j VERSION=sdbg libcp2k &> cp2k_make.out; then
-  echo "done."
-else
-  echo -e "failed.\n\n"
-  tail -n 100 cp2k_make.out
-  mkdir -p /workspace/artifacts/
-  cp cp2k_make.out /workspace/artifacts/
-  echo -e "\nSummary: Compiling libcp2k failed."
-  echo -e "Status: FAILED\n"
-  exit 0
-fi
+cd build
+ninja install &> install.log
 
-echo -e "\n========== Building Gromacs =========="
-echo -n "Cloning Gromacs repository... "
-git clone --quiet --depth=1 --single-branch -b main https://gitlab.com/gromacs/gromacs.git /opt/gromacs
-echo "done."
+echo -e "\n========== Installing Dependencies =========="
+apt-get update -qq
+apt-get install -qq --no-install-recommends git
+rm -rf /var/lib/apt/lists/*
+
+echo -e "\n========== Building Gromacs v2025.2 =========="
+echo -n "Cloning Gromacs repository ... "
+git clone --quiet --depth=1 --single-branch -b v2025.2 https://gitlab.com/gromacs/gromacs.git /opt/gromacs
+echo "done"
 cd /opt/gromacs/
 GROMACS_REVISION=$(git rev-parse --short HEAD)
 mkdir build
 cd build
 
-echo -n "Configuring Gromacs... "
+echo -n "Configuring Gromacs ... "
 if cmake .. \
   -DGMX_BUILD_OWN_FFTW=ON \
   -DBUILD_SHARED_LIBS=OFF \
   -DGMX_INSTALL_NBLIB_API=OFF \
   -DGMXAPI=OFF \
   -DGMX_CP2K=ON \
-  -DCP2K_DIR="/opt/cp2k/lib/local/sdbg/" \
+  -DCP2K_DIR="/opt/cp2k/lib/" \
   &> gromacs_cmake.out; then
-  echo "done."
+  echo "done"
 else
   echo -e "failed.\n\n"
   tail -n 100 gromacs_cmake.out

@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -15,7 +15,6 @@ MODULE motion_utils
    USE cell_types,                      ONLY: cell_type
    USE cp2k_info,                       ONLY: compile_revision,&
                                               cp2k_version,&
-                                              r_datx,&
                                               r_host_name,&
                                               r_user_name
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
@@ -40,7 +39,9 @@ MODULE motion_utils
    USE kinds,                           ONLY: default_string_length,&
                                               dp,&
                                               sp
-   USE machine,                         ONLY: m_flush
+   USE machine,                         ONLY: m_flush,&
+                                              m_timestamp,&
+                                              timestamp_length
    USE mathlib,                         ONLY: diamat_all
    USE particle_list_types,             ONLY: particle_list_type
    USE particle_methods,                ONLY: write_particle_coordinates
@@ -53,7 +54,7 @@ MODULE motion_utils
 
    PRIVATE
 
-   PUBLIC :: write_trajectory, write_stress_tensor, write_simulation_cell, &
+   PUBLIC :: write_trajectory, write_stress_tensor_to_file, write_simulation_cell, &
              get_output_format, rot_ana
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'motion_utils'
@@ -210,12 +211,12 @@ CONTAINS
          ! Normalize Rotations and count the number of degree of freedom
          lrot = 1
          DO i = 1, 3
-            norm = SQRT(DOT_PRODUCT(Rot(:, i), Rot(:, i)))
-            IF (norm <= SQRT(thrs_motion)) THEN
+            norm = DOT_PRODUCT(Rot(:, i), Rot(:, i))
+            IF (norm <= thrs_motion) THEN
                lrot(i) = 0
                CYCLE
             END IF
-            Rot(:, i) = Rot(:, i)/norm
+            Rot(:, i) = Rot(:, i)/SQRT(norm)
             ! Clean Rotational modes for spurious/numerical contamination
             IF (i < 3) THEN
                DO j = 1, i
@@ -290,10 +291,11 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'write_trajectory'
 
       CHARACTER(LEN=4)                                   :: id_dcd
+      CHARACTER(LEN=80), DIMENSION(2)                    :: remark
       CHARACTER(LEN=default_string_length)               :: id_label, id_wpc, my_act, my_ext, &
                                                             my_form, my_middle, my_pk_name, &
-                                                            my_pos, remark1, remark2, section_ref, &
-                                                            title, unit_str
+                                                            my_pos, section_ref, title, unit_str
+      CHARACTER(LEN=timestamp_length)                    :: timestamp
       INTEGER                                            :: handle, i, ii, iskip, nat, outformat, &
                                                             traj_unit
       INTEGER, POINTER                                   :: force_mixing_indices(:), &
@@ -380,12 +382,15 @@ CONTAINS
                !Lets write the header for the coordinate dcd
                section_ref = "MOTION%PRINT%"//TRIM(my_pk_name)//"%EACH%"//TRIM(id_label)
                iskip = section_get_ival(root_section, TRIM(section_ref))
+               i = INDEX(cp2k_version, "(") - 1
+               IF (i == -1) i = LEN(cp2k_version)
+               CALL m_timestamp(timestamp)
                WRITE (UNIT=traj_unit) id_dcd, 0, it, iskip, 0, 0, 0, 0, 0, 0, REAL(dtime, KIND=sp), &
                   1, 0, 0, 0, 0, 0, 0, 0, 0, 24
-               remark1 = "REMARK "//id_dcd//" DCD file created by "//TRIM(cp2k_version)// &
-                         " (revision "//TRIM(compile_revision)//")"
-               remark2 = "REMARK "//TRIM(r_user_name)//"@"//TRIM(r_host_name)
-               WRITE (UNIT=traj_unit) 2, remark1, remark2
+               remark(1) = "REMARK "//id_dcd//" DCD file created by "//TRIM(cp2k_version(:i))// &
+                           " (revision "//TRIM(compile_revision)//")"
+               remark(2) = "REMARK "//TRIM(r_user_name)//"@"//TRIM(r_host_name)//" "//timestamp(:19)
+               WRITE (UNIT=traj_unit) SIZE(remark), remark(:)
                WRITE (UNIT=traj_unit) nat
                CALL m_flush(traj_unit)
             END IF
@@ -416,13 +421,14 @@ CONTAINS
                   CPABORT("Either only CHARGE_OCCUP, CHARGE_BETA, or CHARGE_EXTENDED can be selected, ")
             END IF
             IF (new_file) THEN
+               CALL m_timestamp(timestamp)
                ! COLUMNS        DATA TYPE       FIELD          DEFINITION
                !  1 -  6        Record name     "TITLE "
                !  9 - 10        Continuation    continuation   Allows concatenation
                ! 11 - 70        String          title          Title of the experiment
                WRITE (UNIT=traj_unit, FMT="(A6,T11,A)") &
                   "TITLE ", "PDB file created by "//TRIM(cp2k_version)//" (revision "//TRIM(compile_revision)//")", &
-                  "AUTHOR", TRIM(r_user_name)//"@"//TRIM(r_host_name)//" "//r_datx(1:19)
+                  "AUTHOR", TRIM(r_user_name)//"@"//TRIM(r_host_name)//" "//timestamp(:19)
             END IF
             my_extended_xmol_title = .FALSE.
             IF (PRESENT(extended_xmol_title)) my_extended_xmol_title = extended_xmol_title
@@ -522,8 +528,7 @@ CONTAINS
 !> \author  Teodoro Laino [tlaino] - University of Zurich
 !> \version 1.0
 ! **************************************************************************************************
-   SUBROUTINE write_stress_tensor(virial, cell, motion_section, itimes, time, pos, &
-                                  act)
+   SUBROUTINE write_stress_tensor_to_file(virial, cell, motion_section, itimes, time, pos, act)
 
       TYPE(virial_type), POINTER                         :: virial
       TYPE(cell_type), POINTER                           :: cell
@@ -581,7 +586,7 @@ CONTAINS
                                            "PRINT%STRESS")
       END IF
 
-   END SUBROUTINE write_stress_tensor
+   END SUBROUTINE write_stress_tensor_to_file
 
 ! **************************************************************************************************
 !> \brief   Prints the Simulation Cell

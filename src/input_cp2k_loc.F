@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -251,7 +251,7 @@ CONTAINS
                           "This keyword has to be present if unoccupied states should be localized. "// &
                           "This keyword can be repeated several times "// &
                           "(useful if you have to specify many indexes).", &
-                          usage="LIST 1 2", &
+                          usage="LIST_UNOCCUPIED 1 2", &
                           n_var=-1, type_of_var=integer_t, repeats=.TRUE.)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
@@ -280,7 +280,7 @@ CONTAINS
          description="Select the orbitals to be localized within the given energy range."// &
          " This type of selection cannot be added on top of the selection through a LIST. It reads to reals that are"// &
          " lower and higher boundaries of the energy range.", &
-         usage=" ENERGY_RANGE lower_bound {real}, higher_bound {real}", &
+         usage="ENERGY_RANGE lower_bound {real}, higher_bound {real}", &
          repeats=.FALSE., &
          n_var=2, default_r_vals=(/0._dp, 0._dp/), unit_str='eV', &
          type_of_var=real_t)
@@ -315,7 +315,7 @@ CONTAINS
                                        print_level=debug_print_level + 1, filename="__STD_OUT__")
       CALL keyword_create(keyword, __LOCATION__, name="ORDER", &
                           description="Maximum order of mulitpoles to be calculated.", &
-                          usage=" ORDER {integer}", default_i_val=2, type_of_var=integer_t)
+                          usage="ORDER {integer}", default_i_val=2, type_of_var=integer_t)
       CALL section_add_keyword(subsection, keyword)
       CALL keyword_release(keyword)
       !
@@ -454,7 +454,7 @@ CONTAINS
 
       CALL keyword_create( &
          keyword, __LOCATION__, name="CUBE_EVAL_RANGE", &
-         description="only write cubes if the eigenvalues of the corresponding molecular states lie in the given interval. "// &
+         description="only write cubes if the energies of the corresponding molecular states lie in the given interval. "// &
          "Default is all states.", &
          usage="CUBE_EVAL_RANGE -1.0 1.0", unit_str="hartree", n_var=2, type_of_var=real_t)
       CALL section_add_keyword(print_key, keyword)
@@ -499,12 +499,12 @@ CONTAINS
       CPASSERT(.NOT. ASSOCIATED(print_key))
       NULLIFY (print_key2, keyword)
       CALL cp_print_key_section_create(print_key, __LOCATION__, "WANNIER_STATES", &
-                                       description="Controls printing of molecular states ", &
+                                       description="Controls printing of Wannier states ", &
                                        print_level=high_print_level, filename=" ")
 
       CALL keyword_create( &
          keyword, __LOCATION__, name="CUBE_EVAL_RANGE", &
-         description="only write cubes if the eigenvalues of the corresponding molecular states lie in the given interval. "// &
+         description="only write cubes if the energies of the corresponding molecular states lie in the given interval. "// &
          "Default is all states.", &
          usage="CUBE_EVAL_RANGE -1.0 1.0", unit_str="hartree", n_var=2, type_of_var=real_t)
       CALL section_add_keyword(print_key, keyword)
@@ -519,6 +519,12 @@ CONTAINS
                           "First integer specifies the molecule, second integer specifies the state.", &
                           usage="MARK_STATES integer integer", &
                           n_var=2, default_i_vals=(/-1, -1/), type_of_var=integer_t, repeats=.TRUE.)
+      CALL section_add_keyword(print_key, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="CARTESIAN", &
+                          description="Print the Wannier states in the Cartesian basis instead of the default spherical basis.", &
+                          default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
       CALL section_add_keyword(print_key, keyword)
       CALL keyword_release(keyword)
 

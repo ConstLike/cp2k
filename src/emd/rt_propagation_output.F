@@ -1,6 +1,6 @@
 !--------------------------------------------------------------------------------------------------!
 !   CP2K: A general program to perform molecular dynamics simulations                              !
-!   Copyright 2000-2024 CP2K developers group <https://cp2k.org>                                   !
+!   Copyright 2000-2025 CP2K developers group <https://cp2k.org>                                   !
 !                                                                                                  !
 !   SPDX-License-Identifier: GPL-2.0-or-later                                                      !
 !--------------------------------------------------------------------------------------------------!
@@ -13,6 +13,16 @@
 MODULE rt_propagation_output
    USE atomic_kind_types,               ONLY: atomic_kind_type
    USE cp_control_types,                ONLY: dft_control_type
+   USE cp_dbcsr_api,                    ONLY: &
+        dbcsr_add, dbcsr_binary_write, dbcsr_convert_offsets_to_sizes, dbcsr_copy, dbcsr_create, &
+        dbcsr_deallocate_matrix, dbcsr_desymmetrize, dbcsr_distribution_type, dbcsr_filter, &
+        dbcsr_get_info, dbcsr_get_occupation, dbcsr_init_p, dbcsr_iterator_blocks_left, &
+        dbcsr_iterator_next_block, dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, &
+        dbcsr_multiply, dbcsr_p_type, dbcsr_scale, dbcsr_set, dbcsr_type, &
+        dbcsr_type_antisymmetric, dbcsr_type_no_symmetry
+   USE cp_dbcsr_contrib,                ONLY: dbcsr_checksum,&
+                                              dbcsr_trace
+   USE cp_dbcsr_cp2k_link,              ONLY: cp_dbcsr_alloc_block_from_nbl
    USE cp_dbcsr_operations,             ONLY: cp_dbcsr_sm_fm_multiply,&
                                               dbcsr_allocate_matrix_set,&
                                               dbcsr_deallocate_matrix_set
@@ -29,19 +39,14 @@ MODULE rt_propagation_output
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
                                               cp_logger_get_default_io_unit,&
                                               cp_logger_get_default_unit_nr,&
-                                              cp_logger_type
+                                              cp_logger_type,&
+                                              cp_to_string
    USE cp_output_handling,              ONLY: cp_iter_string,&
                                               cp_p_file,&
                                               cp_print_key_finished_output,&
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
    USE cp_realspace_grid_cube,          ONLY: cp_pw_to_cube
-   USE dbcsr_api,                       ONLY: &
-        dbcsr_add, dbcsr_binary_write, dbcsr_checksum, dbcsr_copy, dbcsr_create, &
-        dbcsr_deallocate_matrix, dbcsr_desymmetrize, dbcsr_filter, dbcsr_get_info, &
-        dbcsr_get_occupation, dbcsr_init_p, dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, &
-        dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_p_type, dbcsr_scale, &
-        dbcsr_set, dbcsr_type
    USE efield_utils,                    ONLY: make_field
    USE input_constants,                 ONLY: ehrenfest,&
                                               real_time_propagation
@@ -55,16 +60,16 @@ MODULE rt_propagation_output
    USE message_passing,                 ONLY: mp_comm_type
    USE parallel_gemm_api,               ONLY: parallel_gemm
    USE particle_list_types,             ONLY: particle_list_type
+   USE particle_methods,                ONLY: get_particle_set
    USE particle_types,                  ONLY: particle_type
+   USE physcon,                         ONLY: femtoseconds
    USE pw_env_types,                    ONLY: pw_env_get,&
                                               pw_env_type
    USE pw_methods,                      ONLY: pw_zero
    USE pw_pool_types,                   ONLY: pw_pool_type
-   USE pw_types,                        ONLY: COMPLEXDATA1D,&
-                                              REALDATA3D,&
-                                              REALSPACE,&
-                                              RECIPROCALSPACE,&
-                                              pw_type
+   USE pw_types,                        ONLY: pw_c1d_gs_type,&
+                                              pw_r3d_rs_type
+   USE qs_energy_types,                 ONLY: qs_energy_type
    USE qs_environment_types,            ONLY: get_qs_env,&
                                               qs_environment_type
    USE qs_kind_types,                   ONLY: get_qs_kind_set,&
@@ -72,6 +77,8 @@ MODULE rt_propagation_output
    USE qs_linres_current,               ONLY: calculate_jrho_resp
    USE qs_linres_types,                 ONLY: current_env_type
    USE qs_mo_io,                        ONLY: write_rt_mos_to_restart
+   USE qs_neighbor_list_types,          ONLY: neighbor_list_set_p_type
+   USE qs_operators_ao,                 ONLY: build_lin_mom_matrix
    USE qs_rho_types,                    ONLY: qs_rho_get,&
                                               qs_rho_type
    USE qs_scf_post_gpw,                 ONLY: qs_scf_post_moments,&
@@ -84,8 +91,7 @@ MODULE rt_propagation_output
    USE rt_projection_mo_utils,          ONLY: compute_and_write_proj_mo
    USE rt_propagation_types,            ONLY: get_rtp,&
                                               rt_prop_type
-   USE rt_propagation_utils,            ONLY: calculate_P_imaginary,&
-                                              write_rtp_mo_cubes,&
+   USE rt_propagation_utils,            ONLY: write_rtp_mo_cubes,&
                                               write_rtp_mos_to_output_unit
 #include "../base/base_uses.f90"
 
@@ -114,15 +120,23 @@ CONTAINS
       INTEGER, INTENT(in)                                :: run_type
       REAL(dp), INTENT(in), OPTIONAL                     :: delta_iter, used_time
 
-      INTEGER                                            :: n_electrons, n_proj, nspin, output_unit, &
-                                                            spin
-      REAL(dp)                                           :: orthonormality, tot_rho_r
+      INTEGER                                            :: i, n_electrons, n_proj, natom, nspin, &
+                                                            output_unit, spin, unit_nr
+      INTEGER, ALLOCATABLE, DIMENSION(:)                 :: first_sgf, last_sgf
+      INTEGER, DIMENSION(:), POINTER                     :: row_blk_sizes
+      LOGICAL                                            :: new_file
+      REAL(dp)                                           :: orthonormality, strace, tot_rho_r, trace
       REAL(KIND=dp), DIMENSION(:), POINTER               :: qs_tot_rho_r
+      REAL(KIND=dp), DIMENSION(:, :), POINTER            :: j_int
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cp_fm_type), DIMENSION(:), POINTER            :: mos_new
       TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s, P_im, rho_new
+      TYPE(dbcsr_distribution_type), POINTER             :: dbcsr_dist
+      TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_s, P_im, p_xyz, rho_new
+      TYPE(dbcsr_type), POINTER                          :: tmp_ao
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(neighbor_list_set_p_type), DIMENSION(:), &
+         POINTER                                         :: sab_all, sab_orb
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(qs_kind_type), DIMENSION(:), POINTER          :: qs_kind_set
       TYPE(qs_rho_type), POINTER                         :: rho
@@ -140,7 +154,8 @@ CONTAINS
                       particle_set=particle_set, &
                       atomic_kind_set=atomic_kind_set, &
                       qs_kind_set=qs_kind_set, &
-                      dft_control=dft_control)
+                      dft_control=dft_control, sab_all=sab_all, sab_orb=sab_orb, &
+                      dbcsr_dist=dbcsr_dist)
 
       rtp_section => section_vals_get_subs_vals(input, "DFT%REAL_TIME_PROPAGATION")
 
@@ -204,9 +219,14 @@ CONTAINS
                                               dft_section, "REAL_TIME_PROPAGATION%PRINT%FIELD"), cp_p_file)) &
             CALL print_field_applied(qs_env, dft_section)
          CALL make_moment(qs_env)
+         IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                              dft_section, "REAL_TIME_PROPAGATION%PRINT%E_CONSTITUENTS"), cp_p_file)) THEN
+            CALL print_rtp_energy_components(qs_env, dft_section)
+         END IF
          IF (.NOT. dft_control%qs_control%dftb) THEN
             CALL write_available_results(qs_env=qs_env, rtp=rtp)
          END IF
+
          IF (rtp%linear_scaling) THEN
             CALL get_rtp(rtp=rtp, rho_new=rho_new)
             IF (BTEST(cp_print_key_should_output(logger%iter_info, &
@@ -228,22 +248,95 @@ CONTAINS
             END IF
          ELSE
             CALL get_rtp(rtp=rtp, mos_new=mos_new)
-            IF (.NOT. dft_control%qs_control%dftb) THEN
-               IF (BTEST(cp_print_key_should_output(logger%iter_info, &
-                                                    dft_section, "REAL_TIME_PROPAGATION%PRINT%CURRENT"), cp_p_file)) THEN
-                  NULLIFY (P_im)
+            IF (.NOT. dft_control%qs_control%dftb .AND. .NOT. dft_control%qs_control%xtb) THEN
+               IF (rtp%track_imag_density) THEN
+                  NULLIFY (P_im, p_xyz)
+                  CALL dbcsr_allocate_matrix_set(p_xyz, 3)
+
+! Linear momentum operator
+! prepare for allocation
+                  natom = SIZE(particle_set, 1)
+                  ALLOCATE (first_sgf(natom))
+                  ALLOCATE (last_sgf(natom))
+                  CALL get_particle_set(particle_set, qs_kind_set, &
+                                        first_sgf=first_sgf, &
+                                        last_sgf=last_sgf)
+                  ALLOCATE (row_blk_sizes(natom))
+                  CALL dbcsr_convert_offsets_to_sizes(first_sgf, row_blk_sizes, last_sgf)
+                  DEALLOCATE (first_sgf)
+                  DEALLOCATE (last_sgf)
+
+                  ALLOCATE (p_xyz(1)%matrix)
+                  CALL dbcsr_create(matrix=p_xyz(1)%matrix, &
+                                    name="p_xyz", &
+                                    dist=dbcsr_dist, matrix_type=dbcsr_type_antisymmetric, &
+                                    row_blk_size=row_blk_sizes, col_blk_size=row_blk_sizes, &
+                                    mutable_work=.TRUE.)
+                  CALL cp_dbcsr_alloc_block_from_nbl(p_xyz(1)%matrix, sab_orb)
+                  CALL dbcsr_set(p_xyz(1)%matrix, 0.0_dp)
+                  DO i = 2, 3
+                     ALLOCATE (p_xyz(i)%matrix)
+                     CALL dbcsr_copy(p_xyz(i)%matrix, p_xyz(1)%matrix, "p_xyz-"//TRIM(ADJUSTL(cp_to_string(i))))
+                     CALL dbcsr_set(p_xyz(i)%matrix, 0.0_dp)
+                  END DO
+                  CALL build_lin_mom_matrix(qs_env, p_xyz)
+                  DEALLOCATE (row_blk_sizes)
+
                   nspin = SIZE(mos_new)/2
-                  CALL dbcsr_allocate_matrix_set(P_im, nspin)
-                  DO spin = 1, nspin
-                     CALL dbcsr_init_p(P_im(spin)%matrix)
-                     CALL dbcsr_create(P_im(spin)%matrix, template=matrix_s(1)%matrix, matrix_type="N")
+                  CALL qs_rho_get(rho, rho_ao_im=P_im)
+                  ALLOCATE (j_int(nspin, 3))
+                  j_int = 0.0_dp
+
+                  NULLIFY (tmp_ao)
+                  CALL dbcsr_init_p(tmp_ao)
+                  CALL dbcsr_create(tmp_ao, template=matrix_s(1)%matrix, matrix_type=dbcsr_type_no_symmetry, name="tmp")
+                  CALL cp_dbcsr_alloc_block_from_nbl(tmp_ao, sab_all)
+                  CALL dbcsr_set(tmp_ao, 0.0_dp)
+
+                  DO i = 1, 3
+                     strace = 0.0_dp
+                     DO spin = 1, nspin
+                        CALL dbcsr_set(tmp_ao, 0.0_dp)
+                        CALL dbcsr_multiply("T", "N", 1.0_dp, P_im(spin)%matrix, p_xyz(i)%matrix, &
+                                            0.0_dp, tmp_ao)
+                        CALL dbcsr_trace(tmp_ao, trace)
+                        strace = strace + trace
+                        j_int(spin, i) = strace
+                     END DO
                   END DO
-                  CALL calculate_P_imaginary(qs_env, rtp, P_im)
-                  DO spin = 1, nspin
-                     CALL rt_current(qs_env, P_im(spin)%matrix, dft_section, spin, nspin)
-                  END DO
-                  CALL dbcsr_deallocate_matrix_set(P_im)
+!  The term -(1/V)\int{(1/2)\sum_n f_n [\psi_n^*(t)(A(t))\psi_n(t) +cc]} missing. Is it just A(t)*number of electrons?
+
+                  IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                                       dft_section, "REAL_TIME_PROPAGATION%PRINT%CURRENT_INT"), cp_p_file)) THEN
+
+                     output_unit = cp_logger_get_default_io_unit(logger)
+                     unit_nr = cp_print_key_unit_nr(logger, dft_section, &
+                                                  "REAL_TIME_PROPAGATION%PRINT%CURRENT_INT", extension=".dat", is_new_file=new_file)
+                     IF (output_unit > 0) THEN
+                        IF (nspin == 2) THEN
+                           WRITE (UNIT=unit_nr, FMT="(I10,F16.6,6(F16.8,1X))") qs_env%sim_step, qs_env%sim_time*femtoseconds, &
+                              j_int(1, 1:3), j_int(2, 1:3)
+                        ELSE
+                           WRITE (UNIT=unit_nr, FMT="(I10,F16.6,3(F16.8,1X))") qs_env%sim_step, qs_env%sim_time*femtoseconds, &
+                              j_int(1, 1:3)
+                        END IF
+                     END IF
+                     CALL cp_print_key_finished_output(unit_nr, logger, dft_section, &
+                                                       "REAL_TIME_PROPAGATION%PRINT%CURRENT_INT")
+                  END IF
+                  DEALLOCATE (j_int)
+
+                  IF (BTEST(cp_print_key_should_output(logger%iter_info, &
+                                                       dft_section, "REAL_TIME_PROPAGATION%PRINT%CURRENT"), cp_p_file)) THEN
+                     DO spin = 1, nspin
+                        CALL rt_current(qs_env, P_im(spin)%matrix, dft_section, spin, nspin)
+                     END DO
+                  END IF
+                  CALL dbcsr_deallocate_matrix(tmp_ao)
+                  CALL dbcsr_deallocate_matrix_set(p_xyz)
                END IF
+
+! projection of molecular orbitals
                IF (dft_control%rtp_control%is_proj_mo) THEN
                   DO n_proj = 1, SIZE(dft_control%rtp_control%proj_mo_list)
                      CALL compute_and_write_proj_mo(qs_env, mos_new, &
@@ -470,10 +563,9 @@ CONTAINS
       CHARACTER(len=*), PARAMETER :: routineN = 'rt_convergence_density'
       REAL(KIND=dp), PARAMETER                           :: one = 1.0_dp, zero = 0.0_dp
 
-      INTEGER                                            :: col_atom, group_handle, handle, i, &
-                                                            ispin, row_atom
+      INTEGER                                            :: col_atom, handle, i, ispin, row_atom
       REAL(dp)                                           :: alpha, max_alpha
-      REAL(dp), DIMENSION(:), POINTER                    :: block_values
+      REAL(dp), DIMENSION(:, :), POINTER                 :: block_values
       TYPE(dbcsr_iterator_type)                          :: iter
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_new
       TYPE(dbcsr_type), POINTER                          :: tmp
@@ -514,8 +606,7 @@ CONTAINS
          END DO
          CALL dbcsr_iterator_stop(iter)
       END DO
-      CALL dbcsr_get_info(delta_P(1)%matrix, group=group_handle)
-      CALL group%set_handle(group_handle)
+      CALL dbcsr_get_info(delta_P(1)%matrix, group=group)
       CALL group%max(max_alpha)
       delta_eps = SQRT(max_alpha)
       CALL dbcsr_deallocate_matrix(tmp)
@@ -698,9 +789,10 @@ CONTAINS
       TYPE(current_env_type)                             :: current_env
       TYPE(dbcsr_type), POINTER                          :: tmp, zero
       TYPE(particle_list_type), POINTER                  :: particles
+      TYPE(pw_c1d_gs_type)                               :: gs
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_type)                                      :: gs, rs
+      TYPE(pw_r3d_rs_type)                               :: rs
       TYPE(qs_subsys_type), POINTER                      :: subsys
 
       CALL timeset(routineN, handle)
@@ -722,8 +814,8 @@ CONTAINS
       END IF
       current_env%gauge = -1
       current_env%gauge_init = .FALSE.
-      CALL auxbas_pw_pool%create_pw(rs, use_data=REALDATA3D, in_space=REALSPACE)
-      CALL auxbas_pw_pool%create_pw(gs, use_data=COMPLEXDATA1D, in_space=RECIPROCALSPACE)
+      CALL auxbas_pw_pool%create_pw(rs)
+      CALL auxbas_pw_pool%create_pw(gs)
 
       NULLIFY (stride)
       ALLOCATE (stride(3))
@@ -822,54 +914,127 @@ CONTAINS
 
       CHARACTER(LEN=3), DIMENSION(3)                     :: rlab
       CHARACTER(LEN=default_path_length)                 :: filename
-      INTEGER                                            :: i, output_unit, unit_nr
-      REAL(kind=dp)                                      :: field(3), to_write(3)
+      INTEGER                                            :: i, i_step, output_unit, unit_nr
+      LOGICAL                                            :: new_file
+      REAL(kind=dp)                                      :: field(3)
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(rt_prop_type), POINTER                        :: rtp
 
       NULLIFY (dft_control)
 
       logger => cp_get_default_logger()
       output_unit = cp_logger_get_default_io_unit(logger)
 
-      CALL get_qs_env(qs_env, dft_control=dft_control)
+      CALL get_qs_env(qs_env, dft_control=dft_control, rtp=rtp)
+
+      i_step = rtp%istep
 
       unit_nr = cp_print_key_unit_nr(logger, dft_section, &
-                                     "REAL_TIME_PROPAGATION%PRINT%FIELD", extension=".dat")
+                                     "REAL_TIME_PROPAGATION%PRINT%FIELD", extension=".dat", is_new_file=new_file)
 
       IF (output_unit > 0) THEN
+         rlab = [CHARACTER(LEN=3) :: "X", "Y", "Z"]
          IF (unit_nr /= output_unit) THEN
             INQUIRE (UNIT=unit_nr, NAME=filename)
             WRITE (UNIT=output_unit, FMT="(/,T2,A,2(/,T3,A),/)") &
                "FIELD", "The field applied is written to the file:", &
                TRIM(filename)
-            WRITE (UNIT=unit_nr, FMT="(/,(T2,A,T40,I6))") &
-               "Real time propagation step:", qs_env%sim_step
          ELSE
-            WRITE (UNIT=output_unit, FMT="(/,T2,A)") "FIELD APPLIED"
+            WRITE (UNIT=output_unit, FMT="(/,T2,A)") "FIELD APPLIED [a.u.]"
+            WRITE (UNIT=output_unit, FMT="(T5,3(A,A,E16.8,1X))") &
+               (TRIM(rlab(i)), "=", dft_control%rtp_control%field(i), i=1, 3)
          END IF
 
-         rlab = [CHARACTER(LEN=3) :: "X", "Y", "Z"]
+         IF (new_file) THEN
+            IF (dft_control%apply_efield_field) THEN
+               WRITE (UNIT=unit_nr, FMT='("#",5X,A,8X,A,3(6X,A))') "Step Nr.", "Time[fs]", " Field X", "   Field Y", "   Field Z"
+            ELSE IF (dft_control%apply_vector_potential) THEN
+               WRITE (UNIT=unit_nr, FMT='("#",5X,A,8X,A,6(6X,A))') "Step Nr.", "Time[fs]", " Field X", "   Field Y", "   Field Z", &
+                  "  Vec. Pot. X", "  Vec. Pot. Y", "    Vec. Pot. Z"
+            END IF
+         END IF
 
+         field = 0.0_dp
          IF (dft_control%apply_efield_field) THEN
-            WRITE (unit_nr, "(T3,A)") "Electric Field (LG) in atomic units:"
             CALL make_field(dft_control, field, qs_env%sim_step, qs_env%sim_time)
-            to_write = field
+            WRITE (UNIT=unit_nr, FMT="(I10,F16.6,3(F16.8,1X))") qs_env%sim_step, qs_env%sim_time*femtoseconds, &
+               field(1), field(2), field(3)
+!            DO i=1,3
+!               IF (ABS(field(i))< 10E-10) field(i) = 0.0_dp
+!            END IF
          ELSE IF (dft_control%apply_vector_potential) THEN
-            WRITE (unit_nr, "(T3,A)") "Vector potential (VG) in atomic units:"
-            to_write = dft_control%rtp_control%vec_pot
-         ELSE
-            WRITE (unit_nr, "(T3,A)") "No electric field applied"
-            to_write = 0._dp
+            WRITE (UNIT=unit_nr, FMT="(I10,F16.6,6(F16.8,1X))") qs_env%sim_step, qs_env%sim_time*femtoseconds, &
+               dft_control%rtp_control%field(1), dft_control%rtp_control%field(2), dft_control%rtp_control%field(3), &
+               dft_control%rtp_control%vec_pot(1), dft_control%rtp_control%vec_pot(2), dft_control%rtp_control%vec_pot(3)
          END IF
 
-         WRITE (unit_nr, "(T5,3(A,A,E16.8,1X))") &
-            (TRIM(rlab(i)), "=", to_write(i), i=1, 3)
       END IF
 
       CALL cp_print_key_finished_output(unit_nr, logger, dft_section, &
                                         "REAL_TIME_PROPAGATION%PRINT%FIELD")
 
    END SUBROUTINE print_field_applied
+
+! **************************************************************************************************
+!> \brief Print the components of the total energy used in an RTP calculation
+!> \param qs_env ...
+!> \param dft_section ...
+!> \par History
+!>      2024-02  Created [ANB]
+! **************************************************************************************************
+   SUBROUTINE print_rtp_energy_components(qs_env, dft_section)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(section_vals_type), POINTER                   :: dft_section
+
+      CHARACTER(LEN=default_path_length)                 :: filename
+      INTEGER                                            :: i_step, output_unit, unit_nr
+      LOGICAL                                            :: new_file
+      TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(qs_energy_type), POINTER                      :: energy
+      TYPE(rt_prop_type), POINTER                        :: rtp
+
+      NULLIFY (dft_control, energy, rtp)
+
+      logger => cp_get_default_logger()
+      output_unit = cp_logger_get_default_io_unit(logger)
+
+      CALL get_qs_env(qs_env, dft_control=dft_control, rtp=rtp, energy=energy)
+      i_step = rtp%istep
+
+      unit_nr = cp_print_key_unit_nr(logger, dft_section, &
+                                     "REAL_TIME_PROPAGATION%PRINT%E_CONSTITUENTS", extension=".ener", &
+                                     file_action="WRITE", is_new_file=new_file)
+
+      IF (output_unit > 0) THEN
+         IF (unit_nr /= output_unit) THEN
+            INQUIRE (UNIT=unit_nr, NAME=filename)
+            WRITE (UNIT=output_unit, FMT="(/,T2,A,2(/,T3,A),/)") &
+               "ENERGY_CONSTITUENTS", "Total Energy constituents written to file:", &
+               TRIM(filename)
+         ELSE
+            WRITE (UNIT=output_unit, FMT="(/,T2,A)") "ENERGY_CONSTITUENTS"
+         END IF
+
+         IF (new_file) THEN
+            ! NOTE that these are not all terms contributing to the total energy for RTP, only a selection of those
+            ! most significant / impactful. Therefore the printed components likely will not add up to the total energy.
+            WRITE (UNIT=unit_nr, FMT='("#",5X,A,8X,A,10(6X,A))') "Step Nr.", "Time[fs]", &
+               "Total ener.[a.u.]", "core[a.u.]   ", " overlap [a.u.]", "hartree[a.u.]", " exc. [a.u.] ", &
+               " hartree 1c[a.u.]", "exc 1c[a.u.] ", "exc admm[a.u.]", "exc 1c admm[a.u.]", "efield LG"
+
+         END IF
+         WRITE (UNIT=unit_nr, FMT="(I10,F20.6,10(F20.9))") &
+            qs_env%sim_step, qs_env%sim_time*femtoseconds, &
+            energy%total, energy%core, energy%core_overlap, energy%hartree, energy%exc, &
+            energy%hartree_1c, energy%exc1, energy%exc_aux_fit, energy%exc1_aux_fit, energy%efield_core
+
+      END IF
+
+      CALL cp_print_key_finished_output(unit_nr, logger, dft_section, &
+                                        "REAL_TIME_PROPAGATION%PRINT%E_CONSTITUENTS")
+
+   END SUBROUTINE print_rtp_energy_components
 
 END MODULE rt_propagation_output

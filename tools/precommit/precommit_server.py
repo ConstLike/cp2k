@@ -30,6 +30,13 @@ def black():
 
 
 # ======================================================================================
+@app.route("/spackformat", methods=["POST"])
+def spackformat():
+    # Run black like https://github.com/spack/spack/blob/develop/pyproject.toml
+    return run_tool(["black", "--line-length=99", "--skip-magic-trailing-comma"])
+
+
+# ======================================================================================
 @app.route("/shfmt", methods=["POST"])
 def shfmt():
     return run_tool(["shfmt", "-i=2", "-ci", "-sr", "-w"])
@@ -51,7 +58,7 @@ def mdformat():
 # ======================================================================================
 @app.route("/clangformat", methods=["POST"])
 def clangformat():
-    return run_tool(["clang-format", "--style=llvm", "-i"])
+    return run_tool(["clang_format_wrapper.sh"])
 
 
 # ======================================================================================
