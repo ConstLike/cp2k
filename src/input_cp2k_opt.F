@@ -16,6 +16,7 @@ MODULE input_cp2k_opt
                                               cp_print_key_section_create,&
                                               high_print_level,&
                                               silent_print_level
+   USE input_cp2k_xc,                   ONLY: create_xc_section
    USE input_constants,                 ONLY: &
         do_lri_opt_all, do_lri_opt_coeff, do_lri_opt_exps, embed_diff, embed_fa, &
         embed_grid_angstrom, embed_grid_bohr, embed_level_shift, embed_none, embed_quasi_newton, &
@@ -135,6 +136,7 @@ CONTAINS
       TYPE(section_type), POINTER                        :: section
 
       TYPE(keyword_type), POINTER                        :: keyword
+      TYPE(section_type), POINTER                        :: subsection
 
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="OPT_EMBED", &
@@ -298,6 +300,11 @@ CONTAINS
                           type_of_var=lchar_t)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
+
+      NULLIFY(subsection)
+      CALL create_xc_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
 
       CALL create_print_embed_diff(section)
 
