@@ -156,7 +156,6 @@ MODULE qs_tddft_theory_mrsf
       TYPE(pw_c1d_gs_type), POINTER                      :: work_v_gspace => NULL()  ! reciprocal-space potential
       TYPE(dbcsr_p_type), POINTER, DIMENSION(:)          :: hmat_coulomb => NULL()   ! Coulomb intermediate
       TYPE(qs_rho_type), POINTER                         :: rho_nao_struct => NULL() ! Density structure
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: rho_fm_nao               ! (nSpins) [nbf, nbf]
 
    CONTAINS
       PROCEDURE, PASS(this) :: allocate   => mrsf_allocate
@@ -284,13 +283,6 @@ CONTAINS
       !=== evects_nao_nao (7) [nbf, nbf] =================
       CALL allocate_fm_matrix(matrix=this%evects_nao_nao, &
                               nmat=7, &
-                              nrow=tddft_env%nbf, &
-                              ncol=tddft_env%nbf, &
-                              blacs_env=blacs_env)
-
-      !=== rho_fm_nao (nSpins) [nbf, nbf] ===============
-      CALL allocate_fm_matrix(matrix=this%rho_fm_nao, &
-                              nmat=tddft_env%nSpins, &
                               nrow=tddft_env%nbf, &
                               ncol=tddft_env%nbf, &
                               blacs_env=blacs_env)
@@ -1767,14 +1759,6 @@ CONTAINS
                              ncol_global=nmo_occ(ispin))
       END DO
 
-      ! compute GS alpha and beta densities
-      DO ispin = 1, tddft_env%nSpins
-         CALL parallel_gemm('N', 'T', nbf, nbf, nmo_occ(ispin), &
-                            1.0_dp, gs_mos(ispin)%mos_occ, &
-                                    gs_mos(ispin)%mos_occ, &
-                            0.0_dp, this%rho_fm_nao(ispin))
-      END DO
-
       ! Transform AO-MO dipoles to fully MO-based dipoles
       DO ideriv = 1, 3
          CALL parallel_gemm('T', 'N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nbf, &
@@ -1785,8 +1769,6 @@ CONTAINS
 
       ! transition dipole moment
       ALLOCATE (trans_dipoles(tddft_env%nstates, tddft_env%nstates, 3), source=0.0_dp)
-      ! s2_mat
-      ALLOCATE (s2_mat(tddft_env%nstates), source=0.0_dp)
 
       DO istate = 1, tddft_env%nStates
          CALL cp_fm_set_all(matrix=this%work_noc_vir, alpha=0.0_dp)
@@ -1828,6 +1810,8 @@ CONTAINS
 
       END DO
 
+      ! s2_mat
+      ALLOCATE (s2_mat(tddft_env%nstates), source=0.0_dp)
       SELECT CASE (tddft_env%response_type)
       CASE (2)
          s2_mat(1:tddft_env%nStates) = 0.0_dp
@@ -2014,7 +1998,6 @@ CONTAINS
       CALL deallocate_fm_matrix(this%work_aux_aux)
       CALL deallocate_fm_matrix(this%work_aux_nao)
       CALL deallocate_fm_matrix(this%work_nao_aux)
-      CALL deallocate_fm_matrix(this%rho_fm_nao)
       CALL deallocate_fm_matrix(this%dipoles_mo)
 
       !--------------------
