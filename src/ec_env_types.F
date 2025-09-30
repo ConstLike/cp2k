@@ -88,7 +88,8 @@ MODULE ec_env_types
       TYPE(qs_force_type), DIMENSION(:), POINTER       :: force => Null()
       ! full neighbor lists and corresponding task list
       TYPE(neighbor_list_set_p_type), &
-         DIMENSION(:), POINTER                         :: sab_orb => Null(), sac_ppl => Null(), sap_ppnl => Null()
+         DIMENSION(:), POINTER                         :: sab_orb => Null(), sac_ppl => Null(), &
+                                                          sac_ae => Null(), sap_ppnl => Null()
       TYPE(task_list_type), POINTER                    :: task_list => Null()
       ! the XC function to be used for the correction, dispersion info
       TYPE(section_vals_type), POINTER                 :: xc_section => Null()
@@ -132,9 +133,8 @@ MODULE ec_env_types
       CHARACTER(len=40)                                :: exresp_fn = ""
       CHARACTER(len=40)                                :: exresult_fn = ""
       LOGICAL                                          :: do_error = .FALSE.
-      REAL(KIND=dp), DIMENSION(3, 3)                   :: rpv = 0.0_dp, rpverror = 0.0_dp
-      REAL(KIND=dp), DIMENSION(:, :), POINTER          :: rf => NULL(), &
-                                                          rferror => NULL()
+      REAL(KIND=dp), DIMENSION(3, 3)                   :: rpv = 0.0_dp
+      REAL(KIND=dp), DIMENSION(:, :), POINTER          :: rf => NULL()
    END TYPE energy_correction_type
 
 CONTAINS
@@ -156,6 +156,7 @@ CONTAINS
          ! neighbor lists
          CALL release_neighbor_list_sets(ec_env%sab_orb)
          CALL release_neighbor_list_sets(ec_env%sac_ppl)
+         CALL release_neighbor_list_sets(ec_env%sac_ae)
          CALL release_neighbor_list_sets(ec_env%sap_ppnl)
          ! forces
          IF (ASSOCIATED(ec_env%force)) CALL deallocate_qs_force(ec_env%force)
@@ -227,9 +228,6 @@ CONTAINS
 
          IF (ASSOCIATED(ec_env%rf)) THEN
             DEALLOCATE (ec_env%rf)
-         END IF
-         IF (ASSOCIATED(ec_env%rferror)) THEN
-            DEALLOCATE (ec_env%rferror)
          END IF
 
          DEALLOCATE (ec_env)

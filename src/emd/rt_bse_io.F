@@ -50,6 +50,7 @@ MODULE rt_bse_io
    USE physcon, ONLY: femtoseconds, &
                       evolt
    USE mathconstants, ONLY: twopi
+   USE greenx_interface, ONLY: greenx_refine_pade, greenx_output_polarizability, greenx_refine_ft
 
 #include "../base/base_uses.f90"
 
@@ -621,8 +622,14 @@ CONTAINS
       CALL cp_print_key_finished_output(ft_unit, logger, rtbse_env%ft_section)
       DEALLOCATE (ft_real_series)
       DEALLOCATE (ft_imag_series)
+      IF (rtbse_env%pade_requested) THEN
+         CALL greenx_refine_pade(rtbse_env%pade_e_min, rtbse_env%pade_e_max, rtbse_env%pade_x_eval, &
+                                 n, rtbse_env%pade_npoints, logger, rtbse_env%ft_section, &
+                                 rtbse_env%unit_nr, omega_series, ft_full_series)
+      END IF
       DEALLOCATE (omega_series)
       DEALLOCATE (ft_full_series)
+      ! Perform control with gx_ac
    END SUBROUTINE output_moments_ft
 ! **************************************************************************************************
 !> \brief Outputs the isotropic polarizability tensor element alpha _ ij = mu_i(omega)/E_j(omega),
@@ -638,8 +645,12 @@ CONTAINS
                                                             ft_imag_series, &
                                                             value_series
       COMPLEX(kind=dp), DIMENSION(:), ALLOCATABLE        :: moment_series, &
-                                                            field_series
-      COMPLEX(kind=dp), DIMENSION(:, :), ALLOCATABLE     :: polarizability_series
+                                                            field_series, &
+                                                            moment_refined, &
+                                                            field_refined, &
+                                                            omega_complex
+      COMPLEX(kind=dp), DIMENSION(:, :), ALLOCATABLE     :: polarizability_series, &
+                                                            polarizability_refined
       INTEGER                                            :: pol_unit, &
                                                             i, k, n, n_elems
 
@@ -655,6 +666,19 @@ CONTAINS
       ALLOCATE (moment_series(n), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (field_series(n), source=CMPLX(0.0, 0.0, kind=dp))
       ALLOCATE (polarizability_series(n_elems, n), source=CMPLX(0.0, 0.0, kind=dp))
+
+      ! Allocations for Padé refinement
+      IF (rtbse_env%pade_requested) THEN
+         ALLOCATE (omega_complex(n), source=CMPLX(0.0, 0.0, kind=dp))
+         ALLOCATE (field_refined(rtbse_env%pade_npoints), source=CMPLX(0.0, 0.0, kind=dp))
+         ALLOCATE (moment_refined(rtbse_env%pade_npoints), source=CMPLX(0.0, 0.0, kind=dp))
+         ALLOCATE (polarizability_refined(n_elems, rtbse_env%pade_npoints), source=CMPLX(0.0, 0.0, kind=dp))
+      ELSE
+         ALLOCATE (omega_complex(0), source=CMPLX(0.0, 0.0, kind=dp))
+         ALLOCATE (field_refined(0), source=CMPLX(0.0, 0.0, kind=dp))
+         ALLOCATE (moment_refined(0), source=CMPLX(0.0, 0.0, kind=dp))
+         ALLOCATE (polarizability_refined(0, 0), source=CMPLX(0.0, 0.0, kind=dp))
+      END IF
 
       DO k = 1, n_elems
          ! The moment ft
@@ -687,7 +711,26 @@ CONTAINS
             field_series(:) = CMPLX(ft_real_series(:), ft_imag_series(:) + 1.0e-20, kind=dp)
          END IF
          ! Divide to get the polarizability series
+         ! Real part
          polarizability_series(k, :) = moment_series(:)/field_series(:)
+
+         ! Refinement of the grid via Padé approximants, if requested
+         IF (rtbse_env%pade_requested) THEN
+            omega_complex(:) = CMPLX(omega_series(:), 0.0, kind=dp)
+            ! No need to refine the field if it is known exactly
+            ! Also GreenX has trouble fitting constant functions
+            IF (rtbse_env%dft_control%rtp_control%apply_delta_pulse) THEN
+               field_refined(:) = CMPLX( &
+                                  rtbse_env%dft_control%rtp_control%delta_pulse_direction(rtbse_env%pol_elements(k, 2))* &
+                                  rtbse_env%dft_control%rtp_control%delta_pulse_scale, 0.0, kind=dp)
+            ELSE
+               CALL greenx_refine_ft(rtbse_env%pade_fit_e_min, rtbse_env%pade_fit_e_max, omega_complex, field_series, &
+                                     rtbse_env%pade_x_eval, field_refined)
+            END IF
+            CALL greenx_refine_ft(rtbse_env%pade_fit_e_min, rtbse_env%pade_fit_e_max, omega_complex, moment_series, &
+                                  rtbse_env%pade_x_eval, moment_refined)
+            polarizability_refined(k, :) = moment_refined(:)/field_refined(:)
+         END IF
       END DO
 
       ! Change units to eV for energy
@@ -737,6 +780,11 @@ CONTAINS
          CALL cp_print_key_finished_output(pol_unit, logger, rtbse_env%pol_section)
       END IF
 
+      IF (rtbse_env%pade_requested) THEN
+         CALL greenx_output_polarizability(logger, rtbse_env%pol_section, rtbse_env%unit_nr, &
+                                           rtbse_env%pol_elements, rtbse_env%pade_x_eval, polarizability_refined)
+      END IF
+
       DEALLOCATE (value_series)
       DEALLOCATE (ft_real_series)
       DEALLOCATE (ft_imag_series)
@@ -746,6 +794,11 @@ CONTAINS
 
       DEALLOCATE (omega_series)
       DEALLOCATE (polarizability_series)
+
+      DEALLOCATE (omega_complex)
+      DEALLOCATE (field_refined)
+      DEALLOCATE (moment_refined)
+      DEALLOCATE (polarizability_refined)
    END SUBROUTINE output_polarizability
 ! **************************************************************************************************
 !> \brief Naively calculates the Fourier transform - it is not the bottleneck of this calculation
@@ -802,6 +855,7 @@ CONTAINS
       IF (PRESENT(damping_opt)) THEN
          ! Damping is given a time in which the moments reduce by factor of 1/e
          IF (damping_opt > 0.0_dp) damping = 1.0_dp/damping_opt
+         ! Special case - zero damping
          IF (damping_opt == 0.0_dp) damping = 0.0_dp
       END IF
 
@@ -830,7 +884,6 @@ CONTAINS
                                 EXP(-damping*delta_t*(j - 1))*(value_series(j_wrap) - value_subtract)
          END DO
       END DO
-      delta_omega = twopi/(time_series(N) - time_series(1))
       result_series(:) = delta_t*result_series(:)
       iresult_series(:) = delta_t*iresult_series(:)
 

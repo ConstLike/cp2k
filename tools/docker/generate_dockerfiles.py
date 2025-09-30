@@ -17,70 +17,68 @@ def main() -> None:
     for version in "sdbg", "ssmp", "pdbg", "psmp":
         with OutputFile(f"Dockerfile.test_{version}", args.check) as f:
             mpi_mode = "mpich" if version.startswith("p") else "no"
-            with_dbcsr = "" if version.endswith("smp") else "no"
-            f.write(install_deps_toolchain(mpi_mode=mpi_mode, with_dbcsr=with_dbcsr))
-            if version in ("ssmp", "psmp"):
-                f.write(regtest_cmake("toolchain", version))
-            else:
-                f.write(regtest(version))
+            f.write(install_deps_toolchain(mpi_mode=mpi_mode))
+            f.write(regtest_cmake("toolchain", version))
 
-        with OutputFile(f"Dockerfile.test_generic_{version}", args.check) as f:
-            f.write(install_deps_toolchain(target_cpu="generic"))
-            f.write(regtest(version))
+    with OutputFile(f"Dockerfile.test_generic_psmp", args.check) as f:
+        f.write(install_deps_toolchain(target_cpu="generic"))
+        f.write(regtest_cmake("toolchain_generic", "psmp"))
 
     with OutputFile(f"Dockerfile.test_openmpi-psmp", args.check) as f:
         f.write(install_deps_toolchain(mpi_mode="openmpi"))
-        f.write(regtest("psmp"))
+        f.write(regtest_cmake("toolchain", "psmp"))
 
     with OutputFile(f"Dockerfile.test_fedora-psmp", args.check) as f:
-        f.write(install_deps_toolchain(base_image="fedora:38"))
-        f.write(regtest("psmp"))
+        f.write(install_deps_toolchain(base_image="fedora:41"))
+        f.write(regtest_cmake("toolchain", "psmp"))
 
-    for version in "ssmp", "psmp":
-        with OutputFile(f"Dockerfile.test_intel-{version}", args.check) as f:
-            f.write(install_deps_toolchain_intel())
-            f.write(regtest(version, intel=True, testopts="--mpiexec mpiexec"))
+    for ver in "ssmp", "psmp":
+        with OutputFile(f"Dockerfile.test_intel-ifort-{ver}", args.check) as f:
+            base_image = "intel/hpckit:2024.2.1-0-devel-ubuntu22.04"
+            f.write(install_deps_toolchain_intel(base_image=base_image, with_ifx="no"))
+            f.write(regtest(ver, intel=True, testopts="--mpiexec mpiexec"))
+        with OutputFile(f"Dockerfile.test_intel-ifx-{ver}", args.check) as f:
+            base_image = "intel/oneapi-hpckit:2025.2.2-0-devel-ubuntu24.04"
+            f.write(install_deps_toolchain_intel(base_image=base_image, with_ifx="yes"))
+            f.write(regtest(ver, intel=True, testopts="--mpiexec mpiexec"))
 
     with OutputFile(f"Dockerfile.test_nvhpc", args.check) as f:
         f.write(install_deps_toolchain_nvhpc())
 
     with OutputFile(f"Dockerfile.test_minimal", args.check) as f:
         f.write(install_deps_ubuntu())
-        f.write(install_dbcsr("minimal", "ssmp"))
         f.write(regtest_cmake("minimal", "ssmp"))
 
     with OutputFile(f"Dockerfile.test_spack", args.check) as f:
-        f.write(install_deps_spack())
-        f.write(regtest_cmake("spack_all", "psmp"))
+        f.write(install_deps_spack("psmp"))
+        f.write(regtest_cmake("spack", "psmp"))
 
-    for version in "ssmp", "psmp":
-        with OutputFile(f"Dockerfile.test_asan-{version}", args.check) as f:
-            f.write(install_deps_toolchain())
-            f.write(regtest(version, "local_asan"))
+    with OutputFile(f"Dockerfile.test_asan-psmp", args.check) as f:
+        f.write(install_deps_toolchain())
+        f.write(regtest_cmake("toolchain_asan", "psmp"))
 
-    for version in "sdbg", "pdbg":
-        with OutputFile(f"Dockerfile.test_coverage-{version}", args.check) as f:
-            f.write(install_deps_toolchain())
-            f.write(coverage(version))
+    with OutputFile(f"Dockerfile.test_coverage", args.check) as f:
+        f.write(install_deps_toolchain())
+        f.write(coverage())
 
     for gcc_version in 8, 9, 10, 11, 12, 13, 14:
         with OutputFile(f"Dockerfile.test_gcc{gcc_version}", args.check) as f:
             if gcc_version > 8:
                 f.write(install_deps_ubuntu(gcc_version=gcc_version))
-                f.write(install_dbcsr("ubuntu", "ssmp"))
                 f.write(regtest_cmake("ubuntu", "ssmp"))
             else:
                 f.write(install_deps_ubuntu2004(gcc_version=gcc_version))
+                # Have to use Makefile because Ubuntu:20.04 ships with CMake 3.16.3.
                 # Skip some tests due to bug in LDA_C_PMGB06 functional in libxc <5.2.0.
                 f.write(regtest("ssmp", testopts="--skipdir=QS/regtest-rs-dhft"))
 
     with OutputFile("Dockerfile.test_arm64-psmp", args.check) as f:
         base_img = "arm64v8/ubuntu:24.04"
         f.write(install_deps_toolchain(base_img, with_libtorch="no", with_deepmd="no"))
-        f.write(regtest("psmp"))
+        f.write(regtest_cmake("toolchain_arm64", "psmp"))
 
     with OutputFile(f"Dockerfile.test_performance", args.check) as f:
-        f.write(install_deps_toolchain())
+        f.write(install_deps_toolchain(with_dbcsr="no"))
         f.write(performance())
 
     for gpu_ver in "P100", "V100", "A100":
@@ -108,7 +106,7 @@ def main() -> None:
             f.write(build("psmp", "local_hip"))
 
     with OutputFile(f"Dockerfile.test_conventions", args.check) as f:
-        f.write(install_deps_toolchain())
+        f.write(install_deps_toolchain(with_dbcsr="no"))
         f.write(conventions())
 
     with OutputFile(f"Dockerfile.test_manual", args.check) as f:
@@ -118,9 +116,9 @@ def main() -> None:
     with OutputFile(f"Dockerfile.test_precommit", args.check) as f:
         f.write(precommit())
 
-    for name in "aiida", "ase", "gromacs", "i-pi":
+    for name in "ase", "aiida", "i-pi", "phonopy", "gromacs":
         with OutputFile(f"Dockerfile.test_{name}", args.check) as f:
-            f.write(install_deps_toolchain(mpi_mode="no", with_dbcsr=""))
+            f.write(install_deps_toolchain(mpi_mode="no"))
             f.write(test_3rd_party(name))
 
     for name in "misc", "doxygen":
@@ -150,19 +148,11 @@ RUN /bin/bash -o pipefail -c " \
 # ======================================================================================
 def regtest_cmake(profile: str, version: str, testopts: str = "") -> str:
     return (
-        rf"""
-# Install CP2K sources.
-WORKDIR /opt/cp2k
-COPY ./src ./src
-COPY ./data ./data
-COPY ./tests ./tests
-COPY ./tools/build_utils ./tools/build_utils
-COPY ./cmake ./cmake
-COPY ./CMakeLists.txt .
-
-# Build CP2K with CMake and run regression tests.
+        install_cp2k_cmake(profile=profile, version=version)
+        + rf"""
+# Run regression tests.
 ARG TESTOPTS="{testopts}"
-COPY ./tools/docker/scripts/build_cp2k_cmake.sh ./tools/docker/scripts/test_regtest_cmake.sh ./
+COPY ./tools/docker/scripts/test_regtest_cmake.sh ./
 RUN /bin/bash -o pipefail -c " \
     TESTOPTS='${{TESTOPTS}}' \
     ./test_regtest_cmake.sh {profile} {version} |& tee report.log && \
@@ -218,13 +208,13 @@ RUN ./test_performance.sh "{arch}" 2>&1 | tee report.log
 
 
 # ======================================================================================
-def coverage(version: str) -> str:
+def coverage() -> str:
     return (
-        install_cp2k(version=version, arch="local_coverage", revision=True)
+        install_cp2k_cmake(profile="toolchain_coverage", version="psmp", revision=True)
         + rf"""
-# Run coverage test for {version}.
+# Run coverage test.
 COPY ./tools/docker/scripts/test_coverage.sh .
-RUN ./test_coverage.sh "{version}" 2>&1 | tee report.log
+RUN ./test_coverage.sh 2>&1 | tee report.log
 """
         + print_cached_report()
     )
@@ -255,7 +245,7 @@ RUN /bin/bash -ec " \
 # ======================================================================================
 def manual() -> str:
     return (
-        install_cp2k(version="psmp", arch="local", revision=True)
+        install_cp2k_cmake(profile="toolchain", version="psmp", revision=True)
         + rf"""
 # Generate manual.
 COPY ./docs ./docs
@@ -294,18 +284,10 @@ RUN ./tools/docker/scripts/test_precommit.sh 2>&1 | tee report.log
 # ======================================================================================
 def test_3rd_party(name: str) -> str:
     return (
-        rf"""
-# Install CP2K sources.
-WORKDIR /opt/cp2k
-COPY ./src ./src
-COPY ./data ./data
-COPY ./tests ./tests
-COPY ./tools/build_utils ./tools/build_utils
-COPY ./cmake ./cmake
-COPY ./CMakeLists.txt .
-
+        install_cp2k_cmake(profile="toolchain", version="ssmp")
+        + rf"""
 # Run test for {name}.
-COPY ./tools/docker/scripts/build_cp2k_cmake.sh ./tools/docker/scripts/test_{name}.sh ./
+COPY ./tools/docker/scripts/test_{name}.sh ./
 RUN ./test_{name}.sh 2>&1 | tee report.log
 """
         + print_cached_report()
@@ -402,19 +384,35 @@ COPY ./tools/regtesting ./tools/regtesting
 
 
 # ======================================================================================
-def install_dbcsr(profile: str, version: str) -> str:
-    return rf"""
-# Install DBCSR
-COPY ./tools/docker/scripts/install_dbcsr.sh ./
-RUN ./install_dbcsr.sh {profile} {version}
+def install_cp2k_cmake(profile: str, version: str, revision: bool = False) -> str:
+    output = ""
+    if revision:
+        output += "\n"
+        output += "ARG GIT_COMMIT_SHA\n"
+        output += "ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}\n"
+
+    output += rf"""
+# Install CP2K sources.
+WORKDIR /opt/cp2k
+COPY ./src ./src
+COPY ./data ./data
+COPY ./tests ./tests
+COPY ./tools/build_utils ./tools/build_utils
+COPY ./cmake ./cmake
+COPY ./CMakeLists.txt .
+
+# Compile CP2K.
+COPY ./tools/docker/scripts/build_cp2k_cmake.sh .
+RUN ./build_cp2k_cmake.sh {profile} {version}
 """
+    return output
 
 
 # ======================================================================================
 def install_deps_toolchain(
     base_image: str = "ubuntu:24.04",
     mpi_mode: str = "mpich",
-    with_dbcsr: str = "no",
+    with_dbcsr: str = "",  # enabled by default
     with_gcc: str = "system",
     **kwargs: str,
 ) -> str:
@@ -474,6 +472,10 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true && \
 RUN ln -sf /usr/bin/gcc-{gcc_version}      /usr/local/bin/gcc  && \
     ln -sf /usr/bin/g++-{gcc_version}      /usr/local/bin/g++  && \
     ln -sf /usr/bin/gfortran-{gcc_version} /usr/local/bin/gfortran
+
+# Install DBCSR
+COPY ./tools/docker/scripts/install_dbcsr.sh ./
+RUN ./install_dbcsr.sh ssmp
 """
     return output
 
@@ -523,14 +525,18 @@ RUN ln -sf /usr/bin/gcc-{gcc_version}      /usr/local/bin/gcc  && \
 
 
 # ======================================================================================
-def install_deps_toolchain_intel() -> str:
+def install_deps_toolchain_intel(
+    base_image: str = "intel/hpckit:2024.2.1-0-devel-ubuntu22.04",
+    with_ifx: str = "no",
+) -> str:
     return rf"""
-FROM intel/hpckit:2024.2.1-0-devel-ubuntu22.04
+FROM {base_image}
 
 """ + install_toolchain(
         base_image="ubuntu",
         install_all="",
         with_dbcsr="no",
+        with_ifx=with_ifx,
         with_intelmpi="",
         with_mkl="",
         with_libsmeagol="",
@@ -788,7 +794,7 @@ RUN ./install_cp2k_toolchain.sh \
     --dry-run
 
 # Dry-run leaves behind config files for the followup install scripts.
-# This breaks up the lengthy installation into smaller docker build steps.
+# This breaks up the lengthy installation into smaller build steps.
 COPY ./tools/toolchain/scripts/stage0/ ./scripts/stage0/
 RUN  ./scripts/stage0/install_stage0.sh && rm -rf ./build
 
@@ -827,7 +833,7 @@ RUN ./scripts/generate_arch_files.sh && rm -rf ./build
 
 
 # ======================================================================================
-def install_deps_spack() -> str:
+def install_deps_spack(version: str) -> str:
     return rf"""
 FROM ubuntu:24.04
 
@@ -854,21 +860,44 @@ RUN apt-get update -qq && apt-get install -qq --no-install-recommends \
     pkgconf \
     python3 \
     python3-dev \
+    python3-pip \
+    python3-venv \
     unzip \
     wget \
     xxd \
     xz-utils \
     zstd && rm -rf /var/lib/apt/lists/*
 
-# Install a recent Spack version
+# Create and activate a virtual environment for Python packages
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${{PATH}}"
+RUN pip3 install --quiet boto3==1.38.11 google-cloud-storage==3.1.0
+
+# Retrieve the number of available CPU cores
+ARG NUM_PROCS
+ENV NUM_PROCS=${{NUM_PROCS:-32}}
+
+# Install Spack and Spack packages
 WORKDIR /root/spack
 ARG SPACK_VERSION
-ENV SPACK_VERSION=${{SPACK_VERSION:-a3abc1c492f2431f477a63bbccb48aa3a2d34199}}
-RUN git init --quiet && \
-    git remote add origin https://github.com/spack/spack.git && \
-    git fetch --quiet --depth 1 origin ${{SPACK_VERSION}} --no-tags && \
-    git checkout --quiet FETCH_HEAD
-ENV PATH="/root/spack/bin:${{PATH}}"
+ENV SPACK_VERSION=${{SPACK_VERSION:-1.0.0}}
+ARG SPACK_PACKAGES_VERSION
+ENV SPACK_PACKAGES_VERSION=${{SPACK_PACKAGES_VERSION:-2025.07.0}}
+ARG SPACK_REPO=https://github.com/spack/spack
+ENV SPACK_ROOT=/opt/spack-${{SPACK_VERSION}}
+ARG SPACK_PACKAGES_REPO=https://github.com/spack/spack-packages
+ENV SPACK_PACKAGES_ROOT=/opt/spack-packages-${{SPACK_PACKAGES_VERSION}}
+RUN mkdir -p ${{SPACK_ROOT}} \
+    && wget -q ${{SPACK_REPO}}/archive/v${{SPACK_VERSION}}.tar.gz \
+    && tar -xzf v${{SPACK_VERSION}}.tar.gz -C /opt && rm -f v${{SPACK_VERSION}}.tar.gz \
+    && mkdir -p ${{SPACK_PACKAGES_ROOT}} \
+    && wget -q ${{SPACK_PACKAGES_REPO}}/archive/v${{SPACK_PACKAGES_VERSION}}.tar.gz \
+    && tar -xzf v${{SPACK_PACKAGES_VERSION}}.tar.gz -C /opt && rm -f v${{SPACK_PACKAGES_VERSION}}.tar.gz
+
+ENV PATH="${{SPACK_ROOT}}/bin:${{PATH}}"
+
+# Add Spack packages builtin repository
+RUN spack repo add --scope site ${{SPACK_PACKAGES_ROOT}}/repos/spack_repo/builtin
 
 # Find all compilers
 RUN spack compiler find
@@ -876,22 +905,25 @@ RUN spack compiler find
 # Find all external packages
 RUN spack external find --all --not-buildable
 
-# Enable Spack build cache from the latest development version
-ARG SPACK_BUILD_CACHE
-ENV SPACK_BUILD_CACHE="${{SPACK_BUILD_CACHE:-develop}}"
-RUN spack mirror add ${{SPACK_BUILD_CACHE}} https://binaries.spack.io/${{SPACK_BUILD_CACHE}} && \
-    spack buildcache keys --install --trust --force && \
-    spack mirror remove ${{SPACK_BUILD_CACHE}}
+# Add local Spack cache
+ARG SPACK_CACHE="s3://spack-cache --s3-endpoint-url=http://localhost:9000"
+COPY ./tools/docker/scripts/setup_spack_cache.sh ./
+RUN ./setup_spack_cache.sh
+
+# Copy Spack configuration and build recipes
+ARG CP2K_VERSION
+ENV CP2K_VERSION=${{CP2K_VERSION:-{version}}}
+COPY ./tools/spack/cp2k_deps_${{CP2K_VERSION}}.yaml ./
+COPY ./tools/spack/cp2k_dev_repo ${{SPACK_PACKAGES_ROOT}}/repos/spack_repo/cp2k_dev_repo/
+RUN spack repo add --scope site ${{SPACK_PACKAGES_ROOT}}/repos/spack_repo/cp2k_dev_repo/
+RUN spack env create myenv cp2k_deps_${{CP2K_VERSION}}.yaml && \
+    spack -e myenv repo list
 
 # Install CP2K dependencies via Spack
-ARG CP2K_BUILD_TYPE
-ENV CP2K_BUILD_TYPE=${{CP2K_BUILD_TYPE:-all}}
-COPY ./tools/spack/cp2k_deps_${{CP2K_BUILD_TYPE}}.yaml .
-RUN spack env create myenv cp2k_deps_${{CP2K_BUILD_TYPE}}.yaml
 RUN spack -e myenv concretize -f
-ENV SPACK_ENV_VIEW="/root/spack/var/spack/environments/myenv/spack-env/view"
+ENV SPACK_ENV_VIEW="${{SPACK_ROOT}}/var/spack/environments/myenv/spack-env/view"
 RUN spack -e myenv env depfile -o spack_makefile && \
-    make -j32 --file=spack_makefile SPACK_COLOR=never --output-sync=recurse && \
+    make -j${{NUM_PROCS}} --file=spack_makefile SPACK_COLOR=never --output-sync=recurse && \
     cp -ar ${{SPACK_ENV_VIEW}}/bin ${{SPACK_ENV_VIEW}}/include ${{SPACK_ENV_VIEW}}/lib /opt/spack
 """
 
@@ -904,7 +936,9 @@ class OutputFile:
         self.content = io.StringIO()
         self.content.write(f"#\n")
         self.content.write(f"# This file was created by generate_dockerfiles.py.\n")
-        self.content.write(f"# Usage: docker build -f ./{filename} ../../\n")
+        self.content.write(
+            f"# Usage: podman build --shm-size=1g -f ./{filename} ../../\n"
+        )
         self.content.write(f"#\n")
 
     def __enter__(self) -> io.StringIO:

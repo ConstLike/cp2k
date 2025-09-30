@@ -38,6 +38,7 @@ MODULE cp_fm_diag
                                  cp_fm_general_cusolver
 #if defined(__DLAF)
    USE cp_fm_dlaf_api, ONLY: cp_fm_diag_dlaf, cp_fm_diag_gen_dlaf
+   USE cp_dlaf_utils_api, ONLY: cp_dlaf_initialize, cp_dlaf_finalize
 #endif
    USE cp_fm_types, ONLY: cp_fm_get_info, &
                           cp_fm_set_element, &
@@ -109,8 +110,6 @@ MODULE cp_fm_diag
    INTEGER, PARAMETER, PUBLIC :: FM_DIAG_TYPE_DEFAULT = FM_DIAG_TYPE_CUSOLVER
 #elif defined(__ELPA)
    INTEGER, PARAMETER, PUBLIC :: FM_DIAG_TYPE_DEFAULT = FM_DIAG_TYPE_ELPA
-#elif defined(__DLAF)
-   INTEGER, PARAMETER, PUBLIC :: FM_DIAG_TYPE_DEFAULT = FM_DIAG_TYPE_DLAF
 #else
    INTEGER, PARAMETER, PUBLIC :: FM_DIAG_TYPE_DEFAULT = FM_DIAG_TYPE_SCALAPACK
 #endif
@@ -191,13 +190,17 @@ CONTAINS
          CALL set_elpa_print(elpa_print)
          initialized = .TRUE.
       END IF
-
-      elpa_neigvec_min = elpa_neigvec_min_input
 #if defined(__DLAF)
+      IF (.NOT. initialized .AND. diag_type == FM_DIAG_TYPE_DLAF) THEN
+         CALL cp_dlaf_initialize()
+         initialized = .TRUE.
+      END IF
       dlaf_neigvec_min = dlaf_neigvec_min_input
 #else
       MARK_USED(dlaf_neigvec_min_input)
 #endif
+
+      elpa_neigvec_min = elpa_neigvec_min_input
       eps_check_diag = eps_check_diag_input
 
    END SUBROUTINE diag_init
@@ -209,6 +212,10 @@ CONTAINS
 #if defined (__ELPA)
       IF (diag_type == FM_DIAG_TYPE_ELPA) &
          CALL finalize_elpa_library()
+#endif
+#if defined (__DLAF)
+      IF (diag_type == FM_DIAG_TYPE_DLAF) &
+         CALL cp_dlaf_finalize()
 #endif
    END SUBROUTINE diag_finalize
 
@@ -283,13 +290,13 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE check_diag(matrix, eigenvectors, nvec)
 
-      TYPE(cp_fm_type), INTENT(IN)                    :: matrix, eigenvectors
+      TYPE(cp_fm_type), INTENT(IN)                       :: matrix, eigenvectors
       INTEGER, INTENT(IN)                                :: nvec
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'check_diag'
 
       CHARACTER(LEN=default_string_length)               :: diag_type_name
-      REAL(KIND=dp)                                      :: eps_abort, eps_warning
+      REAL(KIND=dp)                                      :: eps, eps_abort, eps_warning, gold, test
       INTEGER                                            :: handle, i, j, ncol, nrow, output_unit
       LOGICAL                                            :: check_eigenvectors
 #if defined(__parallel)
@@ -301,20 +308,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      IF (diag_type == FM_DIAG_TYPE_SCALAPACK) THEN
-         diag_type_name = "SYEVD"
-      ELSE IF (diag_type == FM_DIAG_TYPE_ELPA) THEN
-         diag_type_name = "ELPA"
-      ELSE IF (diag_type == FM_DIAG_TYPE_CUSOLVER) THEN
-         diag_type_name = "CUSOLVER"
-      ELSE IF (diag_type == FM_DIAG_TYPE_DLAF) THEN
-         diag_type_name = "DLAF"
-      ELSE
-         CPABORT("Unknown diag_type")
-      END IF
-
       output_unit = default_output_unit
-
       eps_warning = eps_check_diag_default
 #if defined(__CHECK_DIAG)
       check_eigenvectors = .TRUE.
@@ -331,6 +325,10 @@ CONTAINS
 #endif
       eps_abort = 10.0_dp*eps_warning
 
+      gold = 0.0_dp
+      test = 0.0_dp
+      eps = 0.0_dp
+
       IF (check_eigenvectors) THEN
 #if defined(__parallel)
          nrow = eigenvectors%matrix_struct%nrow_global
@@ -342,38 +340,17 @@ CONTAINS
          nprow = context%num_pe(1)
          npcol = context%num_pe(2)
          desca(:) = matrix%matrix_struct%descriptor(:)
-         DO i = 1, ncol
-            DO j = 1, ncol
+         outer: DO j = 1, ncol
+            DO i = 1, ncol
                CALL infog2l(i, j, desca, nprow, npcol, myprow, mypcol, il, jl, iprow, ipcol)
                IF ((iprow == myprow) .AND. (ipcol == mypcol)) THEN
-                  IF (i == j) THEN
-                     IF (ABS(matrix%local_data(il, jl) - 1.0_dp) > eps_warning) THEN
-                        WRITE (UNIT=output_unit, FMT="(/,T2,A,/,T2,A,I0,A,I0,A,F0.15,/,T2,A,ES10.3)") &
-                           "The eigenvectors returned by "//TRIM(diag_type_name)//" are not orthonormal", &
-                           "Matrix element (", i, ", ", j, ") = ", matrix%local_data(il, jl), &
-                           "The deviation from the expected value 1 is", ABS(matrix%local_data(il, jl) - 1.0_dp)
-                        IF (ABS(matrix%local_data(il, jl) - 1.0_dp) > eps_abort) THEN
-                           CPABORT("ERROR in "//routineN//": Check of matrix diagonalization failed")
-                        ELSE
-                           CPWARN("Check of matrix diagonalization failed in routine "//routineN)
-                        END IF
-                     END IF
-                  ELSE
-                     IF (ABS(matrix%local_data(il, jl)) > eps_warning) THEN
-                        WRITE (UNIT=output_unit, FMT="(/,T2,A,/,T2,A,I0,A,I0,A,F0.15,/,T2,A,ES10.3)") &
-                           "The eigenvectors returned by "//TRIM(diag_type_name)//" are not orthonormal", &
-                           "Matrix element (", i, ", ", j, ") = ", matrix%local_data(il, jl), &
-                           "The deviation from the expected value 0 is", ABS(matrix%local_data(il, jl))
-                        IF (ABS(matrix%local_data(il, jl)) > eps_abort) THEN
-                           CPABORT("ERROR in "//routineN//": Check of matrix diagonalization failed")
-                        ELSE
-                           CPWARN("Check of matrix diagonalization failed in routine "//routineN)
-                        END IF
-                     END IF
-                  END IF
+                  gold = MERGE(0.0_dp, 1.0_dp, i .NE. j)
+                  test = matrix%local_data(il, jl)
+                  eps = ABS(test - gold)
+                  IF (eps > eps_warning) EXIT outer
                END IF
             END DO
-         END DO
+         END DO outer
 #else
          nrow = SIZE(eigenvectors%local_data, 1)
          ncol = MIN(SIZE(eigenvectors%local_data, 2), nvec)
@@ -381,36 +358,37 @@ CONTAINS
                     eigenvectors%local_data(1, 1), nrow, &
                     eigenvectors%local_data(1, 1), nrow, &
                     0.0_dp, matrix%local_data(1, 1), nrow)
-         DO i = 1, ncol
-            DO j = 1, ncol
-               IF (i == j) THEN
-                  IF (ABS(matrix%local_data(i, j) - 1.0_dp) > eps_warning) THEN
-                     WRITE (UNIT=output_unit, FMT="(/,T2,A,/,T2,A,I0,A,I0,A,F0.15,/,T2,A,ES10.3)") &
-                        "The eigenvectors returned by "//TRIM(diag_type_name)//" are not orthonormal", &
-                        "Matrix element (", i, ", ", j, ") = ", matrix%local_data(i, j), &
-                        "The deviation from the expected value 1 is", ABS(matrix%local_data(i, j) - 1.0_dp)
-                     IF (ABS(matrix%local_data(i, j) - 1.0_dp) > eps_abort) THEN
-                        CPABORT("ERROR in "//routineN//": Check of matrix diagonalization failed")
-                     ELSE
-                        CPWARN("Check of matrix diagonalization failed in routine "//routineN)
-                     END IF
-                  END IF
-               ELSE
-                  IF (ABS(matrix%local_data(i, j)) > eps_warning) THEN
-                     WRITE (UNIT=output_unit, FMT="(/,T2,A,/,T2,A,I0,A,I0,A,F0.15,/,T2,A,ES10.3)") &
-                        "The eigenvectors returned by "//TRIM(diag_type_name)//" are not orthonormal", &
-                        "Matrix element (", i, ", ", j, ") = ", matrix%local_data(i, j), &
-                        "The deviation from the expected value 0 is", ABS(matrix%local_data(i, j))
-                     IF (ABS(matrix%local_data(i, j)) > eps_abort) THEN
-                        CPABORT("ERROR in "//routineN//": Check of matrix diagonalization failed")
-                     ELSE
-                        CPWARN("Check of matrix diagonalization failed in routine "//routineN)
-                     END IF
-                  END IF
-               END IF
+         outer: DO j = 1, ncol
+            DO i = 1, ncol
+               gold = MERGE(0.0_dp, 1.0_dp, i .NE. j)
+               test = matrix%local_data(i, j)
+               eps = ABS(test - gold)
+               IF (eps > eps_warning) EXIT outer
             END DO
-         END DO
+         END DO outer
 #endif
+         IF (eps > eps_warning) THEN
+            IF (diag_type == FM_DIAG_TYPE_SCALAPACK) THEN
+               diag_type_name = "SYEVD"
+            ELSE IF (diag_type == FM_DIAG_TYPE_ELPA) THEN
+               diag_type_name = "ELPA"
+            ELSE IF (diag_type == FM_DIAG_TYPE_CUSOLVER) THEN
+               diag_type_name = "CUSOLVER"
+            ELSE IF (diag_type == FM_DIAG_TYPE_DLAF) THEN
+               diag_type_name = "DLAF"
+            ELSE
+               CPABORT("Unknown diag_type")
+            END IF
+            WRITE (UNIT=output_unit, FMT="(/,T2,A,/,T2,A,I0,A,I0,A,F0.15,/,T2,A,F0.0,A,ES10.3)") &
+               "The eigenvectors returned by "//TRIM(diag_type_name)//" are not orthonormal", &
+               "Matrix element (", i, ", ", j, ") = ", test, &
+               "The deviation from the expected value ", gold, " is", eps
+            IF (eps > eps_abort) THEN
+               CPABORT("ERROR in "//routineN//": Check of matrix diagonalization failed")
+            ELSE
+               CPWARN("Check of matrix diagonalization failed in routine "//routineN)
+            END IF
+         END IF
       END IF
 
       CALL timestop(handle)

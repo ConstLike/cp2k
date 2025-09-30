@@ -34,7 +34,7 @@ void dbm_create(dbm_matrix_t **matrix_out, dbm_distribution_t *dist,
 
   size_t size = (strlen(name) + 1) * sizeof(char);
   matrix->name = malloc(size);
-  assert(matrix->name != NULL);
+  assert(matrix->name != NULL && name != NULL);
   memcpy(matrix->name, name, size);
 
   matrix->nrows = nrows;
@@ -42,18 +42,23 @@ void dbm_create(dbm_matrix_t **matrix_out, dbm_distribution_t *dist,
 
   size = nrows * sizeof(int);
   matrix->row_sizes = malloc(size);
-  assert(matrix->row_sizes != NULL);
-  memcpy(matrix->row_sizes, row_sizes, size);
+  assert(matrix->row_sizes != NULL || size == 0);
+  if (size != 0) {
+    memcpy(matrix->row_sizes, row_sizes, size);
+  }
 
   size = ncols * sizeof(int);
   matrix->col_sizes = malloc(size);
-  assert(matrix->col_sizes != NULL);
-  memcpy(matrix->col_sizes, col_sizes, size);
+  assert(matrix->col_sizes != NULL || size == 0);
+  if (size != 0) {
+    memcpy(matrix->col_sizes, col_sizes, size);
+  }
 
-  matrix->shards = malloc(dbm_get_num_shards(matrix) * sizeof(dbm_shard_t));
-  assert(matrix->shards != NULL);
+  const int num_shards = dbm_get_num_shards(matrix);
+  matrix->shards = malloc(num_shards * sizeof(dbm_shard_t));
+  assert(matrix->shards != NULL || num_shards == 0);
 #pragma omp parallel for
-  for (int ishard = 0; ishard < dbm_get_num_shards(matrix); ishard++) {
+  for (int ishard = 0; ishard < num_shards; ishard++) {
     dbm_shard_init(&matrix->shards[ishard]);
   }
 
@@ -244,10 +249,11 @@ void dbm_put_block(dbm_matrix_t *matrix, const int row, const int col,
       dbm_shard_get_or_allocate_block(shard, row, col, block_size);
   double *blk_data = &shard->data[blk->offset];
   if (summation) {
+    assert(blk_data != NULL || 0 == block_size);
     for (int i = 0; i < block_size; i++) {
       blk_data[i] += block[i];
     }
-  } else {
+  } else if (block_size != 0) {
     memcpy(blk_data, block, block_size * sizeof(double));
   }
   omp_unset_lock(&shard->lock);
@@ -390,7 +396,9 @@ void dbm_zero(dbm_matrix_t *matrix) {
 #pragma omp parallel for DBM_OMP_SCHEDULE
   for (int ishard = 0; ishard < dbm_get_num_shards(matrix); ishard++) {
     dbm_shard_t *shard = &matrix->shards[ishard];
-    memset(shard->data, 0, shard->data_size * sizeof(double));
+    if (shard->data != NULL) {
+      memset(shard->data, 0, shard->data_size * sizeof(double));
+    }
   }
 }
 
@@ -408,7 +416,6 @@ void dbm_add(dbm_matrix_t *matrix_a, const dbm_matrix_t *matrix_b) {
     const dbm_shard_t *shard_b = &matrix_b->shards[ishard];
     for (int iblock = 0; iblock < shard_b->nblocks; iblock++) {
       const dbm_block_t blk_b = shard_b->blocks[iblock];
-
       const int row_size = matrix_b->row_sizes[blk_b.row];
       const int col_size = matrix_b->col_sizes[blk_b.col];
       assert(row_size == matrix_a->row_sizes[blk_b.row]);
@@ -551,6 +558,48 @@ double dbm_maxabs(const dbm_matrix_t *matrix) {
   }
   dbm_mpi_max_double(&maxabs, 1, matrix->dist->comm);
   return maxabs;
+}
+
+/*******************************************************************************
+ * \brief Calculates maximum relative difference between matrix_a and matrix_b.
+ * \author Hans Pabst
+ ******************************************************************************/
+double dbm_maxeps(const dbm_matrix_t *matrix_a, const dbm_matrix_t *matrix_b) {
+  const int num_shards = dbm_get_num_shards(matrix_a);
+  double epsilon = 0;
+
+  assert(omp_get_num_threads() == 1);
+  assert(matrix_a->dist == matrix_b->dist);
+  assert(num_shards == dbm_get_num_shards(matrix_b));
+
+#pragma omp parallel for DBM_OMP_SCHEDULE
+  for (int ishard = 0; ishard < num_shards; ++ishard) {
+    const dbm_shard_t *const shard_a = &matrix_a->shards[ishard];
+    const dbm_shard_t *const shard_b = &matrix_b->shards[ishard];
+    assert(shard_a->nblocks == shard_b->nblocks);
+    for (int iblock = 0; iblock < shard_a->nblocks; ++iblock) {
+      const dbm_block_t *const blk_a = &shard_a->blocks[iblock];
+      const dbm_block_t *const blk_b =
+          dbm_shard_lookup(shard_b, blk_a->row, blk_a->col);
+      const int row_size = matrix_a->row_sizes[blk_a->row];
+      const int col_size = matrix_a->col_sizes[blk_a->col];
+      assert(row_size == matrix_b->row_sizes[blk_b->row]);
+      assert(col_size == matrix_b->col_sizes[blk_b->col]);
+      const double *const data_a = &shard_a->data[blk_a->offset];
+      const double *const data_b = &shard_b->data[blk_b->offset];
+      const int block_size = row_size * col_size;
+      for (int i = 0; i < block_size; ++i) {
+        const double d = data_a[i] - data_b[i];
+        const double e = fabs(0 != data_a[i] ? (d / data_a[i]) : d);
+        if (epsilon < e) {
+          epsilon = e;
+        }
+      }
+    }
+  }
+
+  dbm_mpi_max_double(&epsilon, 1, matrix_a->dist->comm);
+  return epsilon;
 }
 
 /*******************************************************************************

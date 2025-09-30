@@ -125,6 +125,7 @@ MODULE qs_ks_methods
    USE qs_rho_types,                    ONLY: qs_rho_get,&
                                               qs_rho_type
    USE qs_sccs,                         ONLY: sccs
+   USE qs_scf_types,                    ONLY: qs_scf_env_type
    USE qs_vxc,                          ONLY: qs_vxc_create
    USE qs_vxc_atom,                     ONLY: calculate_vxc_atom
    USE rtp_admm_methods,                ONLY: rtp_admm_calc_rho_aux,&
@@ -132,6 +133,7 @@ MODULE qs_ks_methods
    USE se_fock_matrix,                  ONLY: build_se_fock_matrix
    USE smeagol_interface,               ONLY: smeagol_shift_v_hartree
    USE surface_dipole,                  ONLY: calc_dipsurf_potential
+   USE tblite_ks_matrix,                ONLY: build_tblite_ks_matrix
    USE virial_types,                    ONLY: virial_type
    USE xtb_ks_matrix,                   ONLY: build_xtb_ks_matrix
 #include "./base/base_uses.f90"
@@ -144,7 +146,7 @@ MODULE qs_ks_methods
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'qs_ks_methods'
 
    PUBLIC :: calc_rho_tot_gspace, qs_ks_update_qs_env, qs_ks_build_kohn_sham_matrix, &
-             qs_ks_allocate_basics
+             qs_ks_allocate_basics, evaluate_core_matrix_p_mix_new
 
 CONTAINS
 
@@ -213,9 +215,8 @@ CONTAINS
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_r, v_rspace_embed, v_rspace_new, &
                                                             v_rspace_new_aux_fit, v_tau_rspace, &
                                                             v_tau_rspace_aux_fit
-      TYPE(pw_r3d_rs_type), POINTER                      :: rho0_s_rs, rho_nlcc, v_hartree_rspace, &
-                                                            v_sccs_rspace, v_sic_rspace, &
-                                                            v_spin_ddapc_rest_r, vee, vppl_rspace
+      TYPE(pw_r3d_rs_type), POINTER :: rho0_s_rs, rho_nlcc, rhoz_cneo_s_rs, v_hartree_rspace, &
+         v_sccs_rspace, v_sic_rspace, v_spin_ddapc_rest_r, vee, vppl_rspace
       TYPE(qs_energy_type), POINTER                      :: energy
       TYPE(qs_ks_env_type), POINTER                      :: ks_env
       TYPE(qs_rho_type), POINTER                         :: rho, rho_struct, rho_xc
@@ -429,12 +430,6 @@ CONTAINS
       CALL calc_v_sic_rspace(v_sic_rspace, energy, qs_env, dft_control, rho, poisson_env, &
                              just_energy, calculate_forces, auxbas_pw_pool)
 
-      IF (gapw) THEN
-         CALL get_qs_env(qs_env, ecoul_1c=ecoul_1c, local_rho_set=local_rho_set)
-         CALL Vh_1c_gg_integrals(qs_env, energy%hartree_1c, ecoul_1c, local_rho_set, para_env, tddft=.FALSE., &
-                                 core_2nd=.FALSE.)
-      END IF
-
       ! Check if CDFT constraint is needed
       CALL qs_ks_cdft_constraint(qs_env, auxbas_pw_pool, calculate_forces, cdft_control)
 
@@ -448,9 +443,16 @@ CONTAINS
          IF (.NOT. just_energy) THEN
             IF (gapw) THEN
                CALL get_qs_env(qs_env=qs_env, &
-                               rho0_s_rs=rho0_s_rs)
+                               rho0_s_rs=rho0_s_rs, &
+                               rhoz_cneo_s_rs=rhoz_cneo_s_rs)
                CPASSERT(ASSOCIATED(rho0_s_rs))
+               IF (ASSOCIATED(rhoz_cneo_s_rs)) THEN
+                  CALL pw_axpy(rhoz_cneo_s_rs, rho0_s_rs)
+               END IF
                ee_ener = ee_ener + pw_integral_ab(rho0_s_rs, vee)
+               IF (ASSOCIATED(rhoz_cneo_s_rs)) THEN
+                  CALL pw_axpy(rhoz_cneo_s_rs, rho0_s_rs, -1.0_dp)
+               END IF
             END IF
          END IF
          ! the sign accounts for the charge of the electrons
@@ -796,6 +798,18 @@ CONTAINS
                                          v_qmmm=vee, scale=-1.0_dp)
          END IF
          CALL integrate_vhg0_rspace(qs_env, v_hartree_rspace, para_env, calculate_forces)
+         ! Place Vh_1c_gg_integrals after integrate_vhg0_rspace for CNEO calculations
+         ! because vhg0 integral is needed to build the complete nuclear equation
+         CALL get_qs_env(qs_env, ecoul_1c=ecoul_1c, local_rho_set=local_rho_set)
+         CALL Vh_1c_gg_integrals(qs_env, energy%hartree_1c, ecoul_1c, local_rho_set, para_env, tddft=.FALSE., &
+                                 core_2nd=.FALSE.)
+         ! CNEO quantum nuclear core energy (kinetic + Z*erfc(r)/r potential from classical nuclei)
+         energy%core_cneo = 0.0_dp
+         IF (ASSOCIATED(local_rho_set%rhoz_cneo_set)) THEN
+            DO iatom = 1, SIZE(local_rho_set%rhoz_cneo_set)
+               energy%core_cneo = energy%core_cneo + local_rho_set%rhoz_cneo_set(iatom)%e_core
+            END DO
+         END IF
       END IF
 
       IF (gapw .OR. gapw_xc) THEN
@@ -905,8 +919,8 @@ CONTAINS
       END IF
 
       ! Sum all energy terms to obtain the total energy
-      energy%total = energy%core_overlap + energy%core_self + energy%core + energy%hartree + &
-                     energy%hartree_1c + energy%exc + energy%exc1 + energy%ex + &
+      energy%total = energy%core_overlap + energy%core_self + energy%core_cneo + energy%core + &
+                     energy%hartree + energy%hartree_1c + energy%exc + energy%exc1 + energy%ex + &
                      energy%dispersion + energy%gcp + energy%qmmm_el + energy%mulliken + &
                      SUM(energy%ddapc_restraint) + energy%s2_restraint + &
                      energy%dft_plus_u + energy%kTS + &
@@ -945,7 +959,7 @@ CONTAINS
       LOGICAL                                            :: my_skip
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_g
-      TYPE(pw_c1d_gs_type), POINTER                      :: rho0_s_gs, rho_core
+      TYPE(pw_c1d_gs_type), POINTER                      :: rho0_s_gs, rho_core, rhoz_cneo_s_gs
       TYPE(qs_charges_type), POINTER                     :: qs_charges
 
       my_skip = .FALSE.
@@ -958,10 +972,13 @@ CONTAINS
          NULLIFY (rho_core)
          CALL get_qs_env(qs_env=qs_env, rho_core=rho_core)
          IF (dft_control%qs_control%gapw) THEN
-            NULLIFY (rho0_s_gs)
-            CALL get_qs_env(qs_env=qs_env, rho0_s_gs=rho0_s_gs)
+            NULLIFY (rho0_s_gs, rhoz_cneo_s_gs)
+            CALL get_qs_env(qs_env=qs_env, rho0_s_gs=rho0_s_gs, rhoz_cneo_s_gs=rhoz_cneo_s_gs)
             CPASSERT(ASSOCIATED(rho0_s_gs))
             CALL pw_copy(rho0_s_gs, rho_tot_gspace)
+            IF (ASSOCIATED(rhoz_cneo_s_gs)) THEN
+               CALL pw_axpy(rhoz_cneo_s_gs, rho_tot_gspace)
+            END IF
             IF (dft_control%qs_control%gapw_control%nopaw_as_gpw) THEN
                CALL pw_axpy(rho_core, rho_tot_gspace)
             END IF
@@ -1190,6 +1207,51 @@ CONTAINS
    END SUBROUTINE evaluate_core_matrix_traces
 
 ! **************************************************************************************************
+!> \brief Calculates the traces of the core matrices and the density matrix.
+!> \param qs_env ...
+!> \author Johann Pototschnig
+! **************************************************************************************************
+   SUBROUTINE evaluate_core_matrix_p_mix_new(qs_env)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+
+      CHARACTER(LEN=*), PARAMETER :: routineN = 'evaluate_core_matrix_p_mix_new'
+
+      INTEGER                                            :: handle
+      REAL(KIND=dp)                                      :: energy_core_im
+      TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrixkp_h, matrixkp_t
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(qs_energy_type), POINTER                      :: energy
+      TYPE(qs_scf_env_type), POINTER                     :: scf_env
+
+      CALL timeset(routineN, handle)
+      NULLIFY (energy, dft_control, matrixkp_t, matrixkp_h)
+
+      CALL get_qs_env(qs_env, &
+                      energy=energy, &
+                      dft_control=dft_control, &
+                      kinetic_kp=matrixkp_t, &
+                      matrix_h_kp=matrixkp_h, &
+                      scf_env=scf_env)
+
+      CALL calculate_ptrace(matrixkp_h, scf_env%p_mix_new, energy%core, dft_control%nspins)
+
+      ! Add the imaginary part in the RTP case
+      IF (qs_env%run_rtp) THEN
+         IF (dft_control%rtp_control%velocity_gauge) THEN
+            CALL get_qs_env(qs_env, matrix_h_im_kp=matrixkp_h)
+            CALL calculate_ptrace(matrixkp_h, scf_env%p_mix_new, energy_core_im, dft_control%nspins)
+            energy%core = energy%core - energy_core_im
+         END IF
+      END IF
+
+      ! kinetic energy
+      IF (ASSOCIATED(matrixkp_t)) &
+         CALL calculate_ptrace(matrixkp_t, scf_env%p_mix_new, energy%kinetic, dft_control%nspins)
+
+      CALL timestop(handle)
+   END SUBROUTINE evaluate_core_matrix_p_mix_new
+
+! **************************************************************************************************
 !> \brief Constructs a new Khon-Sham matrix
 !> \param qs_env ...
 !> \param calculate_forces ...
@@ -1223,10 +1285,15 @@ CONTAINS
                                    just_energy=just_energy)
 
       ELSEIF (dft_control%qs_control%xtb) THEN
-         CALL build_xtb_ks_matrix(qs_env, &
-                                  calculate_forces=calculate_forces, &
-                                  just_energy=just_energy)
-
+         IF (dft_control%qs_control%xtb_control%do_tblite) THEN
+            CALL build_tblite_ks_matrix(qs_env, &
+                                        calculate_forces=calculate_forces, &
+                                        just_energy=just_energy)
+         ELSE
+            CALL build_xtb_ks_matrix(qs_env, &
+                                     calculate_forces=calculate_forces, &
+                                     just_energy=just_energy)
+         END IF
       ELSE
          CALL qs_ks_build_kohn_sham_matrix(qs_env, &
                                            calculate_forces=calculate_forces, &

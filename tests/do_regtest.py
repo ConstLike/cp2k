@@ -6,7 +6,7 @@ from asyncio import Semaphore, Task
 from asyncio.subprocess import DEVNULL, PIPE, STDOUT, Process
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Coroutine, Dict, List, Literal, Optional, TextIO, Tuple, Union
+from typing import Any, Coroutine, Dict, List, Optional, TextIO, Tuple, Union
 from statistics import mean, stdev
 import argparse
 import asyncio
@@ -18,6 +18,11 @@ import subprocess
 import sys
 import time
 from matchers import run_matcher
+
+if sys.version_info >= (3, 8):
+    from typing import Literal
+else:
+    from typing_extensions import Literal
 
 # Try importing toml from various places.
 try:
@@ -213,7 +218,7 @@ async def main() -> None:
         for t in await asyncio.gather(*rerun_tasks):
             rerun_times.update({r.fullname: r.duration for r in t.results})
         stats = {r.fullname: [r.duration, rerun_times[r.fullname]] for r in maybe_slow}
-        slow_tests = {k: v for k, v in stats.items() if mean(v) > threshold}
+        slow_tests = {k: v for k, v in stats.items() if mean(v) - stdev(v) > threshold}
         print(f"Duration threshold (2x 95th %ile): {threshold:.2f} sec")
         print(f"Found {len(slow_tests)} slow tests ({num_suppressed} suppressed):")
         for k, v in slow_tests.items():

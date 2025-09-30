@@ -64,6 +64,7 @@ MODULE qs_initial_guess
    USE particle_methods,                ONLY: get_particle_set
    USE particle_types,                  ONLY: particle_type
    USE qs_atomic_block,                 ONLY: calculate_atomic_block_dm
+   USE qs_cneo_types,                   ONLY: cneo_potential_type
    USE qs_density_matrices,             ONLY: calculate_density_matrix
    USE qs_dftb_utils,                   ONLY: get_dftb_atom_param
    USE qs_eht_guess,                    ONLY: calculate_eht_guess
@@ -145,8 +146,9 @@ CONTAINS
       INTEGER, DIMENSION(2)                              :: nelectron_spin
       INTEGER, DIMENSION(:), POINTER                     :: atom_list, elec_conf, nelec_kind, &
                                                             sort_kind
-      LOGICAL :: did_guess, do_hfx_ri_mo, do_kpoints, do_std_diag, exist, has_unit_metric, &
-         natom_mismatch, need_mos, need_wm, ofgpw, owns_ortho, print_history_log, print_log
+      LOGICAL :: cneo_potential_present, did_guess, do_hfx_ri_mo, do_kpoints, do_std_diag, exist, &
+         has_unit_metric, natom_mismatch, need_mos, need_wm, ofgpw, owns_ortho, print_history_log, &
+         print_log
       REAL(dp), ALLOCATABLE, DIMENSION(:, :)             :: buff, buff2
       REAL(dp), DIMENSION(:, :), POINTER                 :: pdata
       REAL(KIND=dp)                                      :: checksum, eps, length, maxocc, occ, &
@@ -395,9 +397,11 @@ CONTAINS
                                       natoms, para_env, id_nr, dft_section, natom_mismatch)
             IF (natom_mismatch) density_guess = safe_density_guess
          ELSE
-            CALL read_mo_set_from_restart(mo_array, atomic_kind_set, qs_kind_set, particle_set, para_env, &
-                                          id_nr=id_nr, multiplicity=dft_control%multiplicity, dft_section=dft_section, &
-                                          natom_mismatch=natom_mismatch, out_unit=ounit)
+            CALL read_mo_set_from_restart(mo_array, qs_kind_set, particle_set, para_env, &
+                                          id_nr=id_nr, multiplicity=dft_control%multiplicity, &
+                                          dft_section=dft_section, &
+                                          natom_mismatch=natom_mismatch, &
+                                          out_unit=ounit)
 
             IF (natom_mismatch) THEN
                density_guess = safe_density_guess
@@ -469,7 +473,7 @@ CONTAINS
             END IF
             DO i = 1, last_read
                j = last_read - i
-               CALL read_mo_set_from_restart(mo_array, atomic_kind_set, qs_kind_set, particle_set, para_env, &
+               CALL read_mo_set_from_restart(mo_array, qs_kind_set, particle_set, para_env, &
                                              id_nr=j, multiplicity=dft_control%multiplicity, &
                                              dft_section=dft_section, out_unit=ounit)
 
@@ -552,6 +556,11 @@ CONTAINS
 
          IF (do_kpoints) THEN
             CPABORT("calculate_first_density_matrix: core_guess not implemented for k-points")
+         END IF
+
+         CALL get_qs_kind_set(qs_kind_set, cneo_potential_present=cneo_potential_present)
+         IF (cneo_potential_present) THEN
+            CPABORT("calculate_first_density_matrix: core_guess not implemented for CNEO")
          END IF
 
          owns_ortho = .FALSE.
@@ -1212,6 +1221,7 @@ CONTAINS
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:)           :: econf, pdiag, sdiag
       REAL(KIND=dp), DIMENSION(0:3)                      :: edftb
       TYPE(all_potential_type), POINTER                  :: all_potential
+      TYPE(cneo_potential_type), POINTER                 :: cneo_potential
       TYPE(dbcsr_type), POINTER                          :: matrix_p
       TYPE(gth_potential_type), POINTER                  :: gth_potential
       TYPE(gto_basis_set_type), POINTER                  :: orb_basis_set
@@ -1265,8 +1275,10 @@ CONTAINS
             CALL get_qs_kind(qs_kind_set(ikind), basis_set=orb_basis_set, &
                              all_potential=all_potential, &
                              gth_potential=gth_potential, &
-                             sgp_potential=sgp_potential)
-            has_pot = ASSOCIATED(all_potential) .OR. ASSOCIATED(gth_potential) .OR. ASSOCIATED(sgp_potential)
+                             sgp_potential=sgp_potential, &
+                             cneo_potential=cneo_potential)
+            has_pot = ASSOCIATED(all_potential) .OR. ASSOCIATED(gth_potential) .OR. &
+                      ASSOCIATED(sgp_potential) .OR. ASSOCIATED(cneo_potential)
 
             IF (dft_control%qs_control%dftb) THEN
                CALL get_dftb_atom_param(qs_kind_set(ikind)%dftb_parameter, &

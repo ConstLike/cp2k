@@ -29,11 +29,28 @@ MODULE cp_control_types
                                               smeagol_control_type
    USE xas_control,                     ONLY: xas_control_release,&
                                               xas_control_type
+   USE xas_tdp_types,                   ONLY: xas_tdp_control_create,&
+                                              xas_tdp_control_release,&
+                                              xas_tdp_control_type
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
 
    PRIVATE
+
+!***************************************************************************************************
+!\brief Control parameters for hairy-probes DFT
+!***************************************************************************************************
+   TYPE hairy_probes_type
+      REAL(KIND=dp)                        :: alpha = 0.0_dp     ! solution probes parameter
+      REAL(KIND=dp)                        :: mu = 0.0_dp        ! chemical potenatial of electrons in reservoir
+      REAL(KIND=dp)                        :: T = 0.0_dp         ! temperature of electrons in reservoir
+      REAL(KIND=dp)                        :: eps_hp = 0.0_dp    ! tolerance for accuracy checks on occupation numbers
+      INTEGER                              :: natoms = 0, &
+                                              last_ao = 0, &
+                                              first_ao = 0
+      INTEGER, DIMENSION(:), POINTER       :: atom_ids => NULL() ! atom ids to which the probes are attached
+   END TYPE hairy_probes_type
 
 ! **************************************************************************************************
 ! \brief Control parameters for pw grids
@@ -140,9 +157,11 @@ MODULE cp_control_types
       INTEGER                              :: gfn_type = 1
       !
       LOGICAL                              :: do_ewald = .FALSE.
+      LOGICAL                              :: do_tblite = .FALSE.
       !
       INTEGER                              :: sto_ng = 0
       INTEGER                              :: h_sto_ng = 0
+      INTEGER                              :: tblite_method = 0
       !
       INTEGER                              :: vdw_type = -1
       CHARACTER(LEN=default_path_length)   :: parameter_file_path = ""
@@ -234,7 +253,6 @@ MODULE cp_control_types
                                               lmax_rho0 = 0, &
                                               lmax_sphere = 0, &
                                               quadrature = 0
-      LOGICAL                              :: lrho1_eq_lrho0 = .FALSE.
       LOGICAL                              :: alpha0_hard_from_input = .FALSE., &
                                               force_paw = .FALSE., &
                                               non_paw_atoms = .FALSE., &
@@ -485,6 +503,7 @@ MODULE cp_control_types
       INTEGER                              :: kernel = 0
       !> type of spin excitations to compute
       INTEGER                              :: spinflip = 0
+      ! List of response theories to run
       CHARACTER(LEN=default_string_length), &
          DIMENSION(:), POINTER             :: theory_list
       ! MRSF HF exchange
@@ -573,6 +592,16 @@ MODULE cp_control_types
    END TYPE tddfpt2_control_type
 
 ! **************************************************************************************************
+!> \brief
+! **************************************************************************************************
+   TYPE rixs_control_type
+
+      TYPE(tddfpt2_control_type), POINTER     :: tddfpt2_control => NULL()
+      TYPE(xas_tdp_control_type), POINTER     :: xas_tdp_control => NULL()
+
+   END TYPE rixs_control_type
+
+! **************************************************************************************************
 ! \brief Control parameters for a DFT calculation
 ! \par History
 !      10.2019 added variables related to surface dipole correction [Soumya Ghosh]
@@ -584,12 +613,15 @@ MODULE cp_control_types
       TYPE(rtp_control_type), POINTER      :: rtp_control => NULL()
       TYPE(sccs_control_type), POINTER     :: sccs_control => NULL()
       TYPE(tddfpt2_control_type), POINTER  :: tddfpt2_control => NULL()
+      TYPE(rixs_control_type), POINTER     :: rixs_control => NULL()
       TYPE(xas_control_type), POINTER      :: xas_control => NULL()
       TYPE(expot_control_type), POINTER    :: expot_control => NULL()
       TYPE(maxwell_control_type), POINTER  :: maxwell_control => NULL()
       TYPE(smeagol_control_type), POINTER  :: smeagol_control => NULL()
       TYPE(efield_p_type), POINTER, &
          DIMENSION(:)                      :: efield_fields => NULL()
+      TYPE(hairy_probes_type), POINTER, &
+         DIMENSION(:)                      :: probe => NULL()
       INTEGER                              :: nspins = 0, &
                                               charge = 0, &
                                               multiplicity = 0, &
@@ -639,7 +671,8 @@ MODULE cp_control_types
                                               correct_el_density_dip = .FALSE., &
                                               do_sccs = .FALSE., &
                                               apply_embed_pot = .FALSE., &
-                                              apply_dmfet_pot = .FALSE.
+                                              apply_dmfet_pot = .FALSE., &
+                                              hairy_probes = .FALSE.
    END TYPE dft_control_type
 
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'cp_control_types'
@@ -650,6 +683,7 @@ MODULE cp_control_types
              qs_control_type, &
              gapw_control_type, &
              tddfpt2_control_type, &
+             rixs_control_type, &
              proj_mo_type, &
              efield_type, &
              mulliken_restraint_type, &
@@ -664,7 +698,8 @@ MODULE cp_control_types
              rtp_control_type, &
              sccs_control_type, &
              stda_control_type, &
-             smeared_type
+             smeared_type, &
+             hairy_probes_type
 
    ! Public subroutines
 
@@ -674,7 +709,9 @@ MODULE cp_control_types
              admm_control_release, &
              maxwell_control_create, &
              expot_control_create, &
-             ddapc_control_create
+             ddapc_control_create, &
+             rixs_control_create, &
+             rixs_control_release
 
 CONTAINS
 
@@ -788,6 +825,7 @@ CONTAINS
       NULLIFY (dft_control%xas_control)
       NULLIFY (dft_control%qs_control)
       NULLIFY (dft_control%tddfpt2_control)
+      NULLIFY (dft_control%rixs_control)
       NULLIFY (dft_control%efield_fields)
       NULLIFY (dft_control%period_efield)
       NULLIFY (dft_control%admm_control)
@@ -796,11 +834,14 @@ CONTAINS
       NULLIFY (dft_control%smeagol_control)
       NULLIFY (dft_control%rtp_control)
       NULLIFY (dft_control%sccs_control)
+      NULLIFY (dft_control%probe)
       dft_control%do_sccs = .FALSE.
       dft_control%apply_embed_pot = .FALSE.
       dft_control%apply_dmfet_pot = .FALSE.
+      dft_control%hairy_probes = .FALSE.
       CALL qs_control_create(dft_control%qs_control)
       CALL tddfpt2_control_create(dft_control%tddfpt2_control)
+      CALL rixs_control_create(dft_control%rixs_control)
       CALL smeagol_control_create(dft_control%smeagol_control)
    END SUBROUTINE dft_control_create
 
@@ -814,8 +855,11 @@ CONTAINS
    SUBROUTINE dft_control_release(dft_control)
       TYPE(dft_control_type), INTENT(INOUT)              :: dft_control
 
+      INTEGER                                            :: i
+
       CALL qs_control_release(dft_control%qs_control)
       CALL tddfpt2_control_release(dft_control%tddfpt2_control)
+      CALL rixs_control_release(dft_control%rixs_control) ! maybe check first if allocated
       IF (ASSOCIATED(dft_control%xas_control)) THEN
          CALL xas_control_release(dft_control%xas_control)
          DEALLOCATE (dft_control%xas_control)
@@ -825,6 +869,12 @@ CONTAINS
       CALL maxwell_control_release(dft_control%maxwell_control)
       CALL smeagol_control_release(dft_control%smeagol_control)
       CALL efield_fields_release(dft_control%efield_fields)
+      IF (ASSOCIATED(dft_control%probe)) THEN
+         DO i = 1, SIZE(dft_control%probe)
+            DEALLOCATE (dft_control%probe(i)%atom_ids)
+         END DO
+         DEALLOCATE (dft_control%probe)
+      END IF
       IF (ASSOCIATED(dft_control%sccs_control)) DEALLOCATE (dft_control%sccs_control)
       IF (ASSOCIATED(dft_control%period_efield)) THEN
          DEALLOCATE (dft_control%period_efield)
@@ -950,6 +1000,39 @@ CONTAINS
 
       CALL timestop(handle)
    END SUBROUTINE tddfpt2_control_release
+
+! **************************************************************************************************
+!> \brief Creates and initializes the rixs_control_type
+!> \param rixs_control the type to initialize
+! **************************************************************************************************
+   SUBROUTINE rixs_control_create(rixs_control)
+      TYPE(rixs_control_type), POINTER                   :: rixs_control
+
+      CPASSERT(.NOT. ASSOCIATED(rixs_control))
+      ALLOCATE (rixs_control)
+
+      NULLIFY (rixs_control%tddfpt2_control)
+      CALL tddfpt2_control_create(rixs_control%tddfpt2_control)
+      NULLIFY (rixs_control%xas_tdp_control)
+      CALL xas_tdp_control_create(rixs_control%xas_tdp_control)
+
+   END SUBROUTINE rixs_control_create
+
+! **************************************************************************************************
+!> \brief Releases the rixs_control_type
+!> \param rixs_control ...
+! **************************************************************************************************
+   SUBROUTINE rixs_control_release(rixs_control)
+      TYPE(rixs_control_type), POINTER                   :: rixs_control
+
+      IF (ASSOCIATED(rixs_control)) THEN
+         CALL tddfpt2_control_release(rixs_control%tddfpt2_control)
+         CALL xas_tdp_control_release(rixs_control%xas_tdp_control)
+
+         DEALLOCATE (rixs_control)
+      END IF
+
+   END SUBROUTINE rixs_control_release
 
 ! **************************************************************************************************
 !> \brief ...

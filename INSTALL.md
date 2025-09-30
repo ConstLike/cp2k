@@ -148,10 +148,10 @@ FFTW is also provided by MKL. Use `-D__FFTW3_MKL` to use the correct import path
 :warning: Note that FFTW must know the Fortran compiler you will use in order to install properly
 (e.g., `export F77=gfortran` before configure if you intend to use gfortran).
 
-:warning: Note that on machines and compilers which support SSE you can configure FFTW3 with
-`--enable-sse2`. Compilers/systems that do not align memory (NAG f95, Intel IA32/gfortran) should
-either not use `--enable-sse2` or otherwise set the define `-D__FFTW3_UNALIGNED` in the arch file.
-Since CP2K is OpenMP parallelized, the FFTW3 threading library libfftw3_threads (or libfftw3_omp) is
+:warning: Note that FFTW configured for SIMD vectorization, requires buffers aligned to SIMD width.
+If this cannot be ensured for the compiler used (e.g., NAG f95, Intel IA32/gfortran), one should
+either configure FFTW without SIMD support or otherwise set the define `-D__FFTW3_UNALIGNED`. Since
+CP2K is OpenMP parallelized, the FFTW3 threading library libfftw3_threads (or libfftw3_omp) is
 required.
 
 ### 2g. LIBINT (optional, enables methods including HF exchange)
@@ -267,20 +267,8 @@ DLA-Future.
 The Pole EXpansion and Selected Inversion (PEXSI) method requires the PEXSI library and two
 dependencies (ParMETIS or PT-Scotch and SuperLU_DIST).
 
-- Download PEXSI (www.pexsi.org) and install it and its dependencies by following its README.md.
-- PEXSI versions 0.10.x have been tested with CP2K. Older versions are not supported.
-- PEXSI needs to be built with `make finstall`.
-
-In the arch file of CP2K:
-
-- Add `-lpexsi_${SUFFIX} -llapack -lblas -lsuperlu_dist_3.3 -lparmetis -lmetis`, and their paths
-  (with `-L$(LIB_DIR)`) to LIBS.
-- It is important that a copy of LAPACK and BLAS is placed before and after these libraries (replace
-  `-llapack` and `-lblas` with the optimized versions as needed).
-- In order to link in PT-Scotch instead of ParMETIS replace `-lparmetis -lmetis` with:
-  `-lptscotchparmetis -lptscotch -lptscotcherr -lscotchmetis -lscotch -lscotcherr`
-- Add `-I$(PEXSI_DIR)/fortran/` to FCFLAGS.
-- Add `-D__LIBPEXSI` to DFLAGS.
+- PEXSI is only available via a Spack build of CP2K.
+- Add `-D__PEXSI` to DFLAGS.
 
 Below are some additional hints that may help in the compilation process:
 
@@ -321,6 +309,9 @@ SIRIUS is a domain specific library for electronic structure calculations.
 - For building CP2K with SIRIUS add `-D__SIRIUS` to DFLAGS.
 - Add `-D__LIBVDWXC` if support is activated in SIRIUS.
 - See <https://electronic-structure.github.io/SIRIUS-doc/> for more information.
+- Add `-D__SIRIUS_DFTD4` when sirius is compiled with dftd3 and dftd4 support.
+- Add `-D__SIRIUS_NLCG` when sirius is compiled with nlcg support.
+- Add `-D__SIRIUS_VCSQNM` when sirius is compiled with variable cell relaxation support.
 
 ### 2s. FPGA (optional, plane wave FFT calculations)
 
@@ -477,6 +468,17 @@ DeePMD-kit - Deep Potential Molecular Dynamics. Support for DeePMD-kit can be en
   <https://docs.deepmodeling.com/projects/deepmd/en/master/install/install-from-c-library.html>
 - For more information see <https://github.com/deepmodeling/deepmd-kit.git>.
 
+### 2y. ACE (optional, atomic cluster expansion ML potentials)
+
+Atomic cluster expansion for accurate and transferable interatomic potentials support can be enabled
+via the flag `-D__ACE`.
+
+- the library files can be downloaded from <https://github.com/ICAMS/lammps-user-pace>
+- use cmake/make to compile. There is no install, just ensure that the cp2k build process links in
+  all three libraries (libpace, libyaml-cpp-pace and libcnpy). Access to ML-PACE/ace
+  ML-PACE/ace-evaluator and yaml-cpp/include from the library is also needed (see toolchain for
+  example).
+
 ### 2z. DFTD4 (optional, dispersion correction)
 
 - dftd4 - Generally Applicable Atomic-Charge Dependent London Dispersion Correction.
@@ -510,6 +512,12 @@ greenX - Open-source file format and library. Support for greenX can be enabled 
 
 - GREENX library can be downloaded from <https://github.com/nomad-coe/greenX>
 - For more information see <https://nomad-coe.github.io/greenX/>.
+
+### 2z-b. TBLITE (optional, semiempirical method)
+
+- tblite - Light-weight tight-binding framework
+- For more information see <https://github.com/tblite/tblite>
+- Add `-D__TBLITE` to DFLAGS
 
 ## 3. Compile
 

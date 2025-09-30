@@ -58,7 +58,8 @@ MODULE qs_tddfpt2_properties
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
    USE cp_realspace_grid_cube,          ONLY: cp_pw_to_cube
-   USE input_constants,                 ONLY: tddfpt_dipole_berry,&
+   USE input_constants,                 ONLY: no_sf_tddfpt,&
+                                              tddfpt_dipole_berry,&
                                               tddfpt_dipole_length,&
                                               tddfpt_dipole_velocity, &
                                               no_sf_tddfpt
@@ -640,6 +641,7 @@ CONTAINS
 !> \param evals              TDDFPT eigenvalues
 !> \param gs_mos             molecular orbitals optimised for the ground state
 !> \param matrix_s           overlap matrix
+!> \param spinflip ...
 !> \param min_amplitude      the smallest excitation amplitude to print
 !> \par History
 !>    * 05.2016 created as 'tddfpt_print_summary' [Sergey Chulkov]
@@ -658,9 +660,10 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_print_excitation_analysis'
 
       CHARACTER(len=5)                                   :: spin_label, spin_label2
-      INTEGER                                            :: handle, icol, iproc, irow, ispin, spin2, &
+      INTEGER                                            :: handle, icol, iproc, irow, ispin, &
                                                             istate, nao, ncols_local, nrows_local, &
-                                                            nspins, nstates, state_spin, state_spin2
+                                                            nspins, nstates, spin2, state_spin, &
+                                                            state_spin2
       INTEGER(kind=int_8)                                :: iexc, imo_occ, imo_virt, ind, nexcs, &
                                                             nexcs_local, nexcs_max_local, &
                                                             nmo_virt_occ, nmo_virt_occ_alpha
@@ -725,8 +728,8 @@ CONTAINS
             END IF
          END IF
 
-         ALLOCATE (S_mos_virt(SIZE(evects,1)), weights_fm(SIZE(evects,1)))
-         DO ispin = 1, SIZE(evects,1)
+         ALLOCATE (S_mos_virt(SIZE(evects, 1)), weights_fm(SIZE(evects, 1)))
+         DO ispin = 1, SIZE(evects, 1)
             IF (spinflip == no_sf_tddfpt) THEN
                spin2 = ispin
             ELSE
@@ -747,7 +750,7 @@ CONTAINS
          END DO
 
          nexcs_max_local = 0
-         DO ispin = 1, SIZE(evects,1)
+         DO ispin = 1, SIZE(evects, 1)
             CALL cp_fm_get_info(weights_fm(ispin), nrow_local=nrows_local, ncol_local=ncols_local)
             nexcs_max_local = nexcs_max_local + INT(nrows_local, int_8)*INT(ncols_local, int_8)
          END DO
@@ -760,7 +763,7 @@ CONTAINS
 
             ! analyse matrix elements locally and transfer only significant
             ! excitations to the master node for subsequent ordering
-            DO ispin = 1, SIZE(evects,1)
+            DO ispin = 1, SIZE(evects, 1)
                IF (spinflip == no_sf_tddfpt) THEN
                   spin2 = ispin
                ELSE

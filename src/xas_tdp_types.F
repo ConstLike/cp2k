@@ -124,6 +124,7 @@ MODULE xas_tdp_types
       LOGICAL                                 :: tamm_dancoff = .FALSE.
       LOGICAL                                 :: do_quad = .FALSE.
       LOGICAL                                 :: xyz_dip = .FALSE.
+      LOGICAL                                 :: spin_dip = .FALSE.
       LOGICAL                                 :: do_loc = .FALSE.
       LOGICAL                                 :: do_uks = .FALSE.
       LOGICAL                                 :: do_roks = .FALSE.
@@ -203,6 +204,8 @@ MODULE xas_tdp_types
       TYPE(donor_state_type), DIMENSION(:), &
          POINTER   :: donor_states => NULL()
       INTEGER, DIMENSION(:, :, :), POINTER     :: mos_of_ex_atoms => NULL()
+      TYPE(cp_fm_type), DIMENSION(:), &
+         POINTER                               :: mo_coeff => NULL()
       TYPE(qs_loc_env_type), POINTER       :: qs_loc_env => NULL()
       REAL(dp), DIMENSION(:, :), POINTER       :: ri_inv_coul => NULL()
       REAL(dp), DIMENSION(:, :), POINTER       :: ri_inv_ex => NULL()
@@ -230,6 +233,7 @@ MODULE xas_tdp_types
       TYPE(dbcsr_p_type), DIMENSION(:), &
          POINTER                              :: fock_matrix => NULL()
       TYPE(cp_fm_type), POINTER               :: lumo_coeffs => NULL()
+      INTEGER                                 :: nvirt = 0
    END TYPE xas_tdp_env_type
 
 !> *************************************************************************************************
@@ -288,6 +292,8 @@ MODULE xas_tdp_types
       REAL(dp), DIMENSION(:), POINTER         :: tp_evals => NULL()
       REAL(dp), DIMENSION(:), POINTER         :: soc_evals => NULL()
       REAL(dp), DIMENSION(:, :), POINTER      :: osc_str => NULL()
+      REAL(dp), DIMENSION(:, :), POINTER      :: alpha_osc => NULL()
+      REAL(dp), DIMENSION(:, :), POINTER      :: beta_osc => NULL()
       REAL(dp), DIMENSION(:, :), POINTER      :: soc_osc_str => NULL()
       REAL(dp), DIMENSION(:), POINTER         :: quad_osc_str => NULL()
       REAL(dp), DIMENSION(:), POINTER         :: soc_quad_osc_str => NULL()
@@ -409,6 +415,7 @@ CONTAINS
       xas_tdp_control%do_ot = .TRUE.
       xas_tdp_control%do_quad = .FALSE.
       xas_tdp_control%xyz_dip = .FALSE.
+      xas_tdp_control%spin_dip = .FALSE.
       xas_tdp_control%do_loc = .FALSE.
       xas_tdp_control%do_uks = .FALSE.
       xas_tdp_control%do_roks = .FALSE.
@@ -504,6 +511,8 @@ CONTAINS
       CALL section_vals_val_get(xas_tdp_section, "QUADRUPOLE", l_val=xas_tdp_control%do_quad)
 
       CALL section_vals_val_get(xas_tdp_section, "XYZ_DIPOLE", l_val=xas_tdp_control%xyz_dip)
+
+      CALL section_vals_val_get(xas_tdp_section, "SPIN_DIPOLE", l_val=xas_tdp_control%spin_dip)
 
       CALL section_vals_val_get(xas_tdp_section, "EPS_PGF_XAS", n_rep_val=nrep)
       IF (nrep > 0) CALL section_vals_val_get(xas_tdp_section, "EPS_PGF_XAS", r_val=xas_tdp_control%eps_pgf)
@@ -735,6 +744,7 @@ CONTAINS
       NULLIFY (xas_tdp_env%donor_states)
       NULLIFY (xas_tdp_env%qs_loc_env)
       NULLIFY (xas_tdp_env%mos_of_ex_atoms)
+      NULLIFY (xas_tdp_env%mo_coeff)
       NULLIFY (xas_tdp_env%ri_inv_coul)
       NULLIFY (xas_tdp_env%ri_inv_ex)
       NULLIFY (xas_tdp_env%opt_dist2d_coul)
@@ -790,6 +800,12 @@ CONTAINS
          END IF
          IF (ASSOCIATED(xas_tdp_env%mos_of_ex_atoms)) THEN
             DEALLOCATE (xas_tdp_env%mos_of_ex_atoms)
+         END IF
+         IF (ASSOCIATED(xas_tdp_env%mo_coeff)) THEN
+            DO i = 1, SIZE(xas_tdp_env%mo_coeff)
+               CALL cp_fm_release(xas_tdp_env%mo_coeff(i))
+            END DO
+            DEALLOCATE (xas_tdp_env%mo_coeff)
          END IF
          IF (ASSOCIATED(xas_tdp_env%ri_inv_coul)) THEN
             DEALLOCATE (xas_tdp_env%ri_inv_coul)
@@ -925,6 +941,8 @@ CONTAINS
       NULLIFY (donor_state%soc_evals)
       NULLIFY (donor_state%soc_osc_str)
       NULLIFY (donor_state%osc_str)
+      NULLIFY (donor_state%alpha_osc)
+      NULLIFY (donor_state%beta_osc)
       NULLIFY (donor_state%soc_quad_osc_str)
       NULLIFY (donor_state%quad_osc_str)
       NULLIFY (donor_state%sc_matrix_tdp)
@@ -1023,6 +1041,14 @@ CONTAINS
                DEALLOCATE (donor_state_set(i)%soc_evals)
             END IF
 
+            IF (ASSOCIATED(donor_state_set(i)%alpha_osc)) THEN
+               DEALLOCATE (donor_state_set(i)%alpha_osc)
+            END IF
+
+            IF (ASSOCIATED(donor_state_set(i)%beta_osc)) THEN
+               DEALLOCATE (donor_state_set(i)%beta_osc)
+            END IF
+
             IF (ASSOCIATED(donor_state_set(i)%osc_str)) THEN
                DEALLOCATE (donor_state_set(i)%osc_str)
             END IF
@@ -1117,6 +1143,8 @@ CONTAINS
       IF (ASSOCIATED(donor_state%tp_evals)) DEALLOCATE (donor_state%tp_evals)
       IF (ASSOCIATED(donor_state%soc_evals)) DEALLOCATE (donor_state%soc_evals)
       IF (ASSOCIATED(donor_state%osc_str)) DEALLOCATE (donor_state%osc_str)
+      IF (ASSOCIATED(donor_state%alpha_osc)) DEALLOCATE (donor_state%alpha_osc)
+      IF (ASSOCIATED(donor_state%beta_osc)) DEALLOCATE (donor_state%beta_osc)
       IF (ASSOCIATED(donor_state%soc_osc_str)) DEALLOCATE (donor_state%soc_osc_str)
       IF (ASSOCIATED(donor_state%quad_osc_str)) DEALLOCATE (donor_state%quad_osc_str)
       IF (ASSOCIATED(donor_state%soc_quad_osc_str)) DEALLOCATE (donor_state%soc_quad_osc_str)

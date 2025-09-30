@@ -28,8 +28,10 @@ MODULE qs_tddfpt2_fhxc
                                               cp_fm_get_info,&
                                               cp_fm_release,&
                                               cp_fm_type
-   USE input_constants,                 ONLY: do_admm_aux_exch_func_none, &
-                                              no_sf_tddfpt, tddfpt_sf_col, tddfpt_sf_noncol
+   USE input_constants,                 ONLY: do_admm_aux_exch_func_none,&
+                                              no_sf_tddfpt,&
+                                              tddfpt_sf_col,&
+                                              tddfpt_sf_noncol
    USE kinds,                           ONLY: default_string_length,&
                                               dp
    USE lri_environment_types,           ONLY: lri_kind_type
@@ -157,7 +159,7 @@ CONTAINS
                                                             spinflip
       INTEGER, DIMENSION(:), POINTER                     :: blk_sizes
       INTEGER, DIMENSION(maxspins)                       :: nactive
-      LOGICAL                                            :: gapw, gapw_xc, do_noncol
+      LOGICAL                                            :: do_noncol, gapw, gapw_xc
       TYPE(admm_type), POINTER                           :: admm_env
       TYPE(cp_fm_type)                                   :: work_aux_orb, work_orb_orb
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: A_xc_munu_sub, rho_ia_ao, &
@@ -187,13 +189,12 @@ CONTAINS
       gapw_xc = dft_control%qs_control%gapw_xc
       spinflip = dft_control%tddfpt2_control%spinflip
 
-      do_noncol = spinflip.EQ.tddfpt_sf_noncol
+      do_noncol = spinflip .EQ. tddfpt_sf_noncol
 
       CALL cp_fm_get_info(evects(1, 1), nrow_global=nao)
       DO ispin = 1, nspins
          CALL cp_fm_get_info(evects(ispin, 1), ncol_global=nactive(ispin))
       END DO
-!     PRINT *, "KKK| nspins=",nspins
 
       CALL qs_rho_get(work_matrices%rho_orb_struct_sub, rho_ao=rho_ia_ao, &
                       rho_g=rho_ia_g)
@@ -317,6 +318,52 @@ CONTAINS
                   CALL tddfpt_apply_xc_potential(work_matrices%A_ia_rspace_sub, work_matrices%fxc_rspace_sub, &
                                                  work_matrices%rho_orb_struct_sub, is_rks_triplets)
                ELSE
+                  CALL tddfpt_apply_xc(A_ia_rspace=work_matrices%A_ia_rspace_sub, kernel_env=kernel_env, &
+                                       rho_ia_struct=work_matrices%rho_orb_struct_sub, &
+                                       is_rks_triplets=is_rks_triplets, pw_env=sub_env%pw_env, &
+                                       work_v_xc=work_matrices%wpw_rspace_sub, &
+                                       work_v_xc_tau=work_matrices%wpw_tau_rspace_sub, &
+                                       spinflip=spinflip)
+               END IF
+            END IF
+            IF (gapw .OR. gapw_xc) THEN
+               rho_atom_set => sub_env%local_rho_set%rho_atom_set
+               rho1_atom_set => work_matrices%local_rho_set%rho_atom_set
+               CALL calculate_xc_2nd_deriv_atom(rho_atom_set, rho1_atom_set, qs_env, kernel_env%xc_section, &
+                                                sub_env%para_env, do_tddfpt2=.TRUE., do_triplet=is_rks_triplets, &
+                                                do_sf=do_noncol)
+            END IF
+
+         END IF ! spin-flip
+
+            ! C_x d^{2}E_{x}^{DFT}[\rho] / d\rho^2
+            ! + C_{HF} d^{2}E_{x, ADMM}^{DFT}[\rho] / d\rho^2 in case of ADMM calculation
+            IF (gapw_xc) THEN
+               IF (kernel_env%do_exck) THEN
+                  CPABORT("NYA")
+               ELSE
+                  CALL tddfpt_apply_xc(A_ia_rspace=work_matrices%A_ia_rspace_sub, kernel_env=kernel_env, &
+                                       rho_ia_struct=work_matrices%rho_xc_struct_sub, &
+                                       is_rks_triplets=is_rks_triplets, pw_env=sub_env%pw_env, &
+                                       work_v_xc=work_matrices%wpw_rspace_sub, &
+                                       work_v_xc_tau=work_matrices%wpw_tau_rspace_sub, &
+                                       spinflip=spinflip)
+               END IF
+               DO ispin = 1, nspins
+                  CALL pw_scale(work_matrices%A_ia_rspace_sub(ispin), &
+                                work_matrices%A_ia_rspace_sub(ispin)%pw_grid%dvol)
+                  CALL integrate_v_rspace(v_rspace=work_matrices%A_ia_rspace_sub(ispin), &
+                                          hmat=work_matrices%A_ia_munu_sub(ispin), &
+                                          qs_env=qs_env, calculate_forces=.FALSE., gapw=gapw_xc, &
+                                          pw_env_external=sub_env%pw_env, &
+                                          task_list_external=sub_env%task_list_orb_soft)
+                  CALL pw_zero(work_matrices%A_ia_rspace_sub(ispin))
+               END DO
+            ELSE
+               IF (kernel_env%do_exck) THEN
+                  CALL tddfpt_apply_xc_potential(work_matrices%A_ia_rspace_sub, work_matrices%fxc_rspace_sub, &
+                                                 work_matrices%rho_orb_struct_sub, is_rks_triplets)
+               ELSE
                   CALL tddfpt_apply_xc(A_ia_rspace=work_matrices%A_ia_rspace_sub, &
                                        kernel_env=kernel_env, &
                                        rho_ia_struct=work_matrices%rho_orb_struct_sub, &
@@ -380,7 +427,8 @@ CONTAINS
                                        rho_ia_struct=work_matrices%rho_aux_fit_struct_sub, &
                                        is_rks_triplets=is_rks_triplets, pw_env=sub_env%pw_env, &
                                        work_v_xc=work_matrices%wpw_rspace_sub, &
-                                       work_v_xc_tau=work_matrices%wpw_tau_rspace_sub)
+                                       work_v_xc_tau=work_matrices%wpw_tau_rspace_sub, &
+                                       spinflip=spinflip)
                   DO ispin = 1, nspins
                      CALL pw_scale(V_rspace_sub(ispin), V_rspace_sub(ispin)%pw_grid%dvol)
                      CALL integrate_v_rspace(v_rspace=V_rspace_sub(ispin), &
@@ -439,7 +487,8 @@ CONTAINS
                                        rho_ia_struct=work_matrices%rho_aux_fit_struct_sub, &
                                        is_rks_triplets=is_rks_triplets, pw_env=sub_env%pw_env, &
                                        work_v_xc=work_matrices%wpw_rspace_sub, &
-                                       work_v_xc_tau=work_matrices%wpw_tau_rspace_sub)
+                                       work_v_xc_tau=work_matrices%wpw_tau_rspace_sub, &
+                                       spinflip=spinflip)
                   IF (admm_env%do_gapw) THEN
                      CPWARN("GAPW/ADMM needs symmetric ADMM kernel")
                      CPABORT("GAPW/ADMM@TDDFT")
@@ -449,7 +498,7 @@ CONTAINS
          END IF
 
          ! electron-hole Coulomb interaction
-         IF ((.NOT. is_rks_triplets).AND.(spinflip.EQ.no_sf_tddfpt)) THEN
+         IF ((.NOT. is_rks_triplets) .AND. (spinflip .EQ. no_sf_tddfpt)) THEN
             ! a sum J_i{alpha}a{alpha}_munu + J_i{beta}a{beta}_munu can be computed by solving
             ! the Poisson equation for combined density (rho_{ia,alpha} + rho_{ia,beta}) .
             ! The following action will destroy reciprocal-space grid in spin-unrestricted case.

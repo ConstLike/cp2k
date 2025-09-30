@@ -6,7 +6,7 @@
 !--------------------------------------------------------------------------------------------------!
 
 ! **************************************************************************************************
-!> \brief basic linear algebra operations for full matrices
+!> \brief Basic linear algebra operations for full matrices.
 !> \par History
 !>      08.2002 split out of qs_blacs [fawzi]
 !> \author Fawzi Mohamed
@@ -64,7 +64,6 @@ MODULE cp_fm_basic_linalg
              cp_fm_potri, & ! Invert triangular matrix
              cp_fm_rot_rows, & ! rotates two rows
              cp_fm_rot_cols, & ! rotates two columns
-             cp_fm_cholesky_restore, & ! apply Cholesky decomposition
              cp_fm_Gram_Schmidt_orthonorm, & ! Gram-Schmidt orthonormalization of columns of a full matrix, &
              cp_fm_det, & ! determinant of a real matrix with correct sign
              cp_fm_matvec ! matrix-vector multiplication (vector replicated)
@@ -716,7 +715,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_schur_product'
 
       INTEGER                                            :: handle, icol_local, irow_local, mypcol, &
-                                                            myprow, ncol_local, npcol, nprow, &
+                                                            myprow, ncol_local, &
                                                             nrow_local
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: a, b, c
       TYPE(cp_blacs_env_type), POINTER                   :: context
@@ -726,8 +725,6 @@ CONTAINS
       context => matrix_a%matrix_struct%context
       myprow = context%mepos(1)
       mypcol = context%mepos(2)
-      nprow = context%num_pe(1)
-      npcol = context%num_pe(2)
 
       a => matrix_a%local_data
       b => matrix_b%local_data
@@ -767,7 +764,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_trace_a0b0t0'
 
       INTEGER                                            :: handle, mypcol, myprow, ncol_local, &
-                                                            npcol, nprow, nrow_local
+                                                            nrow_local
       REAL(KIND=dp), DIMENSION(:, :), POINTER            :: a, b
       REAL(KIND=sp), DIMENSION(:, :), POINTER            :: a_sp, b_sp
       TYPE(cp_blacs_env_type), POINTER                   :: context
@@ -778,8 +775,6 @@ CONTAINS
       context => matrix_a%matrix_struct%context
       myprow = context%mepos(1)
       mypcol = context%mepos(2)
-      nprow = context%num_pe(1)
-      npcol = context%num_pe(2)
 
       group = matrix_a%matrix_struct%para_env
 
@@ -1117,7 +1112,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_triangular_multiply'
 
       CHARACTER                                          :: side_char, transa, unit_diag, uplo
-      INTEGER                                            :: handle, m, n
+      INTEGER                                            :: handle, mdim, m, n
       LOGICAL                                            :: invert
       REAL(KIND=dp)                                      :: al
 
@@ -1130,6 +1125,7 @@ CONTAINS
       al = 1.0_dp
       CALL cp_fm_get_info(matrix_b, nrow_global=m, ncol_global=n)
       IF (PRESENT(side)) side_char = side
+      mdim = MERGE(1, 2, 'L' .EQ. side_char)
       IF (PRESENT(invert_tr)) invert = invert_tr
       IF (PRESENT(uplo_tr)) uplo = uplo_tr
       IF (PRESENT(unit_diag_tr)) THEN
@@ -1161,7 +1157,7 @@ CONTAINS
 #else
          CALL dtrsm(side_char, uplo, transa, unit_diag, m, n, al, &
                     triangular_matrix%local_data(1, 1), &
-                    SIZE(triangular_matrix%local_data, 1), &
+                    SIZE(triangular_matrix%local_data, mdim), &
                     matrix_b%local_data(1, 1), SIZE(matrix_b%local_data, 1))
 #endif
 
@@ -1176,7 +1172,7 @@ CONTAINS
 #else
          CALL dtrmm(side_char, uplo, transa, unit_diag, m, n, al, &
                     triangular_matrix%local_data(1, 1), &
-                    SIZE(triangular_matrix%local_data, 1), &
+                    SIZE(triangular_matrix%local_data, mdim), &
                     matrix_b%local_data(1, 1), SIZE(matrix_b%local_data, 1))
 #endif
 
@@ -1285,7 +1281,7 @@ CONTAINS
       CHARACTER                                :: myuplo
       INTEGER                                  :: handle, icol_global, irow_global, &
                                                   mypcol, myprow, ncol_global, &
-                                                  npcol, nprow, nrow_global
+                                                  nrow_global
       REAL(KIND=dp), DIMENSION(:, :), POINTER  :: a
       REAL(KIND=sp), DIMENSION(:, :), POINTER  :: a_sp
       TYPE(cp_blacs_env_type), POINTER         :: context
@@ -1315,8 +1311,6 @@ CONTAINS
       context => matrix%matrix_struct%context
       myprow = context%mepos(1)
       mypcol = context%mepos(2)
-      nprow = context%num_pe(1)
-      npcol = context%num_pe(2)
 
 #if defined(__parallel)
 
@@ -2401,10 +2395,11 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Applies a planar rotation defined by cs and sn to the i'th and j'th rows.
-!> \param cs cosine of the rotation angle
-!> \param sn sinus of the rotation angle
+!> \param matrix ...
 !> \param irow ...
 !> \param jrow ...
+!> \param cs cosine of the rotation angle
+!> \param sn sinus of the rotation angle
 !> \author Ole Schuett
 ! **************************************************************************************************
    SUBROUTINE cp_fm_rot_rows(matrix, irow, jrow, cs, sn)
@@ -2413,40 +2408,42 @@ CONTAINS
       REAL(dp), INTENT(IN)                     :: cs, sn
 
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_rot_rows'
-      INTEGER                                  :: handle, nrow, ncol
+      INTEGER                                  :: handle, ncol
 
 #if defined(__parallel)
       INTEGER                                  :: info, lwork
       INTEGER, DIMENSION(9)                    :: desc
       REAL(dp), DIMENSION(:), ALLOCATABLE      :: work
 #endif
-
       CALL timeset(routineN, handle)
-      CALL cp_fm_get_info(matrix, nrow_global=nrow, ncol_global=ncol)
-
+      CALL cp_fm_get_info(matrix, ncol_global=ncol)
 #if defined(__parallel)
-      lwork = 2*ncol + 1
-      ALLOCATE (work(lwork))
-      desc(:) = matrix%matrix_struct%descriptor(:)
-      CALL pdrot(ncol, &
-                 matrix%local_data(1, 1), irow, 1, desc, ncol, &
-                 matrix%local_data(1, 1), jrow, 1, desc, ncol, &
-                 cs, sn, work, lwork, info)
-      CPASSERT(info == 0)
-      DEALLOCATE (work)
-#else
-      CALL drot(ncol, matrix%local_data(irow, 1), ncol, matrix%local_data(jrow, 1), ncol, cs, sn)
+      IF (1 /= matrix%matrix_struct%context%n_pid) THEN
+         lwork = 2*ncol + 1
+         ALLOCATE (work(lwork))
+         desc(:) = matrix%matrix_struct%descriptor(:)
+         CALL pdrot(ncol, &
+                    matrix%local_data(1, 1), irow, 1, desc, ncol, &
+                    matrix%local_data(1, 1), jrow, 1, desc, ncol, &
+                    cs, sn, work, lwork, info)
+         CPASSERT(info == 0)
+         DEALLOCATE (work)
+      ELSE
 #endif
-
+         CALL drot(ncol, matrix%local_data(irow, 1), ncol, matrix%local_data(jrow, 1), ncol, cs, sn)
+#if defined(__parallel)
+      END IF
+#endif
       CALL timestop(handle)
    END SUBROUTINE cp_fm_rot_rows
 
 ! **************************************************************************************************
 !> \brief Applies a planar rotation defined by cs and sn to the i'th and j'th columnns.
-!> \param cs cosine of the rotation angle
-!> \param sn sinus of the rotation angle
+!> \param matrix ...
 !> \param icol ...
 !> \param jcol ...
+!> \param cs cosine of the rotation angle
+!> \param sn sinus of the rotation angle
 !> \author Ole Schuett
 ! **************************************************************************************************
    SUBROUTINE cp_fm_rot_cols(matrix, icol, jcol, cs, sn)
@@ -2455,31 +2452,32 @@ CONTAINS
       REAL(dp), INTENT(IN)                     :: cs, sn
 
       CHARACTER(len=*), PARAMETER :: routineN = 'cp_fm_rot_cols'
-      INTEGER                                  :: handle, nrow, ncol
+      INTEGER                                  :: handle, nrow
 
 #if defined(__parallel)
       INTEGER                                  :: info, lwork
       INTEGER, DIMENSION(9)                    :: desc
       REAL(dp), DIMENSION(:), ALLOCATABLE      :: work
 #endif
-
       CALL timeset(routineN, handle)
-      CALL cp_fm_get_info(matrix, nrow_global=nrow, ncol_global=ncol)
-
+      CALL cp_fm_get_info(matrix, nrow_global=nrow)
 #if defined(__parallel)
-      lwork = 2*nrow + 1
-      ALLOCATE (work(lwork))
-      desc(:) = matrix%matrix_struct%descriptor(:)
-      CALL pdrot(nrow, &
-                 matrix%local_data(1, 1), 1, icol, desc, 1, &
-                 matrix%local_data(1, 1), 1, jcol, desc, 1, &
-                 cs, sn, work, lwork, info)
-      CPASSERT(info == 0)
-      DEALLOCATE (work)
-#else
-      CALL drot(nrow, matrix%local_data(1, icol), 1, matrix%local_data(1, jcol), 1, cs, sn)
+      IF (1 /= matrix%matrix_struct%context%n_pid) THEN
+         lwork = 2*nrow + 1
+         ALLOCATE (work(lwork))
+         desc(:) = matrix%matrix_struct%descriptor(:)
+         CALL pdrot(nrow, &
+                    matrix%local_data(1, 1), 1, icol, desc, 1, &
+                    matrix%local_data(1, 1), 1, jcol, desc, 1, &
+                    cs, sn, work, lwork, info)
+         CPASSERT(info == 0)
+         DEALLOCATE (work)
+      ELSE
 #endif
-
+         CALL drot(nrow, matrix%local_data(1, icol), 1, matrix%local_data(1, jcol), 1, cs, sn)
+#if defined(__parallel)
+      END IF
+#endif
       CALL timestop(handle)
    END SUBROUTINE cp_fm_rot_cols
 
@@ -2706,96 +2704,6 @@ CONTAINS
 #endif
       CPASSERT(info == 0)
    END SUBROUTINE cp_fm_potri
-
-! **************************************************************************************************
-!> \brief ...
-!> \param fm_matrix ...
-!> \param neig ...
-!> \param fm_matrixb ...
-!> \param fm_matrixout ...
-!> \param op ...
-!> \param pos ...
-!> \param transa ...
-! **************************************************************************************************
-   SUBROUTINE cp_fm_cholesky_restore(fm_matrix, neig, fm_matrixb, fm_matrixout, op, pos, transa)
-      TYPE(cp_fm_type)                               :: fm_matrix
-      TYPE(cp_fm_type)                               :: fm_matrixb
-      TYPE(cp_fm_type)                               :: fm_matrixout
-      INTEGER, INTENT(IN)                            :: neig
-      CHARACTER(LEN=*), INTENT(IN)                   :: op
-      CHARACTER(LEN=*), INTENT(IN)                   :: pos
-      CHARACTER(LEN=*), INTENT(IN)                   :: transa
-
-      REAL(KIND=dp), DIMENSION(:, :), POINTER        :: a, b, outm
-      REAL(KIND=sp), DIMENSION(:, :), POINTER        :: a_sp, b_sp, outm_sp
-      INTEGER                                        :: n, itype
-      REAL(KIND=dp)                                  :: alpha
-#if defined(__parallel)
-      INTEGER                                        :: i
-      INTEGER, DIMENSION(9)                          :: desca, descb, descout
-#endif
-
-      ! notice b is the cholesky guy
-      a => fm_matrix%local_data
-      b => fm_matrixb%local_data
-      outm => fm_matrixout%local_data
-      a_sp => fm_matrix%local_data_sp
-      b_sp => fm_matrixb%local_data_sp
-      outm_sp => fm_matrixout%local_data_sp
-
-      n = fm_matrix%matrix_struct%nrow_global
-      itype = 1
-
-#if defined(__parallel)
-      desca(:) = fm_matrix%matrix_struct%descriptor(:)
-      descb(:) = fm_matrixb%matrix_struct%descriptor(:)
-      descout(:) = fm_matrixout%matrix_struct%descriptor(:)
-      alpha = 1.0_dp
-      DO i = 1, neig
-         IF (fm_matrix%use_sp) THEN
-            CALL pscopy(n, a_sp(1, 1), 1, i, desca, 1, outm_sp(1, 1), 1, i, descout, 1)
-         ELSE
-            CALL pdcopy(n, a(1, 1), 1, i, desca, 1, outm(1, 1), 1, i, descout, 1)
-         END IF
-      END DO
-      IF (op .EQ. "SOLVE") THEN
-         IF (fm_matrix%use_sp) THEN
-            CALL pstrsm(pos, 'U', transa, 'N', n, neig, REAL(alpha, sp), b_sp(1, 1), 1, 1, descb, &
-                        outm_sp(1, 1), 1, 1, descout)
-         ELSE
-            CALL pdtrsm(pos, 'U', transa, 'N', n, neig, alpha, b(1, 1), 1, 1, descb, outm(1, 1), 1, 1, descout)
-         END IF
-      ELSE
-         IF (fm_matrix%use_sp) THEN
-            CALL pstrmm(pos, 'U', transa, 'N', n, neig, REAL(alpha, sp), b_sp(1, 1), 1, 1, descb, &
-                        outm_sp(1, 1), 1, 1, descout)
-         ELSE
-            CALL pdtrmm(pos, 'U', transa, 'N', n, neig, alpha, b(1, 1), 1, 1, descb, outm(1, 1), 1, 1, descout)
-         END IF
-      END IF
-#else
-      alpha = 1.0_dp
-      IF (fm_matrix%use_sp) THEN
-         CALL scopy(neig*n, a_sp(1, 1), 1, outm_sp(1, 1), 1)
-      ELSE
-         CALL dcopy(neig*n, a(1, 1), 1, outm(1, 1), 1)
-      END IF
-      IF (op .EQ. "SOLVE") THEN
-         IF (fm_matrix%use_sp) THEN
-            CALL strsm(pos, 'U', transa, 'N', n, neig, REAL(alpha, sp), b_sp(1, 1), SIZE(b_sp, 1), outm_sp(1, 1), n)
-         ELSE
-            CALL dtrsm(pos, 'U', transa, 'N', n, neig, alpha, b(1, 1), SIZE(b, 1), outm(1, 1), n)
-         END IF
-      ELSE
-         IF (fm_matrix%use_sp) THEN
-            CALL strmm(pos, 'U', transa, 'N', n, neig, REAL(alpha, sp), b_sp(1, 1), n, outm_sp(1, 1), n)
-         ELSE
-            CALL dtrmm(pos, 'U', transa, 'N', n, neig, alpha, b(1, 1), n, outm(1, 1), n)
-         END IF
-      END IF
-#endif
-
-   END SUBROUTINE cp_fm_cholesky_restore
 
 ! **************************************************************************************************
 !> \brief Calculates

@@ -205,7 +205,7 @@ CONTAINS
                ex_env%evalue = evals(istate)
                CALL cp_fm_release(ex_env%evect)
                ALLOCATE (ex_env%evect(nspins))
-               DO ispin = 1, SIZE(evects,1)
+               DO ispin = 1, SIZE(evects, 1)
                   CALL cp_fm_get_info(matrix=evects(ispin, 1), matrix_struct=matrix_struct)
                   CALL cp_fm_create(ex_env%evect(ispin), matrix_struct)
                   CALL cp_fm_to_fm(evects(ispin, istate), ex_env%evect(ispin))

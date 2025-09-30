@@ -82,12 +82,12 @@ PROFOPT_FLAGS="\$(PROFOPT)"
 # special flags for gfortran
 # https://gcc.gnu.org/onlinedocs/gfortran/Error-and-Warning-Options.html
 # we error out for these warnings (-Werror=uninitialized -Wno-maybe-uninitialized -> error on variables that must be used uninitialized)
-WFLAGS_ERROR="-Werror=aliasing -Werror=ampersand -Werror=c-binding-type -Werror=intrinsic-shadow -Werror=intrinsics-std -Werror=line-truncation -Werror=tabs -Werror=target-lifetime -Werror=underflow -Werror=unused-but-set-variable -Werror=unused-variable -Werror=unused-dummy-argument -Werror=unused-parameter -Werror=unused-label -Werror=conversion -Werror=zerotrip -Wno-maybe-uninitialized"
+WFLAGS_ERROR="-Werror=aliasing -Werror=ampersand -Werror=c-binding-type -Werror=character-truncation -Werror=intrinsic-shadow -Werror=intrinsics-std -Werror=line-truncation -Werror=tabs -Werror=target-lifetime -Werror=underflow -Werror=unused-but-set-variable -Werror=unused-variable -Werror=unused-dummy-argument -Werror=unused-parameter -Werror=unused-label -Werror=conversion -Werror=zerotrip -Wno-maybe-uninitialized"
 # we just warn for those (that eventually might be promoted to WFLAGSERROR). It is useless to put something here with 100s of warnings.
 WFLAGS_WARN="-Wuninitialized -Wuse-without-only"
 # while here we collect all other warnings, some we'll ignore
 # TODO: -Wpedantic with -std2008 requires us to drop the old MPI-90 interface entirely and SIRIUS (-Wuninitialized) and DBCSR (default initializers) to initialize their types
-WFLAGS_WARNALL="-Wno-pedantic -Wall -Wextra -Wsurprising -Warray-temporaries -Wcharacter-truncation -Wconversion-extra -Wimplicit-interface -Wimplicit-procedure -Wreal-q-constant -Walign-commons -Wfunction-elimination -Wrealloc-lhs -Wcompare-reals -Wzerotrip"
+WFLAGS_WARNALL="-Wno-pedantic -Wall -Wextra -Wsurprising -Warray-temporaries -Wconversion-extra -Wimplicit-interface -Wimplicit-procedure -Wreal-q-constant -Walign-commons -Wfunction-elimination -Wrealloc-lhs -Wcompare-reals -Wzerotrip"
 
 # IEEE_EXCEPTIONS dependency
 IEEE_EXCEPTIONS_DFLAGS="-D__HAS_IEEE_EXCEPTIONS"
@@ -143,16 +143,16 @@ if [ "${with_intel}" != "__DONTUSE__" ]; then
     FC_arch+=" IF_MPI(-fc=${I_MPI_FC}|)"
     LD_arch+=" IF_MPI(-fc=${I_MPI_FC}|)"
   fi
-  CFLAGS="${G_CFLAGS} -std=c11 -Wall \$(DFLAGS)"
-  CXXFLAGS="${G_CFLAGS} -std=c++14 -Wall \$(DFLAGS)"
+  CFLAGS="${G_CFLAGS} -std=c17 -Wall \$(DFLAGS)"
+  CXXFLAGS="${G_CFLAGS} -std=c++17 -Wall \$(DFLAGS)"
   FCFLAGS="${FCFLAGS} -diag-disable=8291 -diag-disable=8293 -fpp -fpscomp logicals -free"
   # Suppress warnings and add include path to omp_lib.mod explicitly.
   # No clue why the Intel oneAPI setup script does not include that path (bug?)
   FCFLAGS="${FCFLAGS} -diag-disable=10448 -I/opt/intel/oneapi/2024.1/opt/compiler/include/intel64"
 elif [ "${with_amd}" != "__DONTUSE__" ]; then
-  CFLAGS="$G_CFLAGS -std=c11 -Wall \$(DFLAGS)"
+  CFLAGS="$G_CFLAGS -std=c17 -Wall \$(DFLAGS)"
 else
-  CFLAGS="$G_CFLAGS -std=c11 -Wall -Wextra -Werror -Wno-vla-parameter -Wno-deprecated-declarations \$(DFLAGS)"
+  CFLAGS="${G_CFLAGS} -std=c17 -Wall -Wextra -Wno-vla-parameter -Wno-deprecated-declarations \$(DFLAGS)"
 fi
 
 # Linker flags
@@ -166,9 +166,9 @@ LDFLAGS="IF_STATIC(${STATIC_FLAGS}|) \$(FCFLAGS) ${CP_LDFLAGS}"
 LIBS="${CP_LIBS} -lstdc++"
 
 if [ "${with_intel}" == "__DONTUSE__" ] && [ "${with_amd}" == "__DONTUSE__" ]; then
-  CXXFLAGS+=" --std=c++14 \$(DFLAGS) -Wno-deprecated-declarations"
+  CXXFLAGS+=" -std=c++17 \$(DFLAGS) -Wno-deprecated-declarations"
 else
-  CXXFLAGS+=" --std=c++14 \$(DFLAGS)"
+  CXXFLAGS+=" -std=c++17 \$(DFLAGS)"
 fi
 # CUDA handling
 if [ "${ENABLE_CUDA}" = __TRUE__ ] && [ "${GPUVER}" != no ]; then
@@ -180,7 +180,7 @@ if [ "${ENABLE_CUDA}" = __TRUE__ ] && [ "${GPUVER}" != no ]; then
   fi
   LIBS="${LIBS} IF_CUDA(${CUDA_LIBS}|)"
   DFLAGS="IF_CUDA(${CUDA_DFLAGS}|) ${DFLAGS}"
-  NVFLAGS="-g -arch sm_${ARCH_NUM} -O3 -allow-unsupported-compiler -Xcompiler='-fopenmp -Wall -Wextra -Werror' --std=c++11 \$(DFLAGS)"
+  NVFLAGS="-g -arch sm_${ARCH_NUM} -O3 -allow-unsupported-compiler -Xcompiler='-fopenmp -Wall -Wextra' --std=c++11 \$(DFLAGS)"
   check_command nvcc "cuda"
   check_lib -lcudart "cuda"
   check_lib -lnvrtc "cuda"
@@ -230,10 +230,10 @@ if [ "${ENABLE_HIP}" = __TRUE__ ] && [ "${GPUVER}" != no ]; then
       add_lib_from_paths HIP_LDFLAGS "libroctx64.*" $LIB_PATHS
       check_lib -lroctracer64 "hip"
       add_lib_from_paths HIP_LDFLAGS "libroctracer64.*" $LIB_PATHS
-      HIP_FLAGS+="-fPIE -D__HIP_PLATFORM_AMD__ -g --offload-arch=gfx906 -O3 --std=c++11 -Wall -Wextra -Werror \$(DFLAGS)"
+      HIP_FLAGS+="-fPIE -D__HIP_PLATFORM_AMD__ -g --offload-arch=gfx906 -O3 --std=c++11 -Wall -Wextra \$(DFLAGS)"
       LIBS+=" IF_HIP(-lamdhip64 -lhipfft -lhipblas -lrocblas IF_DEBUG(-lroctx64 -lroctracer64|)|)"
       DFLAGS+=" IF_HIP(-D__HIP_PLATFORM_AMD__ -D__OFFLOAD_HIP IF_DEBUG(-D__OFFLOAD_PROFILING|)|)  -D__DBCSR_ACC"
-      CXXFLAGS+=" -fopenmp -Wall -Wextra -Werror"
+      CXXFLAGS+=" -std=c++14 -fopenmp -Wall -Wextra"
       ;;
     Mi100)
       check_lib -lamdhip64 "hip"
@@ -246,10 +246,10 @@ if [ "${ENABLE_HIP}" = __TRUE__ ] && [ "${GPUVER}" != no ]; then
       add_lib_from_paths HIP_LDFLAGS "libroctx64.*" $LIB_PATHS
       check_lib -lroctracer64 "hip"
       add_lib_from_paths HIP_LDFLAGS "libroctracer64.*" $LIB_PATHS
-      HIP_FLAGS+="-fPIE -D__HIP_PLATFORM_AMD__ -g --offload-arch=gfx908 -O3 --std=c++11 -Wall -Wextra -Werror \$(DFLAGS)"
+      HIP_FLAGS+="-fPIE -D__HIP_PLATFORM_AMD__ -g --offload-arch=gfx908 -O3 --std=c++11 -Wall -Wextra \$(DFLAGS)"
       LIBS+=" IF_HIP(-lamdhip64 -lhipfft -lhipblas -lrocblas IF_DEBUG(-lroctx64 -lroctracer64|)|)"
       DFLAGS+=" IF_HIP(-D__HIP_PLATFORM_AMD__ -D__OFFLOAD_HIP IF_DEBUG(-D__OFFLOAD_PROFILING|)|) -D__DBCSR_ACC"
-      CXXFLAGS+=" -fopenmp -Wall -Wextra -Werror"
+      CXXFLAGS+=" -std=c++14 -fopenmp -Wall -Wextra"
       ;;
     Mi250)
       check_lib -lamdhip64 "hip"
@@ -262,10 +262,10 @@ if [ "${ENABLE_HIP}" = __TRUE__ ] && [ "${GPUVER}" != no ]; then
       add_lib_from_paths HIP_LDFLAGS "libroctx64.*" $LIB_PATHS
       check_lib -lroctracer64 "hip"
       add_lib_from_paths HIP_LDFLAGS "libroctracer64.*" $LIB_PATHS
-      HIP_FLAGS+="-fPIE -D__HIP_PLATFORM_AMD__ -g --offload-arch=gfx90a -munsafe-fp-atomics -O3 --std=c++11 -Wall -Wextra -Werror \$(DFLAGS)"
+      HIP_FLAGS+="-fPIE -D__HIP_PLATFORM_AMD__ -g --offload-arch=gfx90a -munsafe-fp-atomics -O3 --std=c++11 -Wall -Wextra \$(DFLAGS)"
       LIBS+=" IF_HIP(-lamdhip64 -lhipfft -lhipblas -lrocblas IF_DEBUG(-lroctx64 -lroctracer64|)|)"
       DFLAGS+=" IF_HIP(-D__HIP_PLATFORM_AMD__ -D__OFFLOAD_HIP IF_DEBUG(-D__OFFLOAD_PROFILING|)|) -D__DBCSR_ACC"
-      CXXFLAGS+=" -fopenmp -Wall -Wextra -Werror"
+      CXXFLAGS+=" -std=c++14 -fopenmp -Wall -Wextra"
       ;;
     *)
       check_command nvcc "cuda"
@@ -275,12 +275,12 @@ if [ "${ENABLE_HIP}" = __TRUE__ ] && [ "${GPUVER}" != no ]; then
       check_lib -lcufft "cuda"
       check_lib -lcublas "cuda"
       DFLAGS+=" IF_HIP(-D__HIP_PLATFORM_NVIDIA__ -D__HIP_PLATFORM_NVCC__ -D__OFFLOAD_HIP |) -D__DBCSR_ACC"
-      HIP_FLAGS+=" -g -arch sm_${ARCH_NUM} -O3 -Xcompiler='-fopenmp -Wall -Wextra -Werror' --std=c++11 \$(DFLAGS)"
+      HIP_FLAGS+=" -g -arch sm_${ARCH_NUM} -O3 -Xcompiler='-fopenmp -Wall -Wextra' --std=c++11 \$(DFLAGS)"
       add_include_from_paths CUDA_CFLAGS "cuda.h" $INCLUDE_PATHS
       HIP_INCLUDES+=" -I${CUDA_PATH:-${CUDA_HOME:-/CUDA_HOME-notset}}/include"
       # GCC issues lots of warnings for hip/nvidia_detail/hip_runtime_api.h
       CFLAGS+=" -Wno-error ${CUDA_CFLAGS}"
-      CXXFLAGS+=" -Wno-error ${CUDA_CFLAGS}"
+      CXXFLAGS+=" -std=c++14 -Wno-error ${CUDA_CFLAGS}"
       # Set LD-flags
       # Multiple definition because of hip/include/hip/nvidia_detail/nvidia_hiprtc.h
       LDFLAGS+=" -Wl,--allow-multiple-definition"

@@ -105,15 +105,18 @@ void dbm_shard_copy(dbm_shard_t *shard_a, const dbm_shard_t *shard_b) {
   }
   shard_a->data_size = shard_b->data_size;
 
-  if (shard_a->blocks != NULL) {
+  if (shard_b->nblocks != 0) {
+    assert(shard_a->blocks != NULL && shard_b->blocks != NULL);
     memcpy(shard_a->blocks, shard_b->blocks,
            shard_b->nblocks * sizeof(dbm_block_t));
   }
-  if (shard_a->hashtable != NULL) {
+  if (shard_b->hashtable_size != 0) {
+    assert(shard_a->hashtable != NULL && shard_b->hashtable != NULL);
     memcpy(shard_a->hashtable, shard_b->hashtable,
            shard_b->hashtable_size * sizeof(int));
   }
-  if (shard_a->data != NULL) {
+  if (shard_b->data_size != 0) {
+    assert(shard_a->data != NULL && shard_b->data != NULL);
     memcpy(shard_a->data, shard_b->data, shard_b->data_size * sizeof(double));
   }
 }
@@ -198,7 +201,7 @@ dbm_block_t *dbm_shard_promise_new_block(dbm_shard_t *shard, const int row,
                                          const int col, const int block_size) {
   // Grow blocks array if necessary.
   if (shard->nblocks_allocated < shard->nblocks + 1) {
-    shard->nblocks_allocated = DBM_OVERCOMMIT_HOST * (shard->nblocks + 1);
+    shard->nblocks_allocated = DBM_ALLOCATION_FACTOR * (shard->nblocks + 1);
     assert((shard->nblocks + 1) <= shard->nblocks_allocated);
     shard->blocks =
         realloc(shard->blocks, shard->nblocks_allocated * sizeof(dbm_block_t));
@@ -233,13 +236,15 @@ void dbm_shard_allocate_promised_blocks(dbm_shard_t *shard) {
   // Reallocate data array if necessary.
   if (shard->data_promised > shard->data_allocated) {
     const double *data = shard->data;
-    shard->data_allocated = DBM_OVERCOMMIT_HOST * shard->data_promised;
+    shard->data_allocated = DBM_ALLOCATION_FACTOR * shard->data_promised;
     assert(shard->data_promised <= shard->data_allocated);
     shard->data =
         dbm_mempool_host_malloc(shard->data_allocated * sizeof(double));
     assert(shard->data != NULL);
-    memcpy(shard->data, data, shard->data_size * sizeof(double));
-    dbm_mempool_host_free(data);
+    if (data != NULL) {
+      memcpy(shard->data, data, shard->data_size * sizeof(double));
+      dbm_mempool_host_free(data);
+    }
   }
 
   // Zero new blocks.

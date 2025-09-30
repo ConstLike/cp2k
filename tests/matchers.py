@@ -1,7 +1,13 @@
 import re
+import sys
 import traceback
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple, Optional, Protocol, Literal
+from typing import Any, Dict, Tuple, Optional
+
+if sys.version_info >= (3, 8):
+    from typing import Literal, Protocol
+else:
+    from typing_extensions import Literal, Protocol
 
 
 # ======================================================================================
@@ -86,7 +92,10 @@ registry["M004"] = GenericMatcher(r"Ideal and single determinant", col=8)
 registry["M005"] = GenericMatcher(r"BSSE-free interaction energy:", col=5)
 registry["M006"] = GenericMatcher(r"Average Energy", col=4)
 registry["M007"] = GenericMatcher(r"OPT| Total energy [hartree]", col=5)
-registry["M008"] = GenericMatcher(r"VIB|Frequency", col=3)
+
+registry["Vib_freq"] = GenericMatcher(r"VIB|Frequency", col=3)  # M008
+registry["Vib_frc_const"] = GenericMatcher(r"VIB|Frc consts", col=4)  # M128
+
 registry["M009"] = GenericMatcher(r"PINT| Total energy =", col=5)
 registry["M010"] = GenericMatcher(r"BAND TOTAL ENERGY [au]", col=6)
 registry["M011"] = GenericMatcher(r"ENERGY| Total FORCE_EVAL", col=9)
@@ -245,5 +254,12 @@ registry["M124"] = GenericMatcher(
 registry["M125"] = GenericMatcher(
     r"BSE|DEBUG| Averaged photoabsorption cross section at 8.2 eV:", col=9
 )
+# Checking maximum polarizability reported by GX-AC@RTBSE
+registry["RTBSE_GXAC_H2_pol"] = GenericMatcher(
+    r"POLARIZABILITY_PADE|     0.30450000E+002", col=4
+)
 
+registry["M126"] = GenericMatcher(r" # Total charge ", col=5)
+
+registry["M127"] = GenericMatcher(r"Checksum (Acoustic Sum Rule):", col=5)
 # EOF

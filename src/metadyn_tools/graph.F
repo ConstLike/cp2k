@@ -359,7 +359,8 @@ PROGRAM graph
 
       END DO
       IF (ANY(mep_input_data%minima == HUGE(0.0_dp))) &
-         CPABORT("-find-path requires the specification of -point-a and -point-b !")
+         CALL cp_abort(__LOCATION__, &
+                       "-find-path requires the specification of -point-a and -point-b !")
    ELSE
       ALLOCATE (mep_input_data%minima(0, 0))
    END IF
@@ -655,9 +656,9 @@ PROGRAM graph
          ncount = ncount + 1
          WRITE (iw, '("FES|",T7,a13,i5," |-| Gaussians from ",i6," to",i6)') "Done frame ::", ncount, nh, nf
          IF (l_fes_int) THEN
-            out3 = out2//"."
+            out3 = TRIM(out2)//"."
          ELSE
-            out3 = out1//"."
+            out3 = TRIM(out1)//"."
          END IF
 
          IF (ncount < 10) THEN

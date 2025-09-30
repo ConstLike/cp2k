@@ -47,6 +47,7 @@ static dbm_distribution_t *create_dist(const int nrows, const int ncols,
   dbm_mpi_cart_get(comm, 2, cart_dims, cart_periods, cart_coords);
 
   // Create distribution.
+  assert(0 < nrows && 0 < ncols);
   int *row_dist = malloc(nrows * sizeof(int));
   int *col_dist = malloc(ncols * sizeof(int));
   assert(row_dist != NULL && col_dist != NULL);
@@ -76,6 +77,7 @@ create_some_matrix(const int nrows, const int ncols, const int nrows_min,
   dbm_distribution_t *dist = create_dist(nrows, ncols, comm);
 
   // Create matrix.
+  assert(0 < nrows && 0 < ncols);
   int *row_sizes = malloc(nrows * sizeof(int));
   int *col_sizes = malloc(ncols * sizeof(int));
   assert(row_sizes != NULL && col_sizes != NULL);
@@ -131,6 +133,7 @@ static void reserve_all_blocks(dbm_matrix_t *matrix) {
         }
       }
     }
+    assert(0 < nblocks);
     int *reserve_row = malloc(nblocks * sizeof(int));
     int *reserve_col = malloc(nblocks * sizeof(int));
     assert(reserve_row != NULL && reserve_col != NULL);
@@ -168,11 +171,7 @@ static void set_all_blocks(dbm_matrix_t *matrix) {
       dbm_iterator_next_block(iter, &row, &col, &block, &row_size, &col_size);
       const int block_size = row_size * col_size;
       for (int i = 0; i < block_size; i++) {
-#if defined(DBM_VALIDATE_AGAINST_LIBXSMM) && defined(__LIBXSMM)
         block[i] = 1.0 / (i + 1);
-#else
-        block[i] = 1.0;
-#endif
       }
     }
     dbm_iterator_stop(iter);
@@ -184,15 +183,10 @@ static void set_all_blocks(dbm_matrix_t *matrix) {
  ******************************************************************************/
 void benchmark_multiply(const int M, const int N, const int K, const int m,
                         const int n, const int k, const dbm_mpi_comm_t comm) {
-#if defined(DBM_VALIDATE_AGAINST_LIBXSMM) && defined(__LIBXSMM)
   dbm_matrix_t *matrix_a = create_some_matrix(M, K, 1, m, k, k, comm);
   dbm_matrix_t *matrix_b = create_some_matrix(K, N, k, k, 1, n, comm);
-#else
-  dbm_matrix_t *matrix_a = create_some_matrix(M, K, m, m, k, k, comm);
-  dbm_matrix_t *matrix_b = create_some_matrix(K, N, k, k, n, n, comm);
-#endif
   dbm_distribution_t *dist_c = create_dist(M, N, comm);
-  dbm_matrix_t *matrix_c = NULL;
+  dbm_matrix_t *matrix_c = NULL, *matrix_d = NULL;
   dbm_create(&matrix_c, dist_c, "result", M, N, matrix_a->row_sizes,
              matrix_b->col_sizes);
   dbm_distribution_release(dist_c);
@@ -202,40 +196,49 @@ void benchmark_multiply(const int M, const int N, const int K, const int m,
   set_all_blocks(matrix_a);
   set_all_blocks(matrix_b);
 
+  const char *const verify_env = getenv("DBM_MULTIPLY_VERIFY");
+  const int skip_verify = (NULL == verify_env ? 0 : (atoi(verify_env) + 1));
+
+  if (0 == skip_verify) {
+    dbm_distribution_t *const dist_shared = matrix_c->dist;
+    dbm_create(&matrix_d, dist_shared, matrix_c->name, matrix_c->nrows,
+               matrix_c->ncols, matrix_c->row_sizes, matrix_c->col_sizes);
+    dbm_copy(matrix_d, matrix_c);
+  }
+
   int64_t flop = 0;
   const double time_start_multiply = omp_get_wtime();
   dbm_multiply(false, false, 1.0, matrix_a, matrix_b, 1.0, matrix_c, false,
                1e-8, &flop);
   const double time_end_multiply = omp_get_wtime();
 
-  // Validate checksum.
-  // Since all matrix elements were set to 1.0 the checksum is an integer.
-#if defined(DBM_VALIDATE_AGAINST_LIBXSMM) && defined(__LIBXSMM)
-  const double expected = 0, checksum = 0;
-#else
-  const double expected = (uint64_t)M * m * N * n * K * K * k * k;
-  const double checksum = dbm_checksum(matrix_c);
-#endif
+  if (dbm_mpi_comm_rank(comm) == 0) {
+    printf("%5i x %5i x %5i  with  %3i x %3i x %3i blocks: ", M, N, K, m, n, k);
+  }
+
+  if (NULL != matrix_d) { // Calculate result on the host for validation.
+    dbm_multiply(false, false, 1.0, matrix_a, matrix_b, 1.0, matrix_d, false,
+                 1e-8, NULL);
+
+    const double maxeps = 1E-5, epsilon = dbm_maxeps(matrix_d, matrix_c);
+    if (maxeps < epsilon) {
+      printf("ERROR\n");
+      fprintf(stderr, "Failed validation (epsilon=%f).\n", epsilon);
+      exit(1);
+    }
+    dbm_release(matrix_d);
+  }
+
+  dbm_mpi_sum_int64(&flop, 1, comm);
+  if (dbm_mpi_comm_rank(comm) == 0) {
+    const double duration = time_end_multiply - time_start_multiply;
+    printf("%6.3f s =>  %6.1f GFLOP/s\n", duration, 1e-9 * flop / duration);
+    fflush(stdout);
+  }
 
   dbm_release(matrix_a);
   dbm_release(matrix_b);
   dbm_release(matrix_c);
-
-  if (dbm_mpi_comm_rank(comm) == 0) {
-    printf("%5i x %5i x %5i  with  %3i x %3i x %3i blocks: ", M, N, K, m, n, k);
-  }
-  if (checksum == expected) {
-    dbm_mpi_sum_int64(&flop, 1, comm);
-    if (dbm_mpi_comm_rank(comm) == 0) {
-      const double duration = time_end_multiply - time_start_multiply;
-      printf("%6.3f s =>  %6.1f GFLOP/s\n", duration, 1e-9 * flop / duration);
-      fflush(stdout);
-    }
-  } else {
-    printf("ERROR\n");
-    fprintf(stderr, "Expected checksum %f but got %f.\n", expected, checksum);
-    exit(1);
-  }
 }
 
 /*******************************************************************************

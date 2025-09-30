@@ -27,10 +27,10 @@
 MODULE qs_fxc
 
    USE cp_control_types,                ONLY: dft_control_type
-   USE input_section_types,             ONLY: section_vals_get_subs_vals,&
-                                              section_vals_type, &
-                                              section_get_ival, &
-                                              section_get_rval
+   USE input_section_types,             ONLY: section_get_ival,&
+                                              section_get_rval,&
+                                              section_vals_get_subs_vals,&
+                                              section_vals_type
    USE kinds,                           ONLY: dp
    USE pw_env_types,                    ONLY: pw_env_get,&
                                               pw_env_type
@@ -43,7 +43,7 @@ MODULE qs_fxc
    USE qs_ks_types,                     ONLY: get_ks_env,&
                                               qs_ks_env_type
    USE qs_rho_methods,                  ONLY: qs_rho_copy,&
-                                              qs_rho_scale_and_add, &
+                                              qs_rho_scale_and_add,&
                                               qs_rho_scale_and_add_b
    USE qs_rho_types,                    ONLY: qs_rho_create,&
                                               qs_rho_get,&
@@ -51,18 +51,18 @@ MODULE qs_fxc
                                               qs_rho_type
    USE qs_vxc,                          ONLY: qs_vxc_create
    USE xc,                              ONLY: xc_calc_2nd_deriv,&
-                                              xc_prep_2nd_deriv, &
                                               xc_calc_2nd_deriv_analytical,&
                                               xc_calc_3rd_deriv_analytical,&
+                                              xc_prep_2nd_deriv,&
                                               xc_prep_3rd_deriv
    USE xc_derivative_set_types,         ONLY: xc_derivative_set_type,&
                                               xc_dset_release
    USE xc_derivatives,                  ONLY: xc_functionals_get_needs
    USE xc_rho_cflags_types,             ONLY: xc_rho_cflags_type
-   USE xc_rho_set_types,                ONLY: xc_rho_set_release,&
-                                              xc_rho_set_type, &
-                                              xc_rho_set_update, &
-                                              xc_rho_set_create
+   USE xc_rho_set_types,                ONLY: xc_rho_set_create,&
+                                              xc_rho_set_release,&
+                                              xc_rho_set_type,&
+                                              xc_rho_set_update
 #include "./base/base_uses.f90"
 
    IMPLICIT NONE
@@ -88,8 +88,9 @@ CONTAINS
 !> \param is_triplet ...
 !> \param v_xc ...
 !> \param v_xc_tau ...
+!> \param spinflip ...
 ! **************************************************************************************************
-   SUBROUTINE qs_fxc_analytic(rho0, rho1_r, tau1_r, xc_section, auxbas_pw_pool, is_triplet, v_xc, v_xc_tau,spinflip)
+   SUBROUTINE qs_fxc_analytic(rho0, rho1_r, tau1_r, xc_section, auxbas_pw_pool, is_triplet, v_xc, v_xc_tau, spinflip)
 
       TYPE(qs_rho_type), POINTER                         :: rho0
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, tau1_r
@@ -103,7 +104,7 @@ CONTAINS
 
       INTEGER                                            :: handle, nspins
       INTEGER, DIMENSION(2, 3)                           :: bo
-      LOGICAL                                            :: lsd, do_sf
+      LOGICAL                                            :: do_sf, lsd
       REAL(KIND=dp)                                      :: fac
       TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho0_g, rho1_g
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho0_r, tau0_r
@@ -280,7 +281,7 @@ CONTAINS
    END SUBROUTINE qs_fxc_fdiff
 
 ! **************************************************************************************************
-!> \brief Calculates the values at the grid points  in real space (r_i), of the second and third 
+!> \brief Calculates the values at the grid points  in real space (r_i), of the second and third
 !>        functional derivatives of the exchange-correlation energy functional.
 !>         fxc_rho(r_i) =  fxc[n](r_i)*n^(1)(r_i)            ! Second functional derivative
 !>         gxc_rho(r_i) =  n^(1)(r_i)*gxc[n](r_i)*n^(1)(r_i) ! Third functional derivative
@@ -307,17 +308,16 @@ CONTAINS
 
       CHARACTER(len=*), PARAMETER                        :: routineN = 'qs_fgxc_analytic'
 
-      INTEGER                                            :: handle, nspins, spindim, ispin
+      INTEGER                                            :: handle, ispin, nspins, spindim
       INTEGER, DIMENSION(2, 3)                           :: bo
-      LOGICAL                                            :: lsd, do_sf
+      LOGICAL                                            :: do_sf, lsd
       REAL(KIND=dp)                                      :: fac
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho0_r, tau0_r, rho1_r, tau1_r
       TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho0_g, rho1_g
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho0_r, rho1_r, tau0_r, tau1_r
       TYPE(section_vals_type), POINTER                   :: xc_fun_section
       TYPE(xc_derivative_set_type)                       :: deriv_set
       TYPE(xc_rho_cflags_type)                           :: needs
       TYPE(xc_rho_set_type)                              :: rho0_set, rho1_set
-
 
       CALL timeset(routineN, handle)
 
@@ -349,13 +349,12 @@ CONTAINS
          fac = 1.0_dp
       END IF
 
-
-      ! Read xc functional section and find out what does the functional needs
+      ! Read xc functional section and find out what the functional actually needs
       xc_fun_section => section_vals_get_subs_vals(xc_section, "XC_FUNCTIONAL")
       needs = xc_functionals_get_needs(xc_fun_section, lsd, .TRUE.)
 
       ! Create fields for the kernel and kernel derivative
-      ALLOCATE (fxc_rho(spindim),gxc_rho(nspins))
+      ALLOCATE (fxc_rho(spindim), gxc_rho(nspins))
       DO ispin = 1, spindim
          CALL pw_pool%create_pw(fxc_rho(ispin))
          CALL pw_zero(fxc_rho(ispin))
@@ -368,7 +367,7 @@ CONTAINS
       IF (needs%tau .OR. needs%tau_spin) THEN
          IF (.NOT. ASSOCIATED(tau1_r)) &
             CPABORT("Tau-dependent functionals requires allocated kinetic energy density grid")
-         ALLOCATE (fxc_tau(spindim),gxc_tau(nspins))
+         ALLOCATE (fxc_tau(spindim), gxc_tau(nspins))
          DO ispin = 1, spindim
             CALL pw_pool%create_pw(fxc_tau(ispin))
             CALL pw_zero(fxc_tau(ispin))
@@ -423,15 +422,14 @@ CONTAINS
       !   pw_pool          needs to be given by the calling subroutine
       !   xc_section       needs to be given by the calling subroutine
       CALL xc_calc_2nd_deriv_analytical(fxc_rho, fxc_tau, deriv_set, rho0_set, rho1_set, pw_pool, &
-                                        xc_section, .FALSE.,spinflip=do_sf, tddfpt_fac=fac)
+                                        xc_section, .FALSE., spinflip=do_sf, tddfpt_fac=fac)
       ! Calculate exchange correlation kernel derivative
       CALL xc_calc_3rd_deriv_analytical(gxc_rho, gxc_tau, deriv_set, rho0_set, rho1_set, pw_pool, &
                                         xc_section, spinflip=do_sf)
-      
+
       CALL xc_dset_release(deriv_set)
       CALL xc_rho_set_release(rho0_set)
       CALL xc_rho_set_release(rho1_set)
-
 
       CALL timestop(handle)
 
@@ -450,6 +448,7 @@ CONTAINS
 !> \param fxc_tau ...
 !> \param gxc_rho ...
 !> \param gxc_tau ...
+!> \param spinflip ...
 ! **************************************************************************************************
    SUBROUTINE qs_fgxc_gdiff(ks_env, rho0_struct, rho1_struct, xc_section, accuracy, epsrho, &
                             is_triplet, fxc_rho, fxc_tau, gxc_rho, gxc_tau, spinflip)
@@ -466,13 +465,14 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'qs_fgxc_gdiff'
 
       INTEGER                                            :: handle, ispin, istep, nspins, nstep
+      LOGICAL                                            :: do_sf
       REAL(KIND=dp)                                      :: alpha, beta, exc, oeps1
       REAL(KIND=dp), DIMENSION(-4:4)                     :: ak
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: v_tau_rspace, vxc00,vxc00b
-      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, tau1_r
+      TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, tau1_r, v_tau_rspace, vxc00, &
+                                                            vxc00b
       TYPE(qs_rho_type), POINTER                         :: rhoin
       LOGICAL                                            :: do_sf
 
@@ -525,7 +525,7 @@ CONTAINS
             NULLIFY (rhoin)
             ALLOCATE (rhoin)
             CALL qs_rho_create(rhoin)
-            NULLIFY (vxc00,vxc00b, v_tau_rspace)
+            NULLIFY (vxc00, vxc00b, v_tau_rspace)
             CALL qs_rho_copy(rho0_struct, rhoin, auxbas_pw_pool, nspins)
             CALL qs_rho_scale_and_add(rhoin, rho1_struct, alpha, beta)
             IF (do_sf) THEN
@@ -555,7 +555,7 @@ CONTAINS
             END IF
             IF (do_sf) THEN
                CALL pw_axpy(vxc00(1), gxc_rho(1), ak(istep))
-               CALL pw_axpy(vxc00b(1),gxc_rho(2), ak(istep))
+               CALL pw_axpy(vxc00b(1), gxc_rho(2), ak(istep))
             ELSE
                DO ispin = 1, nspins
                   CALL pw_axpy(vxc00(ispin), gxc_rho(ispin), ak(istep))

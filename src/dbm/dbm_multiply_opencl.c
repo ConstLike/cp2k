@@ -19,53 +19,102 @@
 #define DBM_TIMER_TICK() libxsmm_timer_tick()
 #define DBM_TIMER_TICKINT libxsmm_timer_tickint
 
+int dbm_multiply_opencl_launch_kernel(void *stream, double alpha, int ntasks,
+                                      int param_format, const int *params_host,
+                                      const int *params,
+                                      const double *pack_a_data,
+                                      const double *pack_b_data,
+                                      double *shard_c_data);
+
+#if defined(OPENCL_LIBSMM_PFORMAT) && (0 < OPENCL_LIBSMM_PFORMAT)
+int dbm_multiply_opencl_initialized /*= 0*/;
+int dbm_multiply_opencl_smm /*= 0*/;
+
+LIBXSMM_ATTRIBUTE_CTOR static void dbm_multiply_opencl_initialize(void) {
+  const char *const smm_env = getenv("DBM_MULTIPLY_SMM");
+  const int smm = (NULL == smm_env ? 0 /*default*/ : atoi(smm_env));
+  dbm_multiply_opencl_smm =
+      LIBXSMM_MIN(1 != smm ? smm : 64, (1 << (OPENCL_LIBSMM_PFORMAT - 1)) - 1);
+  if (0 > dbm_multiply_opencl_smm) {
+    opencl_libsmm_acc_set_dbm_launch_fn(dbm_multiply_opencl_launch_kernel);
+  }
+  ++dbm_multiply_opencl_initialized;
+}
+#endif
+
 typedef struct {
-  int max_m, max_n, max_k, mnk_count;
+  int max_m, max_n, max_k, mnk_changes;
 } dbm_multiply_gpu_launch_info_t;
 
 static void dbm_multiply_gpu_launch_info(dbm_multiply_gpu_launch_info_t *info,
-                                         const dbm_task_t *tasks, int ntasks) {
-  int avg_m = tasks[0].m, avg_n = tasks[0].n, avg_k = tasks[0].k, i = 1;
-  info->max_m = avg_m;
-  info->max_n = avg_n;
-  info->max_k = avg_k;
-  for (info->mnk_count = 0; i < ntasks; ++i) {
-    const int m = tasks[i].m, n = tasks[i].n, k = tasks[i].k;
-    info->max_m = imax(info->max_m, m);
-    info->max_n = imax(info->max_n, n);
-    info->max_k = imax(info->max_k, k);
-    if (m != avg_m || n != avg_n || k != avg_k) {
-      avg_m = (avg_m + m) / 2;
-      avg_n = (avg_n + n) / 2;
-      avg_k = (avg_k + k) / 2;
-      ++info->mnk_count;
+                                         const int *params, int ntasks,
+                                         int param_format) {
+  if (0 == param_format) { /* native */
+    const int stride = sizeof(dbm_task_t) / sizeof(int);
+    int avg_m = params[0], avg_n = params[1], avg_k = params[2], i = stride;
+    info->max_m = avg_m;
+    info->max_n = avg_n;
+    info->max_k = avg_k;
+    for (info->mnk_changes = 0; i < (ntasks * stride); i += stride) {
+      const int m = params[i + 0], n = params[i + 1], k = params[i + 2];
+      info->max_m = imax(info->max_m, m);
+      info->max_n = imax(info->max_n, n);
+      info->max_k = imax(info->max_k, k);
+      if (m != avg_m || n != avg_n || k != avg_k) { /* approximation */
+        avg_m = (avg_m + m) / 2;
+        avg_n = (avg_n + n) / 2;
+        avg_k = (avg_k + k) / 2;
+        ++info->mnk_changes;
+      }
     }
+  } else {
+#if defined(OPENCL_LIBSMM_PFORMAT) && (0 < OPENCL_LIBSMM_PFORMAT)
+    const int mask = (1 << OPENCL_LIBSMM_PFORMAT) - 1;
+    info->max_m = mask & (param_format);
+    info->max_n = mask & (param_format >> (OPENCL_LIBSMM_PFORMAT));
+    info->max_k = mask & (param_format >> (OPENCL_LIBSMM_PFORMAT * 2));
+    info->mnk_changes = 0; /* homogeneous */
+#else
+    assert(0);
+#endif
   }
 }
 
-void dbm_multiply_gpu_launch_kernel(const offloadStream_t stream, double alpha,
-                                    int ntasks, const dbm_task_t *tasks_host,
-                                    const dbm_task_t *tasks,
-                                    const double *pack_a_data,
-                                    const double *pack_b_data,
-                                    double *shard_c_data) {
+static void dbm_multiply_opencl_print(FILE *stream, const char *name, int val) {
+  if (0 != val) {
+    fprintf(stream, " %s=%i", name, val);
+  }
+}
+
+int dbm_multiply_opencl_launch_kernel(void *stream, double alpha, int ntasks,
+                                      int param_format, const int *params_host,
+                                      const int *params,
+                                      const double *pack_a_data,
+                                      const double *pack_b_data,
+                                      double *shard_c_data) {
   const DBM_TIMER_TICKINT start = DBM_TIMER_TICK();
   const c_dbcsr_acc_opencl_config_t *const config = &c_dbcsr_acc_opencl_config;
-#if defined(OPENCL_LIBSMM_PFORMAT)
-  const char *const smm_env = getenv("DBM_MULTIPLY_SMM");
-  int max_kernel_dim = (NULL == smm_env ? 0 /*default*/ : atoi(smm_env));
-#endif
-  const int verbosity = config->verbosity;
+  const int verbosity = config->verbosity,
+            info = (0 > verbosity || 2 < verbosity);
   int result = EXIT_SUCCESS;
-  cl_event e = NULL, *const event =
-                         ((0 <= verbosity && 2 >= verbosity) ? NULL : &e);
-  dbm_multiply_gpu_launch_info_t info = {0};
-  dbm_multiply_gpu_launch_info(&info, tasks_host, ntasks);
+  dbm_multiply_gpu_launch_info_t task = {0};
   assert(NULL != pack_a_data && NULL != pack_b_data && NULL != shard_c_data);
-  assert(0 < ntasks && NULL != tasks);
-#if defined(OPENCL_LIBSMM_PFORMAT)
-  if (0 != info.mnk_count || 1 != alpha ||
-      (max_kernel_dim * max_kernel_dim) < (info.max_m * info.max_n))
+  assert(NULL != params_host || 0 == ntasks);
+  assert(NULL != params || 0 == ntasks);
+  if (0 == ntasks) {
+    return result;
+  }
+#if defined(OPENCL_LIBSMM_PFORMAT) && (0 < OPENCL_LIBSMM_PFORMAT)
+  if (0 == dbm_multiply_opencl_initialized) {
+    dbm_multiply_opencl_initialize();
+  }
+  if (0 != dbm_multiply_opencl_smm || 0 != info) {
+    dbm_multiply_gpu_launch_info(&task, params_host, ntasks, param_format);
+  }
+  if (0 > dbm_multiply_opencl_smm || 0 != task.mnk_changes ||
+      dbm_multiply_opencl_smm < task.max_m ||
+      dbm_multiply_opencl_smm < task.max_n ||
+      dbm_multiply_opencl_smm < task.max_k || 0 == task.max_k || 1 != alpha)
 #endif
   {
 #if defined(OPENCL_DBM_SOURCE_MULTIPLY)
@@ -75,7 +124,12 @@ void dbm_multiply_gpu_launch_kernel(const offloadStream_t stream, double alpha,
     static int ndims = 1, clinear = 0;
     static size_t wgsize[] = {0, 0, 0};
     const c_dbcsr_acc_opencl_stream_t *const str = ACC_OPENCL_STREAM(stream);
+    const c_dbcsr_acc_opencl_device_t *const devinfo = &config->device;
+    ACC_OPENCL_LOCKTYPE *const lock_memory =
+        (NULL != devinfo->clSetKernelArgMemPointerINTEL ? NULL
+                                                        : config->lock_memory);
     c_dbcsr_acc_opencl_info_memptr_t adata, bdata, cdata, batch;
+    const int stride = (0 == param_format ? 6 : 3);
     size_t work_size[] = {1, 1, 1}, ibatch = 0;
     size_t iadata = 0, ibdata = 0, icdata = 0;
     const size_t work_tasks = ntasks;
@@ -83,42 +137,43 @@ void dbm_multiply_gpu_launch_kernel(const offloadStream_t stream, double alpha,
     if (NULL == kernel_global) { /* initial check if kernel is present */
       ACC_OPENCL_ACQUIRE(config->lock_main);
       if (NULL == kernel_global) {
-        char params[ACC_OPENCL_BUFFERSIZE] =
+        char flags[ACC_OPENCL_BUFFERSIZE] =
             "-cl-fast-relaxed-math -cl-denorms-are-zero";
         const char *const gen_env = getenv("DBM_MULTIPLY_GEN");
         const char *const lin_env = getenv("DBM_MULTIPLY_LIN");
+        const char *const fp_env = getenv("DBM_MULTIPLY_FP");
         const char *const bn_env = getenv("DBM_MULTIPLY_BN");
         const char *const sm_env = getenv("DBM_MULTIPLY_SM");
         const char *const wg_env = getenv("DBM_MULTIPLY_WG");
         const char *const lu_env = getenv("DBM_MULTIPLY_LU");
         const char *const xf_env = getenv("DBM_MULTIPLY_XF");
-        const c_dbcsr_acc_opencl_device_t *const devinfo = &config->device;
         int sm = (NULL == sm_env ? 0 /*default*/ : atoi(sm_env));
         const int bn0 = (0 == devinfo->nv ? (0 == devinfo->amd ? 4 : 8) : 2);
         const int bn1 = ((0 == sm && 0 == clinear) ? bn0 : (bn0 * 2));
         int bn = LIBXSMM_CLMP(NULL == bn_env ? bn1 : atoi(bn_env), 1, 32);
         int lu = LIBXSMM_CLMP(NULL == lu_env ? 0 : atoi(lu_env), -2, 1);
-        int gen = ((NULL == bn_env && NULL == sm_env && NULL == wg_env &&
-                    NULL == lu_env && NULL == lin_env)
+        int gen = ((NULL == fp_env && NULL == bn_env && NULL == sm_env &&
+                    NULL == wg_env && NULL == lu_env && NULL == lin_env &&
+                    0 == param_format)
                        ? (NULL == gen_env ? 1 /*default*/ : atoi(gen_env))
                        : 0);
+        const int precision = (NULL == fp_env ? 0 /*default*/ : atoi(fp_env));
         const int gpu = (CL_DEVICE_TYPE_GPU == devinfo->type);
         const int xf = (NULL == xf_env ? -1 /*default*/ : atoi(xf_env));
-        const char *extensions[] = {NULL, NULL}, *flags = NULL;
+        const char *extensions[] = {NULL, NULL}, *options = NULL;
         size_t nextensions = sizeof(extensions) / sizeof(*extensions);
-        const size_t wgsize0 = devinfo->wgsize[0], wgsize1 = devinfo->wgsize[1];
-        size_t wgsize2 = devinfo->wgsize[2];
+        size_t sgsize = devinfo->wgsize[2];
         size_t offset =
-            ((0 == config->debug && 0 == config->dump) ? strlen(params) : 0);
+            ((0 == config->debug && 0 == config->dump) ? strlen(flags) : 0);
         offset += (size_t)c_dbcsr_acc_opencl_flags_atomics(
             devinfo, c_dbcsr_acc_opencl_atomic_fp_64, extensions, &nextensions,
-            params + offset, sizeof(params) - offset);
+            flags + offset, sizeof(flags) - offset);
         if (2 <= gen ||
-            (0 != gen && 0 != wgsize2 /*subgroups*/ &&
-             2 <= *devinfo->std_level && NULL != extensions[1] &&
+            (0 != gen && 1 < sgsize /*subgroups*/ && 2 <= *devinfo->std_level &&
+             NULL != extensions[1] &&
              NULL != strstr(extensions[1], "cl_ext_float_atomics"))) {
           offset +=
-              (size_t)LIBXSMM_SNPRINTF(params + offset, sizeof(params) - offset,
+              (size_t)LIBXSMM_SNPRINTF(flags + offset, sizeof(flags) - offset,
                                        " -DDBM_MULTIPLY_OPENCL_GEN");
           wgsize[1] = wgsize[2] = 1;
           wgsize[0] = 16;
@@ -127,64 +182,60 @@ void dbm_multiply_gpu_launch_kernel(const offloadStream_t stream, double alpha,
         } else {
           wgsize[0] = (NULL == wg_env ? (unsigned long int)LIBXSMM_ABS(sm)
                                       : strtoul(wg_env, NULL, 10));
-          if (0 != wgsize2 && 0 < wgsize[0]) { /* subgroups */
-            if (LIBXSMM_DELTA(wgsize[0], wgsize1) <=
-                LIBXSMM_DELTA(wgsize[0], wgsize2)) { /* select SG-size */
-              wgsize2 = wgsize1;
+          if (1 < sgsize && 0 < wgsize[0]) { /* subgroups */
+            if (LIBXSMM_DELTA(wgsize[0], devinfo->wgsize[1]) <=
+                LIBXSMM_DELTA(wgsize[0], sgsize)) { /* select SG-size */
+              sgsize = devinfo->wgsize[1];
             }
-            wgsize[0] = LIBXSMM_UP(wgsize[0], wgsize2);
+            wgsize[0] = LIBXSMM_UP(wgsize[0], sgsize);
           } else {
-            wgsize[0] = LIBXSMM_UP(wgsize[0], wgsize1);
-            wgsize2 = 0;
+            wgsize[0] = LIBXSMM_UP(wgsize[0], devinfo->wgsize[1]);
+            sgsize = 0;
           }
-          wgsize[0] = LIBXSMM_CLMP(wgsize[0], 0, wgsize0);
+          wgsize[0] = LIBXSMM_CLMP(wgsize[0], 0, devinfo->wgsize[0]);
           sm = ((0 != sm && 0 != wgsize[0])
                     ? (LIBXSMM_ISPOT(bn * sizeof(double)) + 1)
                     : 0);
           clinear = (NULL == lin_env ? 0 /*default*/ : atoi(lin_env));
           offset += (size_t)LIBXSMM_SNPRINTF(
-              params + offset, sizeof(params) - offset,
+              flags + offset, sizeof(flags) - offset,
               " %s %s -DBN=%i -DSM=%i -DLU=%i -DWG=%i -DSG=%i",
               0 != gpu ? "-DGPU" : "", 0 == clinear ? "" : "-DCLINEAR", bn, sm,
-              lu, (int)wgsize[0], (int)wgsize2);
+              lu, (int)wgsize[0], (int)sgsize);
+          if (0 != precision) {
+            offset +=
+                (size_t)LIBXSMM_SNPRINTF(flags + offset, sizeof(flags) - offset,
+                                         " -DPRECISION=%i", precision);
+          }
           gen = 0;
         }
         if (0 != devinfo->intel && 0 < xf) {
-          flags = "-cl-intel-256-GRF-per-thread";
+          options = "-cl-intel-256-GRF-per-thread";
         }
-        result |= (sizeof(params) > offset ? EXIT_SUCCESS : EXIT_FAILURE);
+        result |= (sizeof(flags) > offset ? EXIT_SUCCESS : EXIT_FAILURE);
+        if (2 <= verbosity || 0 > verbosity || EXIT_SUCCESS != result) {
+          const char *const kind = (EXIT_SUCCESS == result ? "INFO" : "ERROR");
+          fprintf(stderr, "%s ACC/LIBDBM: DBM-kernel gpu=%i", kind, gpu);
+          dbm_multiply_opencl_print(stderr, "gen", gen); /* generated */
+          dbm_multiply_opencl_print(stderr, "lin", clinear);
+          dbm_multiply_opencl_print(stderr, "fp", precision);
+          dbm_multiply_opencl_print(stderr, "bn", bn);
+          dbm_multiply_opencl_print(stderr, "sm", sm);
+          dbm_multiply_opencl_print(stderr, "wg", (int)wgsize[0]);
+          dbm_multiply_opencl_print(stderr, "sg", (int)sgsize);
+          dbm_multiply_opencl_print(stderr, "lu", lu);
+          fprintf(stderr, " -> ");
+        }
         result |= c_dbcsr_acc_opencl_kernel(
             0 /*source_is_file*/, OPENCL_DBM_SOURCE_MULTIPLY, "dbm_multiply",
-            params, flags, NULL /*try*/, NULL /*try_ok*/, extensions,
+            flags, options, NULL /*try*/, NULL /*try_ok*/, extensions,
             nextensions, &kernel_global);
-        if (2 <= verbosity || 0 > verbosity) {
+        if (2 <= verbosity || 0 > verbosity || EXIT_SUCCESS != result) {
           if (EXIT_SUCCESS == result) {
             const double ds = DBM_TIMER_DIFF(start, DBM_TIMER_TICK());
-            fprintf(stderr, "INFO ACC/LIBDBM: DBM-kernel gpu=%i", gpu);
-            if (0 != gen) { /* generated kernel */
-              fprintf(stderr, " gen=%i", gen);
-            }
-            if (0 != clinear) {
-              fprintf(stderr, " lin=%i", clinear);
-            }
-            if (0 != bn) {
-              fprintf(stderr, " bn=%i", bn);
-            }
-            if (0 != sm) {
-              fprintf(stderr, " sm=%i", sm);
-            }
-            if (0 != wgsize[0]) {
-              fprintf(stderr, " wg=%i", (int)wgsize[0]);
-            }
-            if (0 != wgsize2) {
-              fprintf(stderr, " sg=%i", (int)wgsize2);
-            }
-            if (0 != lu) {
-              fprintf(stderr, " lu=%i", lu);
-            }
-            fprintf(stderr, " ms=%.1f\n", 1E3 * ds);
+            fprintf(stderr, "%.1f ms\n", 1E3 * ds);
           } else {
-            fprintf(stderr, "INFO ACC/LIBDBM: DBM-kernel failed to generate\n");
+            fprintf(stderr, "FAILED!\n");
           }
         }
       }
@@ -196,6 +247,9 @@ void dbm_multiply_gpu_launch_kernel(const offloadStream_t stream, double alpha,
 #else
 #error "OpenCL kernel code not found!"
 #endif
+    if (NULL != lock_memory) {
+      ACC_OPENCL_ACQUIRE(lock_memory);
+    }
     result |= c_dbcsr_acc_opencl_info_devptr_lock(&adata, NULL /*lock*/,
                                                   pack_a_data, 1 /*esize*/,
                                                   NULL /*amount*/, &iadata);
@@ -206,8 +260,11 @@ void dbm_multiply_gpu_launch_kernel(const offloadStream_t stream, double alpha,
                                                   shard_c_data, 1 /*esize*/,
                                                   NULL /*amount*/, &icdata);
     result |= c_dbcsr_acc_opencl_info_devptr_lock(
-        &batch, NULL /*lock*/, tasks /*batch*/, sizeof(dbm_task_t), &work_tasks,
-        &ibatch);
+        &batch, NULL /*lock*/, params /*batch*/, sizeof(int) * stride,
+        &work_tasks, &ibatch);
+    if (NULL != lock_memory) {
+      ACC_OPENCL_RELEASE(lock_memory);
+    }
     assert(0 == iadata && 0 == ibdata && 0 == icdata);
     result |= clSetKernelArg(kernel, 0, sizeof(cl_double), &alpha);
     result |= clSetKernelArg(kernel, 1, sizeof(cl_int), &ibatch);
@@ -225,65 +282,76 @@ void dbm_multiply_gpu_launch_kernel(const offloadStream_t stream, double alpha,
       result |= clSetKernelArg(kernel, 7, sizeof(cl_uint), &zero /*B_shape0*/);
       result |= c_dbcsr_acc_opencl_set_kernel_ptr(kernel, 8, cdata.memory);
       result |= clSetKernelArg(kernel, 9, sizeof(cl_uint), &zero /*C_shape0*/);
+#if !(defined(OPENCL_LIBSMM_PFORMAT) && (0 < OPENCL_LIBSMM_PFORMAT))
+      if (0 != info) {
+        dbm_multiply_gpu_launch_info(&task, params_host, ntasks, param_format);
+      }
+#endif
     } else {
       size_t size = work_tasks;
-      size *= (0 == clinear ? info.max_m : info.max_n);
+#if defined(OPENCL_LIBSMM_PFORMAT) && (0 < OPENCL_LIBSMM_PFORMAT)
+      if (0 == dbm_multiply_opencl_smm && 0 == info)
+#endif
+      {
+        dbm_multiply_gpu_launch_info(&task, params_host, ntasks, param_format);
+      }
+      size *= (0 == clinear ? task.max_m : task.max_n);
       /* fixup to be a multiple of the WG-size */
       work_size[0] = (0 < wgsize[0] ? LIBXSMM_UP(size, wgsize[0]) : size);
       result |= clSetKernelArg(kernel, 2, sizeof(cl_int), &ntasks);
       result |= clSetKernelArg(kernel, 3, sizeof(cl_int), &size);
-      result |= c_dbcsr_acc_opencl_set_kernel_ptr(kernel, 4, batch.memory);
-      result |= c_dbcsr_acc_opencl_set_kernel_ptr(kernel, 5, adata.memory);
-      result |= c_dbcsr_acc_opencl_set_kernel_ptr(kernel, 6, bdata.memory);
-      result |= c_dbcsr_acc_opencl_set_kernel_ptr(kernel, 7, cdata.memory);
+      result |= clSetKernelArg(kernel, 4, sizeof(cl_int), &param_format);
+      result |= c_dbcsr_acc_opencl_set_kernel_ptr(kernel, 5, batch.memory);
+      result |= c_dbcsr_acc_opencl_set_kernel_ptr(kernel, 6, adata.memory);
+      result |= c_dbcsr_acc_opencl_set_kernel_ptr(kernel, 7, bdata.memory);
+      result |= c_dbcsr_acc_opencl_set_kernel_ptr(kernel, 8, cdata.memory);
     }
     result |= clEnqueueNDRangeKernel(str->queue, kernel, ndims, NULL, work_size,
                                      0 < wgsize[0] ? wgsize : NULL,
-                                     0 /*num_wait*/, NULL /*wait_list*/, event);
+                                     0 /*num_wait*/, NULL /*wait_list*/, NULL);
   }
-#if defined(OPENCL_LIBSMM_PFORMAT)
+#if defined(OPENCL_LIBSMM_PFORMAT) && (0 < OPENCL_LIBSMM_PFORMAT)
   else { /* homogeneous */
-    const int pzero = 0, pbase = 3, pnext = 6;
-    const int param_format = pzero | (pbase << 8) | (pnext << 16);
     result |= opencl_libsmm_acc_process(
-        NULL /*tasks_host*/, &tasks->m, ntasks, dbcsr_type_real_8, pack_a_data,
-        pack_b_data, shard_c_data, info.max_m, info.max_n, info.max_k,
-        max_kernel_dim, 1 /*homogeneous*/, stream, NULL /*c_stream*/,
-        param_format, event);
+        params_host, params, ntasks, dbcsr_type_real_8, pack_a_data,
+        pack_b_data, shard_c_data, task.max_m, task.max_n, task.max_k,
+        dbm_multiply_opencl_smm, 1 /*homogeneous*/, stream, NULL /*c_stream*/,
+        task.max_m | task.max_n << OPENCL_LIBSMM_PFORMAT |
+            (task.max_k << (OPENCL_LIBSMM_PFORMAT * 2)),
+        NULL);
   }
 #endif
-  if (NULL != event && NULL != *event && EXIT_SUCCESS == result &&
-      EXIT_SUCCESS == clWaitForEvents(1, event)) {
+  if (0 != info && EXIT_SUCCESS == result) {
     static LIBXSMM_TLS DBM_TIMER_TICKINT start2 = 0;
     const DBM_TIMER_TICKINT stop = DBM_TIMER_TICK();
     const double dhost = DBM_TIMER_DIFF(start, stop);
     const double diter = (0 < start2 ? DBM_TIMER_DIFF(start, start2) : dhost);
-#if defined(OPENCL_LIBSMM_PFORMAT)
-    const char *const kind = (0 == max_kernel_dim ? "DBM" : "SMM");
+#if defined(OPENCL_LIBSMM_PFORMAT) && (0 < OPENCL_LIBSMM_PFORMAT)
+    const char *const kind = (0 >= dbm_multiply_opencl_smm ? "DBM" : "SMM");
 #else
     const char *const kind = "DBM";
 #endif
-    const int pure = (100 * (ntasks - info.mnk_count) + ntasks - 1) / ntasks;
-    double dkrnl = dhost, dtotl;
-    if (c_dbcsr_acc_opencl_timer_host == config->timer) {
-      cl_ulong begin = 0, end = 0;
-      const int r0 = clGetEventProfilingInfo(*event, CL_PROFILING_COMMAND_START,
-                                             sizeof(cl_ulong), &begin, NULL);
-      const int r1 = clGetEventProfilingInfo(*event, CL_PROFILING_COMMAND_END,
-                                             sizeof(cl_ulong), &end, NULL);
-      if (EXIT_SUCCESS == r0 && EXIT_SUCCESS == r1) {
-        dkrnl = 1E-9 * LIBXSMM_DELTA(begin, end);
-      }
-    }
+    const int pure = (100 * (ntasks - task.mnk_changes) + ntasks - 1) / ntasks;
+    const double dtotl = LIBXSMM_MAX(diter, dhost);
     start2 = stop;
-    dtotl = LIBXSMM_MIN(LIBXSMM_MIN(diter, dhost), dkrnl);
     fprintf(stderr,
-            "INFO ACC/LIBDBM: %s-kernel mnk=%ix%ix%i pure=%i%% ntasks=%i "
-            "ims=%.1f hms=%.1f kms=%.1f gflops=%.1f\n",
-            kind, info.max_m, info.max_n, info.max_k, pure, ntasks,
-            1E+3 * diter, 1E+3 * dhost, 1E+3 * dkrnl,
-            1E-9 * info.max_m * info.max_n * info.max_k * ntasks / dtotl);
+            "INFO ACC/LIBDBM: %s-kernel mnk=%ix%ix%i "
+            "pure=%i%% ntasks=%i ms=%.1f\n",
+            kind, task.max_m, task.max_n, task.max_k, pure, ntasks,
+            1E+3 * dtotl);
   }
+  return result;
+}
+
+void dbm_multiply_gpu_launch_kernel(offloadStream_t stream, double alpha,
+                                    int ntasks, const dbm_task_t *tasks_host,
+                                    const dbm_task_t *tasks,
+                                    const double *pack_a_data,
+                                    const double *pack_b_data,
+                                    double *shard_c_data) {
+  const int result = dbm_multiply_opencl_launch_kernel(
+      stream, alpha, ntasks, 0 /*param_format*/, &tasks_host->m, &tasks->m,
+      pack_a_data, pack_b_data, shard_c_data);
   OFFLOAD_CHECK(result);
 }
 

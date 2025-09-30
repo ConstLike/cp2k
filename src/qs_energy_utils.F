@@ -40,7 +40,7 @@ MODULE qs_energy_utils
                                               pw_scale
    USE pw_pool_types,                   ONLY: pw_pool_type
    USE pw_types,                        ONLY: pw_r3d_rs_type
-   USE qs_core_hamiltonian,             ONLY: core_matrices
+   USE qs_core_matrices,                ONLY: core_matrices
    USE qs_dispersion_types,             ONLY: qs_dispersion_type
    USE qs_energy_types,                 ONLY: qs_energy_type
    USE qs_environment_types,            ONLY: get_qs_env,&
@@ -63,6 +63,7 @@ MODULE qs_energy_utils
    USE qs_tddft_methods,                ONLY: tddft
    USE qs_vxc,                          ONLY: qs_xc_density
    USE qs_vxc_atom,                     ONLY: calculate_vxc_atom
+   USE rixs_methods,                    ONLY: rixs
    USE tip_scan_methods,                ONLY: tip_scanning
    USE xas_methods,                     ONLY: xas
    USE xas_tdp_methods,                 ONLY: xas_tdp
@@ -84,7 +85,7 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Refactoring of qs_energies_scf. Moves computation of properties
-!>        into separate subroutine. Calculates energy and if calc_forces then the response vector 
+!>        into separate subroutine. Calculates energy and if calc_forces then the response vector
 !>        and some contributions to the force
 !> \param qs_env ...
 !> \param calc_forces ...
@@ -182,6 +183,7 @@ CONTAINS
       END IF
 
       !Properties
+
       IF (dft_control%do_xas_calculation) THEN
          CALL xas(qs_env, dft_control)
       END IF
@@ -201,9 +203,13 @@ CONTAINS
          CALL tddfpt(qs_env, calc_forces)
       END IF
 
+      ! Calculates the excited energy for singlets(including GS)/triplets with MRSF-TDDFT
       IF (dft_control%tddfpt2_control%tddft_enabled) THEN
          CALL tddft(qs_env, calc_forces)
       END IF
+
+      ! stand-alone RIXS, does not depend on previous xas_tdp and/or tddfpt2 calculations
+      IF (qs_env%do_rixs) CALL rixs(qs_env)
 
       ! post-SCF bandstructure calculation from higher level methods
       NULLIFY (post_scf_bands_section)

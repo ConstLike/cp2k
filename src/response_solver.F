@@ -21,9 +21,6 @@ MODULE response_solver
    USE atomic_kind_types,               ONLY: atomic_kind_type,&
                                               get_atomic_kind
    USE cell_types,                      ONLY: cell_type
-   USE core_ae,                         ONLY: build_core_ae
-   USE core_ppl,                        ONLY: build_core_ppl
-   USE core_ppnl,                       ONLY: build_core_ppnl
    USE cp_blacs_env,                    ONLY: cp_blacs_env_type
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_api,                    ONLY: &
@@ -98,6 +95,8 @@ MODULE response_solver
                                               pw_r3d_rs_type
    USE qs_2nd_kernel_ao,                ONLY: build_dm_response
    USE qs_collocate_density,            ONLY: calculate_rho_elec
+   USE qs_core_matrices,                ONLY: core_matrices,&
+                                              kinetic_energy_matrix
    USE qs_density_matrices,             ONLY: calculate_whz_matrix,&
                                               calculate_wz_matrix
    USE qs_energy_types,                 ONLY: qs_energy_type
@@ -112,7 +111,6 @@ MODULE response_solver
    USE qs_kind_types,                   ONLY: get_qs_kind,&
                                               get_qs_kind_set,&
                                               qs_kind_type
-   USE qs_kinetic,                      ONLY: build_kinetic_matrix
    USE qs_ks_atom,                      ONLY: update_ks_atom
    USE qs_ks_methods,                   ONLY: calc_rho_tot_gspace
    USE qs_ks_types,                     ONLY: qs_ks_env_type
@@ -650,7 +648,7 @@ CONTAINS
 !>        J. Chem. Theory Comput. 2022, 18, 4186−4202 (https://doi.org/10.1021/acs.jctc.2c00144)
 !>
 !> \param qs_env ...
-!> \param p_env Holds the two results of this routine, p_env%p1 = CZ^T + ZC^T, 
+!> \param p_env Holds the two results of this routine, p_env%p1 = CZ^T + ZC^T,
 !>              p_env%w1 = 0.5\sum_i(C_i*\epsilon_i*Z_i^T + Z_i*\epsilon_i*C_i^T)
 !> \param cpmos RHS of equation as Ax + b = 0 (sign of b)
 !> \param iounit ...
@@ -833,16 +831,15 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'response_force'
 
-      CHARACTER(LEN=default_string_length)               :: basis_type
+      CHARACTER(LEN=default_string_length)               :: basis_type, unitstr
       INTEGER                                            :: handle, iounit, ispin, mspin, myfun, &
                                                             n_rep_hf, nao, nao_aux, natom, nder, &
-                                                            nimages, nocc, nspins
-      INTEGER, DIMENSION(:, :, :), POINTER               :: cell_to_index
+                                                            nocc, nspins
       LOGICAL :: debug_forces, debug_stress, distribute_fock_matrix, do_ex, do_hfx, gapw, gapw_xc, &
          hfx_treat_lsd_in_core, resp_only, s_mstruct_changed, use_virial
       REAL(KIND=dp)                                      :: eh1, ehartree, ekin_mol, eps_filter, &
-                                                            eps_ppnl, exc, exc_aux_fit, fconv, &
-                                                            focc, hartree_gs, hartree_t
+                                                            exc, exc_aux_fit, fconv, focc, &
+                                                            hartree_gs, hartree_t
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: ftot1, ftot2, ftot3
       REAL(KIND=dp), DIMENSION(2)                        :: total_rho_gs, total_rho_t
       REAL(KIND=dp), DIMENSION(3)                        :: fodeb
@@ -855,7 +852,7 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: matrix_ht, matrix_pd, matrix_pza, &
                                                             matrix_s, mpa, scrm
       TYPE(dbcsr_p_type), DIMENSION(:, :), POINTER       :: matrix_h, matrix_p, mhd, mhx, mhy, mhz, &
-                                                            mpd, mpz
+                                                            mpa2, mpd, mpz, scrm2
       TYPE(dbcsr_type), POINTER                          :: dbwork
       TYPE(dft_control_type), POINTER                    :: dft_control
       TYPE(hartree_local_type), POINTER                  :: hartree_local_gs, hartree_local_t
@@ -867,8 +864,7 @@ CONTAINS
       TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
       TYPE(mp_para_env_type), POINTER                    :: para_env
       TYPE(neighbor_list_set_p_type), DIMENSION(:), &
-         POINTER                                         :: sab_aux_fit, sab_orb, sac_ae, sac_ppl, &
-                                                            sap_ppnl
+         POINTER                                         :: sab_aux_fit, sab_orb
       TYPE(oce_matrix_type), POINTER                     :: oce
       TYPE(particle_type), DIMENSION(:), POINTER         :: particle_set
       TYPE(pw_c1d_gs_type) :: rho_tot_gspace, rho_tot_gspace_gs, rho_tot_gspace_t, &
@@ -903,7 +899,6 @@ CONTAINS
       END IF
 
       logger => cp_get_default_logger()
-      logger => cp_get_default_logger()
       IF (logger%para_env%is_source()) THEN
          iounit = cp_logger_get_default_unit_nr(logger, local=.TRUE.)
       ELSE
@@ -916,7 +911,7 @@ CONTAINS
          CPASSERT(PRESENT(p_env))
       END IF
 
-      NULLIFY (ks_env, sab_orb, sac_ae, sac_ppl, sap_ppnl, virial)
+      NULLIFY (ks_env, sab_orb, virial)
       CALL get_qs_env(qs_env=qs_env, &
                       cell=cell, &
                       force=force, &
@@ -924,9 +919,6 @@ CONTAINS
                       dft_control=dft_control, &
                       para_env=para_env, &
                       sab_orb=sab_orb, &
-                      sac_ae=sac_ae, &
-                      sac_ppl=sac_ppl, &
-                      sap_ppnl=sap_ppnl, &
                       virial=virial)
       nspins = dft_control%nspins
       gapw = dft_control%qs_control%gapw
@@ -977,41 +969,20 @@ CONTAINS
       !
       ! START OF Tr[(P+Z)Hcore]
       !
-      ! Compute mpa(1) = T_\alpha + D^Z_\alpha + T_\beta + D^Z_\beta
-      IF (nspins == 2) THEN
-         CALL dbcsr_add(mpa(1)%matrix, mpa(2)%matrix, 1.0_dp, 1.0_dp)
-      END IF
-      nimages = 1
 
       ! Kinetic energy matrix
-      NULLIFY (scrm)
-      IF (debug_forces) fodeb(1:3) = force(1)%kinetic(1:3, 1)
-      IF (debug_stress .AND. use_virial) stdeb = virial%pv_ekinetic
-      CALL build_kinetic_matrix(ks_env, matrix_t=scrm, &
-                                matrix_name="KINETIC ENERGY MATRIX", &
-                                basis_type="ORB", &
-                                sab_nl=sab_orb, calculate_forces=.TRUE., &
-                                matrix_p=mpa(1)%matrix)
-      IF (debug_forces) THEN
-         fodeb(1:3) = force(1)%kinetic(1:3, 1) - fodeb(1:3)
-         CALL para_env%sum(fodeb)
-         IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: (T+Dz)*dT      ", fodeb
-      END IF
-      IF (debug_stress .AND. use_virial) THEN
-         stdeb = fconv*(virial%pv_ekinetic - stdeb)
-         CALL para_env%sum(stdeb)
-         IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
-            'STRESS| Kinetic energy', one_third_sum_diag(stdeb), det_3x3(stdeb)
-      END IF
-
-      ! Recover mpa(1) = T_\alpha + D^Z_\alpha
-      IF (nspins == 2) THEN
-         CALL dbcsr_add(mpa(1)%matrix, mpa(2)%matrix, 1.0_dp, -1.0_dp)
-      END IF
-      CALL dbcsr_deallocate_matrix_set(scrm)
+      NULLIFY (scrm2)
+      mpa2(1:nspins, 1:1) => mpa(1:nspins)
+      CALL kinetic_energy_matrix(qs_env, matrixkp_t=scrm2, matrix_p=mpa2, &
+                                 matrix_name="KINETIC ENERGY MATRIX", &
+                                 basis_type="ORB", &
+                                 sab_orb=sab_orb, calculate_forces=.TRUE., &
+                                 debug_forces=debug_forces, debug_stress=debug_stress)
+      CALL dbcsr_deallocate_matrix_set(scrm2)
 
       ! Initialize a matrix scrm, later used for scratch purposes
       CALL get_qs_env(qs_env=qs_env, matrix_s=matrix_s)
+      NULLIFY (scrm)
       CALL dbcsr_allocate_matrix_set(scrm, nspins)
       DO ispin = 1, nspins
          ALLOCATE (scrm(ispin)%matrix)
@@ -1023,7 +994,6 @@ CONTAINS
       CALL get_qs_env(qs_env, qs_kind_set=qs_kind_set, particle_set=particle_set, &
                       atomic_kind_set=atomic_kind_set)
 
-      NULLIFY (cell_to_index)
       ALLOCATE (matrix_p(nspins, 1), matrix_h(nspins, 1))
       DO ispin = 1, nspins
          matrix_p(ispin, 1)%matrix => mpa(ispin)%matrix
@@ -1031,71 +1001,10 @@ CONTAINS
       END DO
       matrix_h(1, 1)%matrix => scrm(1)%matrix
 
-      ! Compute nuclear attraction contribution to the core hamiltonian
-      IF (ASSOCIATED(sac_ae)) THEN
-         nder = 1
-         IF (debug_forces) fodeb(1:3) = force(1)%all_potential(1:3, 1)
-         IF (debug_stress .AND. use_virial) stdeb = virial%pv_ppl
-         CALL build_core_ae(matrix_h, matrix_p, force, virial, .TRUE., use_virial, nder, &
-                            qs_kind_set, atomic_kind_set, particle_set, sab_orb, sac_ae, &
-                            nimages, cell_to_index)
-         IF (debug_forces) THEN
-            fodeb(1:3) = force(1)%all_potential(1:3, 1) - fodeb(1:3)
-            CALL para_env%sum(fodeb)
-            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: (T+Dz)*dHae    ", fodeb
-         END IF
-         IF (debug_stress .AND. use_virial) THEN
-            stdeb = fconv*(virial%pv_ppl - stdeb)
-            CALL para_env%sum(stdeb)
-            IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
-               'STRESS| Pz*dHae    ', one_third_sum_diag(stdeb), det_3x3(stdeb)
-         END IF
-      END IF
+      nder = 1
+      CALL core_matrices(qs_env, matrix_h, matrix_p, .TRUE., nder, &
+                         debug_forces=debug_forces, debug_stress=debug_stress)
 
-      ! Compute the local pseudopotential (ppl) contribution to the core hamiltonian
-      IF (ASSOCIATED(sac_ppl)) THEN
-         nder = 1
-         IF (debug_forces) fodeb(1:3) = force(1)%gth_ppl(1:3, 1)
-         IF (debug_stress .AND. use_virial) stdeb = virial%pv_ppl
-         CALL build_core_ppl(matrix_h, matrix_p, force, &
-                             virial, .TRUE., use_virial, nder, &
-                             qs_kind_set, atomic_kind_set, particle_set, &
-                             sab_orb, sac_ppl, nimages, cell_to_index, "ORB")
-         IF (debug_forces) THEN
-            fodeb(1:3) = force(1)%gth_ppl(1:3, 1) - fodeb(1:3)
-            CALL para_env%sum(fodeb)
-            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: (T+Dz)*dHppl   ", fodeb
-         END IF
-         IF (debug_stress .AND. use_virial) THEN
-            stdeb = fconv*(virial%pv_ppl - stdeb)
-            CALL para_env%sum(stdeb)
-            IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
-               'STRESS| Pz*dHppl   ', one_third_sum_diag(stdeb), det_3x3(stdeb)
-         END IF
-      END IF
-      ! Compute the non-local pseudopotential (ppnl) contribution to the core hamiltonian
-      eps_ppnl = dft_control%qs_control%eps_ppnl
-      IF (ASSOCIATED(sap_ppnl)) THEN
-         nder = 1
-         IF (debug_forces) fodeb(1:3) = force(1)%gth_ppnl(1:3, 1)
-         IF (debug_stress .AND. use_virial) stdeb = virial%pv_ppnl
-         CALL build_core_ppnl(matrix_h, matrix_p, force, &
-                              virial, .TRUE., use_virial, nder, &
-                              qs_kind_set, atomic_kind_set, particle_set, &
-                              sab_orb, sap_ppnl, eps_ppnl, nimages, cell_to_index, "ORB")
-         IF (debug_forces) THEN
-            fodeb(1:3) = force(1)%gth_ppnl(1:3, 1) - fodeb(1:3)
-            CALL para_env%sum(fodeb)
-            IF (iounit > 0) WRITE (iounit, "(T3,A,T33,3F16.8)") "DEBUG:: (T+Dz)*dHppnl  ", fodeb
-         END IF
-         IF (debug_stress .AND. use_virial) THEN
-            stdeb = fconv*(virial%pv_ppnl - stdeb)
-            CALL para_env%sum(stdeb)
-            IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
-               'STRESS| Pz*dHppnl   ', one_third_sum_diag(stdeb), det_3x3(stdeb)
-         END IF
-
-      END IF
       ! Kim-Gordon subsystem DFT
       ! Atomic potential for nonadditive kinetic energy contribution
       IF (dft_control%qs_control%do_kg) THEN
@@ -1229,6 +1138,9 @@ CONTAINS
             CALL get_qs_env(qs_env, natom=natom)
             ! add rho0 contributions to GS density (only for Coulomb) only for gapw
             CALL pw_axpy(local_rho_set_gs%rho0_mpole%rho0_s_gs, rho_tot_gspace_gs)
+            IF (ASSOCIATED(local_rho_set_gs%rho0_mpole%rhoz_cneo_s_gs)) THEN
+               CALL pw_axpy(local_rho_set_gs%rho0_mpole%rhoz_cneo_s_gs, rho_tot_gspace_gs)
+            END IF
             IF (dft_control%qs_control%gapw_control%nopaw_as_gpw) THEN
                CALL get_qs_env(qs_env=qs_env, rho_core=rho_core)
                CALL pw_axpy(rho_core, rho_tot_gspace_gs)
@@ -1588,6 +1500,9 @@ CONTAINS
          ! contribution for both T and D^Z
          IF (gapw) THEN
             CALL pw_axpy(local_rho_set_t%rho0_mpole%rho0_s_gs, rhoz_tot_gspace)
+            IF (ASSOCIATED(local_rho_set_t%rho0_mpole%rhoz_cneo_s_gs)) THEN
+               CALL pw_axpy(local_rho_set_t%rho0_mpole%rhoz_cneo_s_gs, rhoz_tot_gspace)
+            END IF
          END IF
          CALL pw_poisson_solve(poisson_env, rhoz_tot_gspace, ehartree, zv_hartree_gspace)
 
@@ -1683,6 +1598,9 @@ CONTAINS
          ! add rho0 contributions to response density (only for Coulomb) only for gapw
          IF (gapw) THEN
             CALL pw_axpy(local_rho_set_t%rho0_mpole%rho0_s_gs, rho_tot_gspace_t)
+            IF (ASSOCIATED(local_rho_set_t%rho0_mpole%rhoz_cneo_s_gs)) THEN
+               CALL pw_axpy(local_rho_set_t%rho0_mpole%rhoz_cneo_s_gs, rho_tot_gspace_t)
+            END IF
             ! compute response Coulomb potential
             CALL auxbas_pw_pool%create_pw(v_hartree_gspace_t)
             CALL auxbas_pw_pool%create_pw(v_hartree_rspace_t)
@@ -2510,6 +2428,13 @@ CONTAINS
          CALL para_env%sum(stdeb)
          IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
             'STRESS| Stress Response    ', one_third_sum_diag(stdeb), det_3x3(stdeb)
+         stdeb = fconv*(virial%pv_virial)
+         CALL para_env%sum(stdeb)
+         IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,A,T41,2(1X,ES19.11))") &
+            'STRESS| Total Stress       ', one_third_sum_diag(stdeb), det_3x3(stdeb)
+         IF (iounit > 0) WRITE (UNIT=iounit, FMT="(T2,3(1X,ES19.11))") &
+            stdeb(1, 1), stdeb(2, 2), stdeb(3, 3)
+         unitstr = "bar"
       END IF
 
       IF (do_ex) THEN

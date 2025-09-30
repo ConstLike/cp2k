@@ -630,7 +630,7 @@ CONTAINS
             ! some checks
             SELECT CASE (nspins)
             CASE (1)
-               IF (.NOT.do_sf) THEN
+               IF (.NOT. do_sf) THEN
                   CPASSERT(.NOT. needs%rho_spin)
                   CPASSERT(.NOT. needs%drho_spin)
                   CPASSERT(.NOT. needs%norm_drho_spin)
@@ -736,7 +736,7 @@ CONTAINS
 
             SELECT CASE (nspins)
             CASE (1)
-               IF (.NOT.do_sf) THEN
+               IF (.NOT. do_sf) THEN
                   IF (needs%rho_1_3) THEN
                      CALL pw_pool%create_cr3d(rho_set%rho_1_3)
 !$OMP                PARALLEL DO DEFAULT(NONE) PRIVATE(i,j,k) SHARED(rho_set,my_rho_r)

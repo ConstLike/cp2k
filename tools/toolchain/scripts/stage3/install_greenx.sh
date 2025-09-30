@@ -3,8 +3,9 @@
 [ "${BASH_SOURCE[0]}" ] && SCRIPT_NAME="${BASH_SOURCE[0]}" || SCRIPT_NAME=$0
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_NAME")/.." && pwd -P)"
 
-greenx_ver="2.1"
-greenx_sha256="2fc1fc2c93b0bab14babc33386f7932192336813cea6db11cd27dbc36b541e41"
+greenx_ver="2.2"
+greenx_sha256="cf0abb77cc84a3381a690a6ac7ca839da0007bb9e6120f3f25e47de50e29431f"
+
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}"/common_vars.sh
 # shellcheck disable=SC1091
@@ -23,8 +24,8 @@ GREENX_LDFLAGS=""
 GREENX_LIBS=""
 ! [ -d "${BUILDDIR}" ] && mkdir -p "${BUILDDIR}"
 cd "${BUILDDIR}"
-with_greenx=${with_greenx:"__DONTUSE__"}
-with_gmp=${with_greenx:"__DONTUSE__"}
+with_greenx=${with_greenx:__DONTUSE__}
+with_gmp=${with_greenx:__DONTUSE__}
 case "$with_greenx" in
   __INSTALL__)
     echo "==================== Installing GreenX ===================="
@@ -65,7 +66,7 @@ case "$with_greenx" in
       cd ..
     fi
     GREENX_CFLAGS="-I'${pkg_install_dir}/include/modules'"
-    GREENX_LDFLAGS="-L'${pkg_install_dir}/lib'"
+    GREENX_LDFLAGS="-L'${pkg_install_dir}/lib' -Wl,-rpath,'${pkg_install_dir}/lib'"
     ;;
   __SYSTEM__)
     echo "==================== Finding GreenX from system paths ===================="

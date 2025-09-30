@@ -28,6 +28,8 @@ configure_file(base/base_uses.f90 base/base_uses.f90 @ONLY)
 list(
   APPEND
   CP2K_SRCS_F
+  ace_nlist.F
+  ace_wrapper.F
   admm_dm_methods.F
   admm_dm_types.F
   admm_methods.F
@@ -88,6 +90,7 @@ list(
   constraint_fxd.F
   constraint_util.F
   constraint_vsite.F
+  greenx_interface.F
   core_ae.F
   core_ppl.F
   core_ppnl.F
@@ -223,6 +226,7 @@ list(
   gw_utils.F
   gw_integrals.F
   gw_kp_to_real_space_and_back.F
+  hairy_probes.F
   hartree_local_methods.F
   hartree_local_types.F
   header.F
@@ -346,10 +350,10 @@ list(
   manybody_quip.F
   manybody_siepmann.F
   manybody_tersoff.F
+  manybody_ace.F
   mao_basis.F
   mao_methods.F
   mao_optimizer.F
-  mao_types.F
   mao_wfn_analysis.F
   matrix_exp.F
   maxwell_solver_interface.F
@@ -506,6 +510,8 @@ list(
   qcschema.F
   hdf5_wrapper.F
   sockets_interface.F
+  qs_apt_fdiff_methods.F
+  qs_apt_fdiff_types.F
   qs_atomic_block.F
   qs_band_structure.F
   qs_basis_gradient.F
@@ -519,11 +525,16 @@ list(
   qs_charge_mixing.F
   qs_chargemol.F
   qs_charges_types.F
+  qs_cneo_ggrid.F
+  qs_cneo_methods.F
+  qs_cneo_types.F
+  qs_cneo_utils.F
   qs_collocate_density.F
   qs_commutators.F
   qs_condnum.F
   qs_core_energies.F
   qs_core_hamiltonian.F
+  qs_core_matrices.F
   qs_dcdr_ao.F
   qs_dcdr.F
   qs_dcdr_utils.F
@@ -740,6 +751,8 @@ list(
   response_solver.F
   restraint.F
   ri_environment_methods.F
+  rixs_methods.F
+  rixs_types.F
   rmsd.F
   rpa_exchange.F
   rpa_communication.F
@@ -807,6 +820,9 @@ list(
   taper_types.F
   task_list_methods.F
   task_list_types.F
+  tblite_interface.F
+  tblite_ks_matrix.F
+  tblite_types.F
   tip_scan_methods.F
   tip_scan_types.F
   topology_amber.F
@@ -969,6 +985,7 @@ list(
   common/t_sh_p_s_c.F
   common/util.F
   common/xmgrace.F
+  common/erf_complex.F
   common/whittaker.F)
 
 list(APPEND CP2K_SRCS_F dbm/dbm_api.F dbm/dbm_tests.F)
@@ -1449,7 +1466,7 @@ set(CP2K_GRPP_SRCS_F grpp/libgrpp.F)
 set(CP2K_FPGA_SRC_C pw/fpga/fft_fpga.c pw/fpga/opencl_utils.c)
 set(CP2K_PW_SRCS_C pw/gpu/pw_gpu_internal.c)
 set(CP2K_OFFLOAD_SRCS_C offload/offload_buffer.c offload/offload_library.c)
-set(CP2K_SRCS_CPP torch_c_api.cpp)
+set(CP2K_SRCS_CPP torch_c_api.cpp ace_c_api.cpp)
 
 list(APPEND CP2K_SRCS_C "${CP2K_OFFLOAD_SRCS_C}")
 
@@ -1467,15 +1484,8 @@ set(CP2K_GRID_SRCS_HIP
     grid/hip/grid_hip_collocate.cu grid/hip/grid_hip_integrate.cu
     grid/hip/grid_hip_context.cu)
 
-set(CP2K_OPENCL_TOOLDIR
-    ${CMAKE_CURRENT_SOURCE_DIR}/../exts/dbcsr/src/acc/opencl)
-set(CP2K_OPENCL_SCRIPT ${CP2K_OPENCL_TOOLDIR}/acc_opencl.sh)
-set(CP2K_OPENCL_COMMON common/opencl_atomics.h common/opencl_common.h)
-list(TRANSFORM CP2K_OPENCL_COMMON PREPEND ${CP2K_OPENCL_TOOLDIR}/)
-
 set(CP2K_DBM_SRCS_GPU dbm/dbm_multiply_gpu_kernel.cu)
 set(CP2K_DBM_SRCS_GPU_C dbm/dbm_multiply_opencl.c dbm/dbm_multiply_gpu.c)
-set(CP2K_DBM_SRCS_OPENCL dbm/dbm_multiply_opencl.cl)
 
 set(CP2K_PW_SRCS_GPU pw/gpu/pw_gpu_kernels.cu)
 
@@ -1503,20 +1513,24 @@ if(CP2K_USE_CUDA
   endif()
 
   if(CP2K_ENABLE_DBM_GPU)
+    list(APPEND CP2K_DBM_SRCS_C dbm/dbm_multiply_gpu.c)
     if(CP2K_USE_OPENCL)
-      # DBM-kernel: OpenCL code is packaged into string-literal (include file)
-      add_custom_target(
-        CP2K_DBM_OPENCL_TARGET ALL
+      set(CP2K_DBM_OPENCL_KERNEL dbm/dbm_multiply_opencl.cl)
+      add_custom_command(
         COMMAND
+          # generate header file with OpenCL code as string-literal
           ${CP2K_OPENCL_SCRIPT} -b 6 -p \"\"
-          ${CMAKE_CURRENT_SOURCE_DIR}/${CP2K_DBM_SRCS_OPENCL}
-          ${CMAKE_CURRENT_SOURCE_DIR}/${CP2K_DBM_SRCS_OPENCL}.h
+          ${CMAKE_CURRENT_SOURCE_DIR}/${CP2K_DBM_OPENCL_KERNEL}
+          ${CMAKE_CURRENT_SOURCE_DIR}/${CP2K_DBM_OPENCL_KERNEL}.h
         DEPENDS ${CP2K_OPENCL_SCRIPT} ${CP2K_OPENCL_COMMON}
-                ${CMAKE_CURRENT_SOURCE_DIR}/${CP2K_DBM_SRCS_OPENCL}
-        BYPRODUCTS ${CMAKE_CURRENT_SOURCE_DIR}/${CP2K_DBM_SRCS_OPENCL}.h)
+                ${CMAKE_CURRENT_SOURCE_DIR}/${CP2K_DBM_OPENCL_KERNEL}
+        OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/${CP2K_DBM_OPENCL_KERNEL}.h
+        COMMENT "Generating OpenCL kernel for DBM")
+      list(APPEND CP2K_DBM_SRCS_C dbm/dbm_multiply_opencl.c
+           ${CP2K_DBM_OPENCL_KERNEL}.h)
+    else()
+      list(APPEND CP2K_SRCS_GPU ${CP2K_DBM_SRCS_GPU})
     endif()
-    list(APPEND CP2K_DBM_SRCS_C ${CP2K_DBM_SRCS_GPU_C})
-    list(APPEND CP2K_SRCS_GPU ${CP2K_DBM_SRCS_GPU})
   endif()
 
   if(CP2K_ENABLE_GRID_GPU)
@@ -1621,10 +1635,12 @@ set(CP2K_GPU_DFLAGS
 
 add_fypp_sources(CP2K_SRCS ${CP2K_SRCS_F})
 
+# TODO Add __SHORT_FILE__ also to program files, e.g. metadyn_tools/graph.F
+
 # set the __SHORT_FILE__ per file for CP2K sources
 foreach(cp2k_src ${CP2K_SRCS})
   # add_fypp_sources returns a path in the current binary dir
-  get_filename_component(short_file "${cp2k_src}" NAME)
+  file(RELATIVE_PATH short_file "${CMAKE_BINARY_DIR}/src" "${cp2k_src}")
   set_source_files_properties(
     ${cp2k_src} PROPERTIES COMPILE_DEFINITIONS __SHORT_FILE__="${short_file}")
 endforeach()
@@ -1633,7 +1649,11 @@ if(CP2K_USE_LIBTORCH)
   add_library(cp2k
               "${CP2K_SRCS};${CP2K_SRCS_C};${CP2K_SRCS_GPU};${CP2K_SRCS_CPP}")
 else()
-  add_library(cp2k "${CP2K_SRCS};${CP2K_SRCS_C};${CP2K_SRCS_GPU}")
+  if(BUILD_SHARED_LIBS)
+    add_library(cp2k SHARED "${CP2K_SRCS};${CP2K_SRCS_C};${CP2K_SRCS_GPU}")
+  else()
+    add_library(cp2k STATIC "${CP2K_SRCS};${CP2K_SRCS_C};${CP2K_SRCS_GPU}")
+  endif()
 endif()
 
 target_compile_features(cp2k PUBLIC cuda_std_11)
@@ -1654,7 +1674,8 @@ elseif(CP2K_USE_ACCEL MATCHES "HIP")
   set_property(TARGET cp2k PROPERTY HIP_ARCHITECTURES
                                     ${CMAKE_HIP_ARCHITECTURES})
 elseif(CP2K_USE_ACCEL MATCHES "OPENCL")
-  include_directories(${CP2K_OPENCL_TOOLDIR})
+  include_directories(${CP2K_OPENCL_BACKEND})
+  include_directories(${OpenCL_INCLUDE_DIR})
 endif()
 
 # mix the target and variables pointing to the include directories.
@@ -1684,9 +1705,19 @@ add_library(cp2k_link_libs INTERFACE)
 target_link_libraries(
   cp2k_link_libs
   INTERFACE
+    $<$<BOOL:${CP2K_USE_DFTD4}>:mctc-lib::mctc-lib>
     $<$<BOOL:${CP2K_USE_DFTD4}>:dftd4::dftd4>
     $<$<BOOL:${CP2K_USE_DEEPMD}>:DeePMD::deepmd
     DeePMD::deepmd_c>
+    $<$<BOOL:${CP2K_USE_PEXSI}>:PEXSI::PEXSI>
+    $<$<BOOL:${CP2K_USE_ACE}>:ACE::pace>
+    $<$<BOOL:${CP2K_USE_ACE}>:ACE::yaml-cpp-pace>
+    $<$<BOOL:${CP2K_USE_ACE}>:ACE::cnpy>
+    $<$<BOOL:${CP2K_USE_TBLITE}>:toml-f::toml-f>
+    $<$<BOOL:${CP2K_USE_TBLITE}>:s-dftd3::s-dftd3>
+    $<$<BOOL:${CP2K_USE_TBLITE}>:mctc-lib::mctc-lib>
+    $<$<BOOL:${CP2K_USE_TBLITE}>:dftd4::dftd4>
+    $<$<BOOL:${CP2K_USE_TBLITE}>:tblite::tblite>
     $<$<BOOL:${CP2K_USE_SIRIUS}>:sirius::sirius>
     $<$<BOOL:${CP2K_USE_VORI}>:cp2k::VORI::vori>
     $<$<BOOL:${CP2K_USE_SPGLIB}>:Spglib::symspg>
@@ -1699,7 +1730,6 @@ target_link_libraries(
     $<$<AND:$<BOOL:${CP2K_USE_FFTW3_}>,$<BOOL:${CP2K_ENABLE_FFTW3_OPENMP_SUPPORT}>>:cp2k::FFTW3::fftw3_omp>
     $<$<BOOL:${CP2K_USE_SPLA}>:SPLA::spla>
     $<$<BOOL:${CP2K_USE_LIBINT2}>:cp2k::Libint2::int2>
-    $<$<BOOL:${CP2K_USE_LIBTORCH}>:${TORCH_LIBRARIES}>
     $<$<BOOL:${CP2K_USE_COSMA}>:cosma::cosma_prefixed_pxgemm>
     $<$<BOOL:${CP2K_USE_COSMA}>:cosma::cosma>
     $<$<BOOL:${CP2K_USE_DLAF}>:DLAF::Fortran>
@@ -1712,6 +1742,8 @@ target_link_libraries(
     DBCSR::dbcsr
     $<$<BOOL:${CP2K_USE_MPI}>:cp2k::SCALAPACK::scalapack>
     cp2k_linalg_libs
+    # Torch includes some LAPACK routines, but with floating-point exceptions.
+    $<$<BOOL:${CP2K_USE_LIBTORCH}>:${TORCH_LIBRARIES}>
     $<$<AND:$<CONFIG:COVERAGE>,$<Fortran_COMPILER_ID:GNU>>:gcov>)
 
 string(TIMESTAMP CP2K_TIMESTAMP "%Y-%m-%d %H:%M:%S")
@@ -1731,16 +1763,17 @@ target_compile_definitions(
     __COMPILE_REVISION=\"${CP2K_GIT_HASH}\"
     __DATA_DIR=\"${CP2K_DATA_DIR}\"
     __COMPILE_ARCH=\"${CMAKE_SYSTEM_PROCESSOR}\"
-    $<$<CONFIG:COVERAGE>:__NO_ABORT>
-    $<$<CONFIG:DEBUG>:__HAS_IEEE_EXCEPTIONS>
-    $<$<CONFIG:DEBUG>:__CHECK_DIAG>
     $<$<BOOL:${CP2K_USE_PLUMED}>:__PLUMED2>
     $<$<BOOL:${CP2K_USE_MAXWELL}>:__LIBMAXWELL>
     $<$<BOOL:${CP2K_USE_VORI}>:__LIBVORI>
     $<$<BOOL:${CP2K_USE_SPGLIB}>:__SPGLIB>
     $<$<BOOL:${CP2K_USE_LIBSMEAGOL}>:__SMEAGOL>
+    $<$<BOOL:${CP2K_USE_TBLITE}>:__TBLITE>
+    $<$<BOOL:${CP2K_USE_TBLITE}>:__DFTD4>
     $<$<BOOL:${CP2K_USE_DFTD4}>:__DFTD4>
     $<$<BOOL:${CP2K_USE_DEEPMD}>:__DEEPMD>
+    $<$<BOOL:${CP2K_USE_PEXSI}>:__PEXSI>
+    $<$<BOOL:${CP2K_USE_ACE}>:__ACE>
     $<$<BOOL:${CP2K_USE_SIRIUS}>:__SIRIUS>
     $<$<BOOL:${CP2K_USE_LIBVDWXC}>:__LIBVDWXC>
     $<$<BOOL:${CP2K_USE_SPLA}>:__SPLA>
@@ -1754,11 +1787,13 @@ target_compile_definitions(
     $<$<BOOL:${CP2K_USE_GREENX}>:__GREENX>
     $<$<BOOL:${CP2K_USE_GRPP}>:__LIBGRPP>
     $<$<OR:$<BOOL:${CP2K_USE_FFTW3_}>,$<BOOL:${CP2K_USE_FFTW3_MKL_}>>:__FFTW3>
-    $<$<BOOL:${CP2K_USE_FFTW3_MKL_}>:__FFTW3_MKL>
     $<$<BOOL:${CP2K_USE_LIBINT2}>:__LIBINT>
     $<$<BOOL:${CP2K_USE_LIBTORCH}>:__LIBTORCH>
     $<$<BOOL:${CP2K_USE_COSMA}>:__COSMA>
     $<$<BOOL:${CP2K_USE_LIBXSMM}>:__LIBXSMM>
+    $<$<BOOL:${CCP2K_USE_SIRIUS_DFTD4}>:__SIRIUS_DFTD4>
+    $<$<BOOL:${CCP2K_USE_SIRIUS_NLCG}>:__SIRIUS_NLCG>
+    $<$<BOOL:${CP2K_USE_SIRIUS_VCSQNM}>:__SIRIUS_VCSQNM>
     $<$<STREQUAL:"${CP2K_BLAS_VENDOR}","MKL">:__MKL>
     $<$<STREQUAL:"${CP2K_BLAS_VENDOR}","Apple">:__ACCELERATE>
     $<$<BOOL:${CP2K_USE_CUSOLVER_MP}>:__CUSOLVERMP>

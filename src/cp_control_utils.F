@@ -10,15 +10,16 @@
 ! **************************************************************************************************
 MODULE cp_control_utils
    USE bibliography,                    ONLY: &
-        Andreussi2012, Dewar1977, Dewar1985, Elstner1998, Fattebert2002, Grimme2017, Hu2007, &
-        Krack2000, Lippert1997, Lippert1999, Porezag1995, Pracht2019, Repasky2002, Rocha2006, &
-        Schenter2008, Seifert1996, Souza2002, Stengel2009, Stewart1989, Stewart2007, Thiel1992, &
-        Umari2002, VanVoorhis2015, VandeVondele2005a, VandeVondele2005b, Yin2017, Zhechkov2005, &
-        cite_reference
+        Andreussi2012, Asgeirsson2017, Bannwarth2019, Caldeweyher2017, Caldeweyher2020, Dewar1977, &
+        Dewar1985, Elstner1998, Fattebert2002, Grimme2017, Hu2007, Krack2000, Lippert1997, &
+        Lippert1999, Porezag1995, Pracht2019, Repasky2002, Rocha2006, Schenter2008, Seifert1996, &
+        Souza2002, Stengel2009, Stewart1989, Stewart2007, Thiel1992, Umari2002, VanVoorhis2015, &
+        VandeVondele2005a, VandeVondele2005b, Yin2017, Zhechkov2005, cite_reference
    USE cp_control_types,                ONLY: &
         admm_control_create, admm_control_type, ddapc_control_create, ddapc_restraint_type, &
         dft_control_create, dft_control_type, efield_type, expot_control_create, &
-        maxwell_control_create, qs_control_type, tddfpt2_control_type, xtb_control_type
+        maxwell_control_create, qs_control_type, rixs_control_type, tddfpt2_control_type, &
+        xtb_control_type
    USE cp_files,                        ONLY: close_file,&
                                               open_file
    USE cp_log_handling,                 ONLY: cp_get_default_logger,&
@@ -76,6 +77,7 @@ MODULE cp_control_utils
    USE smeagol_control_types,           ONLY: read_smeagol_control
    USE string_utilities,                ONLY: uppercase
    USE util,                            ONLY: sort
+   USE xas_tdp_types,                   ONLY: read_xas_tdp_control
    USE xc,                              ONLY: xc_uses_kinetic_energy_density,&
                                               xc_uses_norm_drho
    USE xc_input_constants,              ONLY: xc_deriv_collocate
@@ -89,6 +91,7 @@ MODULE cp_control_utils
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'cp_control_utils'
 
    PUBLIC :: read_dft_control, &
+             read_rixs_control, &
              read_mgrid_section, &
              read_qs_section, &
              read_tddfpt2_control, &
@@ -122,9 +125,8 @@ CONTAINS
       REAL(KIND=dp), DIMENSION(:), POINTER               :: pol
       TYPE(cp_logger_type), POINTER                      :: logger
       TYPE(cp_parser_type)                               :: parser
-      TYPE(section_vals_type), POINTER                   :: hfx_section, maxwell_section, &
-                                                            sccs_section, scf_section, &
-                                                            tmp_section, xc_fun_section, xc_section
+      TYPE(section_vals_type), POINTER :: hairy_probes_section, hfx_section, maxwell_section, &
+         sccs_section, scf_section, tmp_section, xc_fun_section, xc_section
 
       was_present = .FALSE.
 
@@ -394,6 +396,16 @@ CONTAINS
          IF (.NOT. dft_control%uks) &
             CALL cp_abort(__LOCATION__, "The option RELAX_MULTIPLICITY is only valid for "// &
                           "unrestricted Kohn-Sham (UKS) calculations")
+      END IF
+
+      !Read the HAIR PROBES input section if present
+      hairy_probes_section => section_vals_get_subs_vals(dft_section, "HAIRY_PROBES")
+      CALL section_vals_get(hairy_probes_section, n_repetition=nrep, explicit=is_present)
+
+      IF (is_present) THEN
+         dft_control%hairy_probes = .TRUE.
+         ALLOCATE (dft_control%probe(nrep))
+         CALL read_hairy_probes_sections(dft_control, hairy_probes_section)
       END IF
 
       ! check for the presence of the low spin roks section
@@ -697,6 +709,27 @@ CONTAINS
    END SUBROUTINE read_dft_control
 
 ! **************************************************************************************************
+!> \brief Reads the input and stores in the rixs_control_type
+!> \param rixs_control ...
+!> \param rixs_section ...
+!> \param qs_control ...
+! **************************************************************************************************
+   SUBROUTINE read_rixs_control(rixs_control, rixs_section, qs_control)
+      TYPE(rixs_control_type), POINTER                   :: rixs_control
+      TYPE(section_vals_type), POINTER                   :: rixs_section
+      TYPE(qs_control_type), POINTER                     :: qs_control
+
+      TYPE(section_vals_type), POINTER                   :: td_section, xas_section
+
+      td_section => section_vals_get_subs_vals(rixs_section, "TDDFPT")
+      CALL read_tddfpt2_control(rixs_control%tddfpt2_control, td_section, qs_control)
+
+      xas_section => section_vals_get_subs_vals(rixs_section, "XAS_TDP")
+      CALL read_xas_tdp_control(rixs_control%xas_tdp_control, xas_section)
+
+   END SUBROUTINE read_rixs_control
+
+! **************************************************************************************************
 !> \brief ...
 !> \param qs_control ...
 !> \param dft_section ...
@@ -810,7 +843,7 @@ CONTAINS
       TYPE(section_vals_type), POINTER :: cdft_control_section, ddapc_restraint_section, &
          dftb_parameter, dftb_section, eeq_section, genpot_section, lri_optbas_section, &
          mull_section, nonbonded_section, s2_restraint_section, se_section, xtb_parameter, &
-         xtb_section
+         xtb_section, xtb_tblite
 
       CALL timeset(routineN, handle)
 
@@ -832,6 +865,7 @@ CONTAINS
       cdft_control_section => section_vals_get_subs_vals(qs_section, "CDFT")
       nonbonded_section => section_vals_get_subs_vals(xtb_section, "NONBONDED")
       genpot_section => section_vals_get_subs_vals(nonbonded_section, "GENPOT")
+      xtb_tblite => section_vals_get_subs_vals(xtb_section, "TBLITE")
 
       ! Setup all defaults values and overwrite input parameters
       ! EPS_DEFAULT should set the target accuracy in the total energy (~per electron) or a closely related value
@@ -908,7 +942,6 @@ CONTAINS
       CALL section_vals_val_get(qs_section, "EPSSVD", r_val=qs_control%gapw_control%eps_svd)
       CALL section_vals_val_get(qs_section, "EPSRHO0", r_val=qs_control%gapw_control%eps_Vrho0)
       CALL section_vals_val_get(qs_section, "ALPHA0_HARD", r_val=qs_control%gapw_control%alpha0_hard)
-      qs_control%gapw_control%lrho1_eq_lrho0 = .FALSE.
       qs_control%gapw_control%alpha0_hard_from_input = .FALSE.
       IF (qs_control%gapw_control%alpha0_hard /= 0.0_dp) qs_control%gapw_control%alpha0_hard_from_input = .TRUE.
       CALL section_vals_val_get(qs_section, "FORCE_PAW", l_val=qs_control%gapw_control%force_paw)
@@ -1589,6 +1622,21 @@ CONTAINS
       ! Optimize LRI basis set
       CALL section_vals_get(lri_optbas_section, explicit=qs_control%lri_optbas)
 
+      ! Use instead the tblite
+      CALL section_vals_val_get(xtb_tblite, "_SECTION_PARAMETERS_", &
+                                l_val=qs_control%xtb_control%do_tblite)
+      CALL section_vals_val_get(xtb_tblite, "METHOD", &
+                                i_val=qs_control%xtb_control%tblite_method)
+      IF (qs_control%xtb_control%do_tblite) THEN
+         CALL cite_reference(Caldeweyher2017)
+         CALL cite_reference(Caldeweyher2020)
+         CALL cite_reference(Asgeirsson2017)
+         CALL cite_reference(Grimme2017)
+         CALL cite_reference(Bannwarth2019)
+         !Ewald sum included in tblite
+         qs_control%xtb_control%do_ewald = .FALSE.
+      END IF
+
       CALL timestop(handle)
    END SUBROUTINE read_qs_section
 
@@ -1884,7 +1932,7 @@ CONTAINS
       CHARACTER(len=*), PARAMETER                        :: routineN = 'write_dft_control'
 
       CHARACTER(LEN=20)                                  :: tmpStr
-      INTEGER                                            :: handle, i, output_unit
+      INTEGER                                            :: handle, i, i_rep, n_rep, output_unit
       REAL(kind=dp)                                      :: density_cut, density_smooth_cut_range, &
                                                             gradient_cut, tau_cut
       TYPE(cp_logger_type), POINTER                      :: logger
@@ -2125,6 +2173,25 @@ CONTAINS
 
       END IF
 
+      IF (dft_control%hairy_probes .EQV. .TRUE.) THEN
+         n_rep = SIZE(dft_control%probe)
+         IF (output_unit > 0) THEN
+            DO i_rep = 1, n_rep
+               WRITE (UNIT=output_unit, FMT="(T2,A,I5)") &
+                  "HP | hair probe set", i_rep
+               WRITE (UNIT=output_unit, FMT="(T2,A,T61,*(I5))") &
+                  "HP| atom indexes", &
+                  (dft_control%probe(i_rep)%atom_ids(i), i=1, dft_control%probe(i_rep)%natoms)
+               WRITE (UNIT=output_unit, FMT="(T2,A,T61,ES20.6)") &
+                  "HP| potential", dft_control%probe(i_rep)%mu
+               WRITE (UNIT=output_unit, FMT="(T2,A,T61,F20.2)") &
+                  "HP| temperature", dft_control%probe(i_rep)%T
+               WRITE (UNIT=output_unit, FMT="(T2,A,T61,ES20.6)") &
+                  "HP| eps_hp", dft_control%probe(i_rep)%eps_hp
+            END DO
+         END IF
+      END IF
+
       CALL cp_print_key_finished_output(output_unit, logger, dft_section, &
                                         "PRINT%DFT_CONTROL_PARAMETERS")
 
@@ -2349,12 +2416,12 @@ CONTAINS
       NULLIFY (enum, keyword)
       keyword => section_get_keyword(qs_section, "METHOD")
       CALL keyword_get(keyword, enum=enum)
-      method = enum_i2c(enum, qs_control%method_id)
+      method = TRIM(enum_i2c(enum, qs_control%method_id))
 
       NULLIFY (enum, keyword)
       keyword => section_get_keyword(qs_section, "QUADRATURE")
       CALL keyword_get(keyword, enum=enum)
-      quadrature = enum_i2c(enum, qs_control%gapw_control%quadrature)
+      quadrature = TRIM(enum_i2c(enum, qs_control%gapw_control%quadrature))
 
       output_unit = cp_print_key_unit_nr(logger, print_section_vals, &
                                          "DFT_CONTROL_PARAMETERS", extension=".Log")
@@ -2856,5 +2923,55 @@ CONTAINS
       END DO
 
    END SUBROUTINE read_admm_block_list
+
+! **************************************************************************************************
+!> \brief ...
+!> \param dft_control ...
+!> \param hairy_probes_section ...
+!> \param
+!> \param
+! **************************************************************************************************
+   SUBROUTINE read_hairy_probes_sections(dft_control, hairy_probes_section)
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(section_vals_type), POINTER                   :: hairy_probes_section
+
+      INTEGER                                            :: i, j, jj, kk, n_rep
+      INTEGER, DIMENSION(:), POINTER                     :: tmplist
+
+      DO i = 1, SIZE(dft_control%probe)
+         NULLIFY (dft_control%probe(i)%atom_ids)
+
+         CALL section_vals_val_get(hairy_probes_section, "ATOM_IDS", i_rep_section=i, n_rep_val=n_rep)
+         jj = 0
+         DO kk = 1, n_rep
+            CALL section_vals_val_get(hairy_probes_section, "ATOM_IDS", i_rep_section=i, i_rep_val=kk, i_vals=tmplist)
+            jj = jj + SIZE(tmplist)
+         END DO
+
+         dft_control%probe(i)%natoms = jj
+         IF (dft_control%probe(i)%natoms < 1) &
+            CPABORT("Need at least 1 atom to use hair probes formalism")
+         ALLOCATE (dft_control%probe(i)%atom_ids(dft_control%probe(i)%natoms))
+
+         jj = 0
+         DO kk = 1, n_rep
+            CALL section_vals_val_get(hairy_probes_section, "ATOM_IDS", i_rep_section=i, i_rep_val=kk, i_vals=tmplist)
+            DO j = 1, SIZE(tmplist)
+               jj = jj + 1
+               dft_control%probe(i)%atom_ids(jj) = tmplist(j)
+            END DO
+         END DO
+
+         CALL section_vals_val_get(hairy_probes_section, "MU", i_rep_section=i, r_val=dft_control%probe(i)%mu)
+
+         CALL section_vals_val_get(hairy_probes_section, "T", i_rep_section=i, r_val=dft_control%probe(i)%T)
+
+         CALL section_vals_val_get(hairy_probes_section, "ALPHA", i_rep_section=i, r_val=dft_control%probe(i)%alpha)
+
+         CALL section_vals_val_get(hairy_probes_section, "eps_hp", i_rep_section=i, r_val=dft_control%probe(i)%eps_hp)
+      END DO
+
+   END SUBROUTINE read_hairy_probes_sections
+! **************************************************************************************************
 
 END MODULE cp_control_utils

@@ -1070,9 +1070,9 @@ CONTAINS
       TYPE(qs_rho_type), INTENT(IN)                      :: rhoa, rhob
       REAL(KIND=dp), INTENT(IN)                          :: alpha, beta
 
-      CHARACTER(len=*), PARAMETER :: routineN = 'qs_rho_scale_and_add'
+      CHARACTER(len=*), PARAMETER :: routineN = 'qs_rho_scale_and_add_b'
 
-      INTEGER                                            :: handle 
+      INTEGER                                            :: handle
       REAL(KIND=dp), DIMENSION(:), POINTER               :: tot_rho_g_a, tot_rho_g_b, tot_rho_r_a, &
                                                             tot_rho_r_b
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER          :: rho_ao_a, rho_ao_b, rho_ao_im_a, &

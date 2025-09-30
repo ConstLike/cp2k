@@ -510,7 +510,8 @@ MODULE input_constants
    INTEGER, PARAMETER, PUBLIC               :: ot_mini_sd = 1, ot_mini_cg = 2, ot_mini_diis = 3, ot_mini_broyden = 4
    INTEGER, PARAMETER, PUBLIC               :: ot_algo_taylor_or_diag = 1, ot_algo_irac = 2
    INTEGER, PARAMETER, PUBLIC               :: ot_chol_irac = 1, ot_poly_irac = 2, ot_lwdn_irac = 3
-   INTEGER, PARAMETER, PUBLIC               :: ls_none = 1, ls_2pnt = 2, ls_3pnt = 3, ls_gold = 4, ls_fit = 5
+   INTEGER, PARAMETER, PUBLIC               :: ls_none = 1, ls_2pnt = 2, ls_3pnt = 3, ls_gold = 4, ls_fit = 5, &
+                                               ls_adapt = 6
    INTEGER, PARAMETER, PUBLIC               :: ot_precond_none = 0, &
                                                ot_precond_full_single = 1, &
                                                ot_precond_full_kinetic = 2, &
@@ -1134,11 +1135,6 @@ MODULE input_constants
                                                do_lri_opt_coeff = 1, &
                                                do_lri_opt_exps = 2
 
-   ! Active space model parameters
-   INTEGER, PARAMETER, PUBLIC               :: hf_model = 100, &
-                                               rsdft_model = 101, &
-                                               dmft_model = 102
-
    ! Active space external solvers
    INTEGER, PARAMETER, PUBLIC               :: no_solver = 200, &
                                                qiskit_solver = 201
@@ -1252,7 +1248,12 @@ MODULE input_constants
                                                eri_operator_erf = 3, &
                                                eri_operator_erfc = 4, &
                                                eri_operator_gaussian = 5, &
-                                               eri_operator_trunc = 6
+                                               eri_operator_trunc = 6, &
+                                               eri_operator_lr_trunc = 7
+
+   INTEGER, PARAMETER, PUBLIC               :: eri_poisson_analytic = 1, &
+                                               eri_poisson_periodic = 2, &
+                                               eri_poisson_mt = 3
 
    INTEGER, PARAMETER, PUBLIC               :: do_eri_gpw = 0, &
                                                do_eri_mme = 1, &
@@ -1339,6 +1340,10 @@ MODULE input_constants
                                                sigma_PBE0_S1 = 2, &
                                                sigma_PBE0_S2 = 3, &
                                                sigma_PBE_S1 = 4
+   ! tblite method selection
+   INTEGER, PARAMETER, PUBLIC               :: gfn1xtb = 1, &
+                                               gfn2xtb = 2, &
+                                               ipea1xtb = 3
 
    ! SMEAGOL interface
    INTEGER, PARAMETER, PUBLIC               :: smeagol_bulklead_leftright = 1, &

@@ -232,6 +232,7 @@ CONTAINS
 !> \param do_admm ...
 !> \param do_hfxlr ...
 !> \param do_exck ...
+!> \param do_sf ...
 !> \param qs_env         Quickstep environment
 !> \param sub_env        parallel group environment
 !> \par History
@@ -249,8 +250,9 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_create_work_matrices'
 
-      INTEGER                                            :: handle, igroup, ispin, istate, nao, &
-                                                            nao_aux, natom, ngroups, nspins, evecs_dim
+      INTEGER                                            :: evecs_dim, handle, igroup, ispin, &
+                                                            istate, nao, nao_aux, natom, ngroups, &
+                                                            nspins
       INTEGER, DIMENSION(maxspins)                       :: nmo_occ, nmo_virt, nmo_full
       TYPE(admm_type), POINTER                           :: admm_env
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
@@ -290,9 +292,9 @@ CONTAINS
 
       nspins = SIZE(gs_mos)
       IF (do_sf) THEN
-        evecs_dim = 1
+         evecs_dim = 1
       ELSE
-        evecs_dim = nspins
+         evecs_dim = nspins
       END IF
       CALL get_qs_env(qs_env, blacs_env=blacs_env, matrix_s=matrix_s)
       CALL dbcsr_get_info(matrix_s(1)%matrix, nfullrows_total=nao)

@@ -27,7 +27,8 @@ MODULE qs_tddfpt2_eigensolver
         cp_fm_release, cp_fm_set_all, cp_fm_set_submatrix, cp_fm_to_fm, cp_fm_type
    USE cp_log_handling,                 ONLY: cp_logger_type
    USE cp_output_handling,              ONLY: cp_iterate
-   USE input_constants,                 ONLY: tddfpt_kernel_full,&
+   USE input_constants,                 ONLY: no_sf_tddfpt,&
+                                              tddfpt_kernel_full,&
                                               tddfpt_kernel_none,&
                                               tddfpt_kernel_stda,&
                                               no_sf_tddfpt
@@ -114,7 +115,7 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_orthogonalize_psi1_psi0'
 
       INTEGER                                            :: handle, ispin, ivect, nactive, nao, &
-                                                               nspins, nvects, spin
+                                                            nspins, nvects, spin
       TYPE(cp_fm_struct_type), POINTER                   :: matrix_struct
       TYPE(cp_fm_type)                                   :: evortho
       TYPE(cp_fm_type), DIMENSION(:), POINTER            :: mos
@@ -178,6 +179,7 @@ CONTAINS
 !>                  for each spin in atomic basis set, and S is the corresponding overlap matrix
 !> \param max_norm  the largest possible overlap between the ground state and
 !>                  excited state wave functions
+!> \param spinflip ...
 !> \return true if trial vectors are non-orthogonal to occupied molecular orbitals
 !> \par History
 !>    * 07.2016 created [Sergey Chulkov]
@@ -396,8 +398,8 @@ CONTAINS
 
       IF (debug_this_module) THEN
          CPASSERT(nspins > 0)
-         CPASSERT(SIZE(Aop_evects, 1) == SIZE(evects,1))
-         CPASSERT(SIZE(S_evects, 1) == SIZE(evects,1))
+         CPASSERT(SIZE(Aop_evects, 1) == SIZE(evects, 1))
+         CPASSERT(SIZE(S_evects, 1) == SIZE(evects, 1))
          CPASSERT(SIZE(Aop_evects, 2) == nvects)
          CPASSERT(SIZE(S_evects, 2) == nvects)
          CPASSERT(SIZE(gs_mos) == nspins)
@@ -411,7 +413,7 @@ CONTAINS
          CALL cp_fm_get_info(evects(1, 1), para_env=para_env)
          IF (ALLOCATED(work_matrices%evects_sub)) THEN
             DO ivect = 1, nvects
-               DO ispin = 1, SIZE(evects,1)
+               DO ispin = 1, SIZE(evects, 1)
                   ASSOCIATE (evect => evects(ispin, ivect), work_matrix => work_matrices%evects_sub(ispin, ivect))
                      IF (ASSOCIATED(evect%matrix_struct)) THEN
                         IF (ASSOCIATED(work_matrix%matrix_struct)) THEN
@@ -442,7 +444,7 @@ CONTAINS
          ELSE IF (tddfpt_control%kernel == tddfpt_kernel_none) THEN
             ! No kernel
             DO ivect = 1, nvects
-               DO ispin = 1, SIZE(evects,1)
+               DO ispin = 1, SIZE(evects, 1)
                   CALL cp_fm_set_all(Aop_evects(ispin, ivect), 0.0_dp)
                END DO
             END DO
@@ -452,7 +454,7 @@ CONTAINS
 
          IF (ALLOCATED(work_matrices%evects_sub)) THEN
             DO ivect = 1, nvects
-               DO ispin = 1, SIZE(evects,1)
+               DO ispin = 1, SIZE(evects, 1)
                   ASSOCIATE (Aop_evect => Aop_evects(ispin, ivect), &
                              work_matrix => work_matrices%Aop_evects_sub(ispin, ivect))
                      IF (ASSOCIATED(Aop_evect%matrix_struct)) THEN
@@ -669,6 +671,7 @@ CONTAINS
 !> \param Aop_ritz                approximate action of TDDFPT operator on Ritz vectors
 !> \param gs_mos                  molecular orbitals optimised for the ground state
 !> \param matrix_s                overlap matrix
+!> \param tddfpt_control ...
 !> \par History
 !>    * 06.2016 created [Sergey Chulkov]
 !>    * 03.2017 refactored to achieve significant performance gain [Sergey Chulkov]
@@ -834,7 +837,7 @@ CONTAINS
 
       CALL timeset(routineN, handle)
 
-      nspins = SIZE(evects,1)
+      nspins = SIZE(evects, 1)
       nstates = tddfpt_control%nstates
       nstates_total = tddfpt_total_number_of_states(tddfpt_control, gs_mos)
 
@@ -847,7 +850,7 @@ CONTAINS
       CALL get_qs_env(qs_env, matrix_s=matrix_s)
 
       ! adjust the number of Krylov vectors
-      max_krylov_vects = MIN(MAX(tddfpt_control%nkvs,nstates),INT(nstates_total))
+      max_krylov_vects = MIN(MAX(tddfpt_control%nkvs, nstates), INT(nstates_total))
 
       ALLOCATE (Aop_ritz(nspins, nstates))
       DO istate = 1, nstates

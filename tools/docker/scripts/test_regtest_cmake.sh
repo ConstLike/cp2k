@@ -19,19 +19,19 @@ if ((SHM_AVAIL < 1024)); then
   exit 1
 fi
 
-# Compile CP2K.
-./build_cp2k_cmake.sh "${PROFILE}" "${VERSION}" || exit 0
-
-# Fake installation of data files.
-mkdir -p ./share/cp2k
-ln -s ../../data ./share/cp2k/data
-
-# Increase stack size.
-ulimit -s unlimited
-export OMP_STACKSIZE=64m
+# Extend stack size only for Intel compilers.
+if "./build/bin/cp2k.${VERSION}" --version | grep -q "compiler: Intel"; then
+  ulimit -s unlimited # breaks address sanitizer
+  export OMP_STACKSIZE=64m
+fi
 
 # Improve code coverage on COSMA.
 export COSMA_DIM_THRESHOLD=0
+
+# Make OpenMPI happy.
+export OMPI_MCA_plm_rsh_agent=/bin/false
+export OMPI_ALLOW_RUN_AS_ROOT=1
+export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
 
 # Load Spack or Toolchain environment.
 if [[ "${PROFILE}" =~ ^spack ]]; then

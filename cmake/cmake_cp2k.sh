@@ -36,67 +36,44 @@ cd build || return 1
 
 # TODO: Reconcile PROFILE/VERSION with CP2K_BUILD_OPTIONS in CMakeLists.txt
 #
-if [[ "${PROFILE}" == "spack_all" ]] && [[ "${VERSION}" == "psmp" ]]; then
-  # TODO: DeepMD-kit is not available in the Spack environment (yet)
+if [[ "${PROFILE}" == "spack" ]] && [[ "${VERSION}" == "psmp" ]]; then
   # PyTorch's TorchConfig.cmake is buried in the Python site-packages directory
   Torch_DIR="$(dirname "$(find /opt/spack/lib -name TorchConfig.cmake)")"
   export Torch_DIR
   cmake \
     -GNinja \
-    -DCMAKE_BUILD_TYPE="Release" \
-    -DCMAKE_C_FLAGS="-fno-lto" \
-    -DCMAKE_Fortran_FLAGS="-fno-lto" \
-    -DCMAKE_INSTALL_LIBDIR=lib \
     -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
-    -DCP2K_BLAS_VENDOR="auto" \
-    -DCP2K_SCALAPACK_VENDOR="auto" \
-    -DCP2K_USE_DEEPMD=OFF \
-    -DCP2K_USE_GREENX=OFF \
-    -Werror=dev \
-    .. |& tee ./cmake.log
-  CMAKE_EXIT_CODE=$?
-
-elif [[ "${PROFILE}" == "spack_minimal" ]] && [[ "${VERSION}" == "psmp" ]]; then
-  cmake \
-    -GNinja \
-    -DCMAKE_BUILD_TYPE="Release" \
-    -DCMAKE_C_FLAGS="-fno-lto" \
-    -DCMAKE_Fortran_FLAGS="-fno-lto" \
-    -DCMAKE_INSTALL_LIBDIR=lib \
-    -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
-    -DCP2K_BLAS_VENDOR="auto" \
-    -DCP2K_SCALAPACK_VENDOR="auto" \
-    -DCP2K_USE_COSMA=OFF \
-    -DCP2K_USE_DEEPMD=OFF \
-    -DCP2K_USE_DFTD4=OFF \
+    -DCP2K_USE_EVERYTHING=ON \
     -DCP2K_USE_DLAF=OFF \
-    -DCP2K_USE_ELPA=OFF \
-    -DCP2K_USE_GRPP=OFF \
-    -DCP2K_USE_HDF5=OFF \
-    -DCP2K_USE_LIBINT2=OFF \
-    -DCP2K_USE_LIBSMEAGOL=OFF \
-    -DCP2K_USE_LIBTORCH=OFF \
-    -DCP2K_USE_LIBXC=OFF \
-    -DCP2K_USE_MPI=ON \
-    -DCP2K_USE_PLUMED=OFF \
-    -DCP2K_USE_SIRIUS=OFF \
-    -DCP2K_USE_SPGLIB=OFF \
-    -DCP2K_USE_SPLA=OFF \
-    -DCP2K_USE_TREXIO=OFF \
-    -DCP2K_USE_VORI=OFF \
-    -DCP2K_USE_GREENX=OFF \
+    -DCP2K_USE_LIBXSMM=OFF \
+    -DCP2K_USE_TBLITE=OFF \
     -Werror=dev \
     .. |& tee ./cmake.log
   CMAKE_EXIT_CODE=$?
 
-elif [[ "${PROFILE}" == "toolchain" ]] && [[ "${VERSION}" == "ssmp" ]]; then
+elif [[ "${PROFILE}" == "spack" ]] && [[ "${VERSION}" == "ssmp" ]]; then
+  # PyTorch's TorchConfig.cmake is buried in the Python site-packages directory
+  Torch_DIR="$(dirname "$(find /opt/spack/lib -name TorchConfig.cmake)")"
+  export Torch_DIR
   cmake \
     -GNinja \
-    -DCMAKE_BUILD_TYPE="Release" \
-    -DCMAKE_INSTALL_LIBDIR=lib \
     -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
-    -DCP2K_BLAS_VENDOR="auto" \
+    -DCP2K_USE_EVERYTHING=ON \
     -DCP2K_USE_MPI=OFF \
+    -DCP2K_USE_LIBXSMM=OFF \
+    -DCP2K_USE_TBLITE=OFF \
+    -Werror=dev \
+    .. |& tee ./cmake.log
+  CMAKE_EXIT_CODE=$?
+
+elif [[ "${PROFILE}" == "toolchain" ]] && [[ "${VERSION}" == "pdbg" ]]; then
+  cmake \
+    -GNinja \
+    -DCMAKE_BUILD_TYPE="Debug" \
+    -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
+    -DCP2K_USE_EVERYTHING=ON \
+    -DCP2K_USE_DLAF=OFF \
+    -DCP2K_USE_PEXSI=OFF \
     -Werror=dev \
     .. |& tee ./cmake.log
   CMAKE_EXIT_CODE=$?
@@ -104,11 +81,9 @@ elif [[ "${PROFILE}" == "toolchain" ]] && [[ "${VERSION}" == "ssmp" ]]; then
 elif [[ "${PROFILE}" == "toolchain" ]] && [[ "${VERSION}" == "sdbg" ]]; then
   cmake \
     -GNinja \
-    -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
+    -DCMAKE_BUILD_TYPE="Debug" \
     -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
-    -DCP2K_BLAS_VENDOR="auto" \
-    -DCP2K_DEBUG_MODE=ON \
-    -DCP2K_USE_LIBTORCH=OFF \
+    -DCP2K_USE_EVERYTHING=ON \
     -DCP2K_USE_MPI=OFF \
     -Werror=dev \
     .. |& tee ./cmake.log
@@ -117,27 +92,73 @@ elif [[ "${PROFILE}" == "toolchain" ]] && [[ "${VERSION}" == "sdbg" ]]; then
 elif [[ "${PROFILE}" == "toolchain" ]] && [[ "${VERSION}" == "psmp" ]]; then
   cmake \
     -GNinja \
-    -DCMAKE_BUILD_TYPE="Release" \
-    -DCMAKE_INSTALL_LIBDIR=lib \
     -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
-    -DCP2K_BLAS_VENDOR="auto" \
-    -DCP2K_SCALAPACK_VENDOR="auto" \
+    -DCP2K_USE_EVERYTHING=ON \
     -DCP2K_USE_DLAF=OFF \
+    -DCP2K_USE_PEXSI=OFF \
     -Werror=dev \
     .. |& tee ./cmake.log
   CMAKE_EXIT_CODE=$?
 
-elif [[ "${PROFILE}" == "toolchain" ]] && [[ "${VERSION}" == "pdbg" ]]; then
+elif [[ "${PROFILE}" == "toolchain" ]] && [[ "${VERSION}" == "ssmp" ]]; then
   cmake \
     -GNinja \
-    -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
     -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
-    -DCP2K_BLAS_VENDOR="auto" \
-    -DCP2K_SCALAPACK_VENDOR="auto" \
-    -DCP2K_DEBUG_MODE=ON \
-    -DCP2K_USE_COSMA=OFF \
+    -DCP2K_USE_EVERYTHING=ON \
+    -DCP2K_USE_MPI=OFF \
+    -Werror=dev \
+    .. |& tee ./cmake.log
+  CMAKE_EXIT_CODE=$?
+
+elif [[ "${PROFILE}" == "toolchain_arm64" ]] && [[ "${VERSION}" == "psmp" ]]; then
+  cmake \
+    -GNinja \
+    -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
+    -DCP2K_USE_EVERYTHING=ON \
     -DCP2K_USE_DLAF=OFF \
+    -DCP2K_USE_PEXSI=OFF \
+    -DCP2K_USE_ACE=OFF \
+    -DCP2K_USE_DEEPMD=OFF \
     -DCP2K_USE_LIBTORCH=OFF \
+    -Werror=dev \
+    .. |& tee ./cmake.log
+  CMAKE_EXIT_CODE=$?
+
+elif [[ "${PROFILE}" == "toolchain_generic" ]] && [[ "${VERSION}" == "psmp" ]]; then
+  cmake \
+    -GNinja \
+    -DCMAKE_BUILD_TYPE="Generic" \
+    -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
+    -DCP2K_USE_EVERYTHING=ON \
+    -DCP2K_USE_DLAF=OFF \
+    -DCP2K_USE_PEXSI=OFF \
+    -Werror=dev \
+    .. |& tee ./cmake.log
+  CMAKE_EXIT_CODE=$?
+
+elif [[ "${PROFILE}" == "toolchain_coverage" ]] && [[ "${VERSION}" == "psmp" ]]; then
+  cmake \
+    -GNinja \
+    -DCMAKE_BUILD_TYPE="Coverage" \
+    -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
+    -DCP2K_USE_EVERYTHING=ON \
+    -DCP2K_USE_DLAF=OFF \
+    -DCP2K_USE_PEXSI=OFF \
+    -Werror=dev \
+    .. |& tee ./cmake.log
+  CMAKE_EXIT_CODE=$?
+
+elif [[ "${PROFILE}" == "toolchain_asan" ]] && [[ "${VERSION}" == "psmp" ]]; then
+  # TODO Re-enable GREENX. It currently leads to a heap-buffer-overflow
+  # in `greenx_refine_pade()` at greenx_interface.F:80.
+  cmake \
+    -GNinja \
+    -DCMAKE_BUILD_TYPE="ASAN" \
+    -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
+    -DCP2K_USE_EVERYTHING=ON \
+    -DCP2K_USE_DLAF=OFF \
+    -DCP2K_USE_PEXSI=OFF \
+    -DCP2K_USE_GREENX=OFF \
     -Werror=dev \
     .. |& tee ./cmake.log
   CMAKE_EXIT_CODE=$?
@@ -149,16 +170,19 @@ elif [[ "${PROFILE}" == "ubuntu" ]] && [[ "${VERSION}" == "ssmp" ]]; then
     -GNinja \
     -DCMAKE_BUILD_TYPE="RelWithDebInfo" \
     -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
-    -DCP2K_BLAS_VENDOR="auto" \
+    -DCP2K_USE_EVERYTHING=ON \
+    -DCP2K_USE_ACE=OFF \
+    -DCP2K_USE_DEEPMD=OFF \
+    -DCP2K_USE_DFTD4=OFF \
+    -DCP2K_USE_TBLITE=OFF \
+    -DCP2K_USE_GREENX=OFF \
     -DCP2K_USE_LIBTORCH=OFF \
     -DCP2K_USE_LIBXC=OFF \
     -DCP2K_USE_MPI=OFF \
+    -DCP2K_USE_PEXSI=OFF \
     -DCP2K_USE_SPGLIB=OFF \
     -DCP2K_USE_VORI=OFF \
-    -DCP2K_USE_DFTD4=OFF \
-    -DCP2K_USE_DEEPMD=OFF \
     -DCP2K_USE_TREXIO=OFF \
-    -DCP2K_USE_GREENX=OFF \
     -Werror=dev \
     .. |& tee ./cmake.log
   CMAKE_EXIT_CODE=$?
@@ -166,64 +190,7 @@ elif [[ "${PROFILE}" == "ubuntu" ]] && [[ "${VERSION}" == "ssmp" ]]; then
 elif [[ "${PROFILE}" == "minimal" ]] && [[ "${VERSION}" == "ssmp" ]]; then
   cmake \
     -GNinja \
-    -DCMAKE_BUILD_TYPE="Release" \
     -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
-    -DCP2K_BLAS_VENDOR="auto" \
-    -DCP2K_USE_DEEPMD=OFF \
-    -DCP2K_USE_DFTD4=OFF \
-    -DCP2K_USE_FFTW3=OFF \
-    -DCP2K_USE_LIBINT2=OFF \
-    -DCP2K_USE_LIBTORCH=OFF \
-    -DCP2K_USE_LIBXC=OFF \
-    -DCP2K_USE_LIBXSMM=OFF \
-    -DCP2K_USE_MPI=OFF \
-    -DCP2K_USE_SPGLIB=OFF \
-    -DCP2K_USE_TREXIO=OFF \
-    -DCP2K_USE_VORI=OFF \
-    -DCP2K_USE_GREENX=OFF \
-    -Werror=dev \
-    .. |& tee ./cmake.log
-  CMAKE_EXIT_CODE=$?
-
-elif [[ "${PROFILE}" == "toolchain_all" ]] && [[ "${VERSION}" == "psmp" ]]; then
-  cmake \
-    -GNinja \
-    -DCMAKE_BUILD_TYPE="Release" \
-    -DCMAKE_INSTALL_LIBDIR=lib \
-    -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
-    -DCP2K_BLAS_VENDOR="auto" \
-    -DCP2K_SCALAPACK_VENDOR="auto" \
-    -DCP2K_USE_DLAF=OFF \
-    -Werror=dev \
-    .. |& tee ./cmake.log
-  CMAKE_EXIT_CODE=$?
-
-elif [[ "${PROFILE}" == "toolchain_minimal" ]] && [[ "${VERSION}" == "psmp" ]]; then
-  cmake \
-    -GNinja \
-    -DCMAKE_BUILD_TYPE="Release" \
-    -DCMAKE_INSTALL_LIBDIR=lib \
-    -DCMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
-    -DCP2K_BLAS_VENDOR="auto" \
-    -DCP2K_SCALAPACK_VENDOR="auto" \
-    -DCP2K_USE_COSMA=OFF \
-    -DCP2K_USE_DEEPMD=OFF \
-    -DCP2K_USE_DFTD4=OFF \
-    -DCP2K_USE_DLAF=OFF \
-    -DCP2K_USE_ELPA=OFF \
-    -DCP2K_USE_GRPP=OFF \
-    -DCP2K_USE_HDF5=OFF \
-    -DCP2K_USE_LIBINT2=OFF \
-    -DCP2K_USE_LIBSMEAGOL=OFF \
-    -DCP2K_USE_LIBTORCH=OFF \
-    -DCP2K_USE_LIBXC=OFF \
-    -DCP2K_USE_PLUMED=OFF \
-    -DCP2K_USE_SIRIUS=OFF \
-    -DCP2K_USE_SPGLIB=OFF \
-    -DCP2K_USE_SPLA=OFF \
-    -DCP2K_USE_TREXIO=OFF \
-    -DCP2K_USE_VORI=OFF \
-    -DCP2K_USE_GREENX=OFF \
     -Werror=dev \
     .. |& tee ./cmake.log
   CMAKE_EXIT_CODE=$?

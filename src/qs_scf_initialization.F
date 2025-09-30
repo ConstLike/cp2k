@@ -9,6 +9,7 @@
 !> \brief Utility routines for qs_scf
 ! **************************************************************************************************
 MODULE qs_scf_initialization
+   USE atomic_kind_types,               ONLY: atomic_kind_type
    USE cp_control_types,                ONLY: dft_control_type
    USE cp_dbcsr_api,                    ONLY: dbcsr_create,&
                                               dbcsr_init_p,&
@@ -47,6 +48,7 @@ MODULE qs_scf_initialization
                                               cp_print_key_finished_output,&
                                               cp_print_key_should_output,&
                                               cp_print_key_unit_nr
+   USE hairy_probes,                    ONLY: AO_boundaries
    USE input_constants,                 ONLY: &
         broy_mix, cholesky_dbcsr, cholesky_inverse, cholesky_off, diag_block_davidson, &
         diag_block_krylov, diag_filter_matrix, diag_ot, diag_standard, direct_p_mix, kerker_mix, &
@@ -60,6 +62,7 @@ MODULE qs_scf_initialization
    USE kpoint_types,                    ONLY: kpoint_type
    USE message_passing,                 ONLY: mp_para_env_type
    USE parallel_gemm_api,               ONLY: parallel_gemm
+   USE particle_types,                  ONLY: particle_type
    USE pw_types,                        ONLY: pw_c1d_gs_type
    USE qmmm_image_charge,               ONLY: conditional_calc_image_matrix
    USE qs_block_davidson_types,         ONLY: block_davidson_allocate,&
@@ -145,11 +148,27 @@ CONTAINS
       TYPE(scf_control_type), OPTIONAL, POINTER          :: scf_control
       TYPE(section_vals_type), OPTIONAL, POINTER         :: scf_section
 
+      INTEGER                                            :: ip, np
+      TYPE(atomic_kind_type), POINTER                    :: atomic_kind_set(:)
       TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
+      TYPE(particle_type), POINTER                       :: particle_set(:)
+      TYPE(qs_kind_type), POINTER                        :: qs_kind_set(:)
       TYPE(scf_control_type), POINTER                    :: my_scf_control
       TYPE(section_vals_type), POINTER                   :: dft_section, input, my_scf_section
 
       CALL get_qs_env(qs_env, input=input, dft_control=dft_control)
+
+      !Initialize Hairy Probe calculation
+      IF (dft_control%hairy_probes .EQV. .TRUE.) THEN
+         CALL get_qs_env(qs_env, mos=mos, &
+                         atomic_kind_set=atomic_kind_set, qs_kind_set=qs_kind_set, particle_set=particle_set)
+         np = SIZE(dft_control%probe)
+         DO ip = 1, np
+            CALL AO_boundaries(probe=dft_control%probe(ip), atomic_kind_set=atomic_kind_set, qs_kind_set=qs_kind_set, &
+                               particle_set=particle_set, nAO=mos(1)%nao) !FIX THIS!
+         END DO
+      END IF
 
       IF (PRESENT(scf_control)) THEN
          my_scf_control => scf_control
@@ -577,7 +596,7 @@ CONTAINS
       nmo_mat = dft_control%nspins
       IF (dft_control%restricted) nmo_mat = 1 ! right now, there might be more mos than needed derivs
 
-!   *** finish initialization of the MOs ***
+      ! Finish initialization of the MOs
       CPASSERT(ASSOCIATED(mos))
       DO ispin = 1, SIZE(mos)
          CALL get_mo_set(mos(ispin), mo_coeff=mo_coeff, mo_coeff_b=mo_coeff_b)
@@ -593,7 +612,7 @@ CONTAINS
                                                    sym=dbcsr_type_no_symmetry)
          END IF
       END DO
-!   *** get the mo_derivs OK if needed ***
+      ! Get the mo_derivs OK if needed
       IF (qs_env%requires_mo_derivs) THEN
          CALL get_qs_env(qs_env, mo_derivs=mo_derivs)
          IF (.NOT. ASSOCIATED(mo_derivs)) THEN
@@ -612,12 +631,12 @@ CONTAINS
          ! nothing should be done
       END IF
 
-!   *** finish initialization of the MOs for ADMM and derivs if needed ***
+      ! Finish initialization of the MOs for ADMM and derivs if needed ***
       IF (dft_control%do_admm) THEN
          IF (dft_control%restricted) CPABORT("ROKS with ADMM is not implemented")
       END IF
 
-! *** finish initialization of mos_last_converged *** [SGh]
+      ! Finish initialization of mos_last_converged [SGh]
       IF (dft_control%switch_surf_dip) THEN
          CPASSERT(ASSOCIATED(mos_last_converged))
          DO ispin = 1, SIZE(mos_last_converged)
@@ -641,6 +660,8 @@ CONTAINS
          END IF
          IF (dft_control%do_xas_calculation) &
             CPABORT("No XAS implemented with kpoints")
+         IF (qs_env%do_rixs) &
+            CPABORT("RIXS not implemented with kpoints")
          DO ik = 1, SIZE(kpoints%kp_env)
             CALL mpools_get(kpoints%mpools, ao_mo_fm_pools=ao_mo_fm_pools)
             mos_k => kpoints%kp_env(ik)%kpoint_env%mos
@@ -924,13 +945,7 @@ CONTAINS
                       para_env=para_env, &
                       xas_env=xas_env)
 
-      output_unit = cp_print_key_unit_nr(logger, scf_section, "PRINT%PROGRAM_RUN_INFO", &
-                                         extension=".scfLog")
-      CALL qs_scf_initial_info(output_unit, mos, dft_control)
-      CALL cp_print_key_finished_output(output_unit, logger, scf_section, &
-                                        "PRINT%PROGRAM_RUN_INFO")
-
-      ! calc ortho matrix
+      ! Calculate ortho matrix
       ndep = 0
       IF (scf_env%needs_ortho) THEN
          CALL get_qs_env(qs_env, matrix_s=matrix_s)
@@ -1008,7 +1023,7 @@ CONTAINS
 
             CALL cp_fm_column_scale(scf_env%ortho_red, evals(ndep + 1:))
 
-            ! Copy the linear dependent columns to the mo sets and set their orbital energies
+            ! Copy the linear dependent columns to the MO sets and set their orbital energies
             ! to a very large value to reduce the probability of occupying them
             DO ispin = 1, SIZE(mos)
                CALL get_mo_set(mos(ispin), nmo=nmo, mo_coeff=mo_coeff, homo=homo, eigenvalues=eigenvalues)
@@ -1021,8 +1036,8 @@ CONTAINS
                   END IF
                   CALL cp_warn(__LOCATION__, &
                                "The numerical rank of the overlap matrix is lower than the number of requested MOs! "// &
-                             "Reduce the number of MOs to the number of available MOs. If necessary, request a lower number of "// &
-                               "MOs or increase EPS_DEFAULT or EPS_PGF_ORB.")
+                               "Reduce the number of MOs to the number of available MOs. If necessary, "// &
+                               "request a lower number of MOs or increase EPS_DEFAULT or EPS_PGF_ORB.")
                   CALL set_mo_set(mos(ispin), nmo=needed_evals)
                END IF
                ! Copy the last columns to mo_coeff if the container is large enough
@@ -1093,15 +1108,6 @@ CONTAINS
          END DO
       END IF
 
-      output_unit = cp_print_key_unit_nr(logger, scf_section, "PRINT%PROGRAM_RUN_INFO", &
-                                         extension=".scfLog")
-      IF (output_unit > 0) THEN
-         WRITE (UNIT=output_unit, FMT="(T2,A,T71,I10)") &
-            "Number of independent orbital functions:", nao - ndep
-      END IF
-      CALL cp_print_key_finished_output(output_unit, logger, scf_section, &
-                                        "PRINT%PROGRAM_RUN_INFO")
-
       ! extrapolate outer loop variables
       IF (scf_control%outer_scf%have_scf) THEN
          CALL outer_loop_extrapolate(qs_env)
@@ -1140,6 +1146,12 @@ CONTAINS
                                                qmmm_env=qs_env%qmmm_env_qm)
          END IF
       END IF
+
+      output_unit = cp_print_key_unit_nr(logger, scf_section, "PRINT%PROGRAM_RUN_INFO", &
+                                         extension=".scfLog")
+      CALL qs_scf_initial_info(output_unit, mos, dft_control, ndep)
+      CALL cp_print_key_finished_output(output_unit, logger, scf_section, &
+                                        "PRINT%PROGRAM_RUN_INFO")
 
       CALL timestop(handle)
 
@@ -1202,8 +1214,14 @@ CONTAINS
             DO ispin = 1, SIZE(mos)
                CALL get_mo_set(mos(ispin), mo_coeff=mo_coeff, nmo=nmo)
                CALL reorthogonalize_vectors(qs_env, v_matrix=mo_coeff, n_col=nmo)
-               CALL set_mo_occupation(mo_set=mos(ispin), &
-                                      smear=scf_control%smear)
+               IF (dft_control%hairy_probes .EQV. .TRUE.) THEN
+                  scf_control%smear%do_smear = .FALSE.
+                  CALL set_mo_occupation(mo_set=mos(ispin), &
+                                         smear=scf_control%smear, probe=dft_control%probe)
+               ELSE
+                  CALL set_mo_occupation(mo_set=mos(ispin), &
+                                         smear=scf_control%smear)
+               END IF
             END DO
          END IF
       END IF

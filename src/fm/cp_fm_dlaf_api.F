@@ -9,14 +9,17 @@ MODULE cp_fm_dlaf_api
 
    USE cp_fm_basic_linalg, ONLY: cp_fm_uplo_to_full
    USE cp_fm_types, ONLY: cp_fm_type
-   USE kinds, ONLY: dp
+   USE kinds, ONLY: sp, dp
 #include "../base/base_uses.f90"
 
 #if defined(__DLAF)
+   USE cp_dlaf_utils_api, ONLY: cp_dlaf_create_grid
    USE dlaf_fortran, ONLY: dlaf_pdpotrf, &
                            dlaf_pdsyevd, &
                            dlaf_pdsygvd, &
-                           dlaf_pspotrf
+                           dlaf_pspotrf, &
+                           dlaf_pspotri, &
+                           dlaf_pdpotri
 #endif
 
    IMPLICIT NONE
@@ -26,6 +29,7 @@ MODULE cp_fm_dlaf_api
    CHARACTER(len=*), PARAMETER, PRIVATE :: moduleN = 'cp_fm_dlaf_api'
 
    PUBLIC :: cp_pdpotrf_dlaf, cp_pspotrf_dlaf
+   PUBLIC :: cp_pdpotri_dlaf, cp_pspotri_dlaf
    PUBLIC :: cp_fm_diag_dlaf, cp_fm_diag_gen_dlaf
 
 CONTAINS
@@ -113,6 +117,85 @@ CONTAINS
       CALL timestop(handle)
    END SUBROUTINE cp_pspotrf_dlaf
 
+!***************************************************************************************************
+!> \brief Inverse from Cholesky factorization using DLA-Future
+!> \param uplo ...
+!> \param n Matrix size
+!> \param a Local matrix
+!> \param ia Row index of first row (has to be 1)
+!> \param ja Col index of first column ()
+!> \param desca ScaLAPACK matrix descriptor
+!> \param info 0 if factorization completed normally
+!> \author Rocco Meli
+! **************************************************************************************************
+   SUBROUTINE cp_pdpotri_dlaf(uplo, n, a, ia, ja, desca, info)
+      CHARACTER, INTENT(IN)                              :: uplo
+      INTEGER, INTENT(IN)                                :: n
+      REAL(KIND=dp), DIMENSION(:, :), TARGET             :: a
+      INTEGER, INTENT(IN)                                :: ia, ja
+      INTEGER, DIMENSION(9)                              :: desca
+      INTEGER, TARGET                                    :: info
+
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'cp_pdpotri_dlaf'
+
+      INTEGER                                            :: handle
+
+      CALL timeset(routineN, handle)
+#if defined(__DLAF)
+      CALL dlaf_pdpotri(uplo, n, a, ia, ja, desca, info)
+#else
+      MARK_USED(uplo)
+      MARK_USED(n)
+      MARK_USED(a)
+      MARK_USED(ia)
+      MARK_USED(ja)
+      MARK_USED(desca)
+      MARK_USED(info)
+      CPABORT("CP2K compiled without the DLA-Future library.")
+#endif
+      CALL timestop(handle)
+   END SUBROUTINE cp_pdpotri_dlaf
+
+!***************************************************************************************************
+!> \brief Inverse from Cholesky factorization using DLA-Future
+!> \param uplo ...
+!> \param n Matrix size
+!> \param a Local matrix
+!> \param ia Row index of first row (has to be 1)
+!> \param ja Col index of first column ()
+!> \param desca ScaLAPACK matrix descriptor
+!> \param info 0 if factorization completed normally
+!> \author Rocco Meli
+! **************************************************************************************************
+   SUBROUTINE cp_pspotri_dlaf(uplo, n, a, ia, ja, desca, info)
+      CHARACTER, INTENT(IN)                              :: uplo
+      INTEGER, INTENT(IN)                                :: n
+      REAL, DIMENSION(:, :), TARGET                      :: a
+      INTEGER, INTENT(IN)                                :: ia, ja
+      INTEGER, DIMENSION(9)                              :: desca
+      INTEGER, TARGET                                    :: info
+
+      CHARACTER(len=*), PARAMETER                        :: routineN = 'cp_pspotri_dlaf'
+
+      INTEGER                                            :: handle
+
+      CALL timeset(routineN, handle)
+
+#if defined(__DLAF)
+      CALL dlaf_pspotri(uplo, n, a, ia, ja, desca, info)
+#else
+      MARK_USED(uplo)
+      MARK_USED(n)
+      MARK_USED(a)
+      MARK_USED(ia)
+      MARK_USED(ja)
+      MARK_USED(desca)
+      MARK_USED(info)
+      CPABORT("CP2K compiled without the DLA-Future library.")
+#endif
+      CALL timestop(handle)
+   END SUBROUTINE cp_pspotri_dlaf
+
 ! **************************************************************************************************
 !> \brief ...
 !> \param matrix ...
@@ -175,6 +258,9 @@ CONTAINS
       ! DLAF needs the lower triangular part
       ! Use eigenvectors matrix as workspace
       CALL cp_fm_uplo_to_full(matrix, eigenvectors)
+
+      ! Create DLAF grid from BLACS context; if already present, does nothing
+      CALL cp_dlaf_create_grid(matrix%matrix_struct%context%get_handle())
 
       n = matrix%matrix_struct%nrow_global
 
@@ -284,6 +370,9 @@ CONTAINS
       CALL cp_fm_uplo_to_full(a_matrix, eigenvectors)
       CALL cp_fm_uplo_to_full(b_matrix, eigenvectors)
 
+      ! Create DLAF grid from BLACS context; if already present, does nothing
+      CALL cp_dlaf_create_grid(a_matrix%matrix_struct%context%get_handle())
+
       n = a_matrix%matrix_struct%nrow_global
 
       a => a_matrix%local_data
@@ -296,9 +385,7 @@ CONTAINS
 
       info = -1
       CALL timeset(dlaf_name, dlaf_handle)
-
       CALL dlaf_pdsygvd(uplo, n, a, 1, 1, desca, b, 1, 1, descb, eigenvalues, z, 1, 1, descz, info)
-
       CALL timestop(dlaf_handle)
 
       IF (info /= 0) THEN

@@ -134,30 +134,15 @@ rm -r exts/dbcsr
 %build
 cmake_common_args=(
   "-G Ninja"
-  "-DCP2K_DEBUG_MODE:BOOL=OFF"
+  "-DCMAKE_BUILD_TYPE:STRING=Generic"
   "-DCP2K_BLAS_VENDOR:STRING=FlexiBLAS"
+  "-DCP2K_USE_EVERYTHING:BOOL=OFF"
   "-DCP2K_USE_STATIC_BLAS:BOOL=OFF"
   # Dependencies equivalent with Default
-  "-DCP2K_USE_COSMA:BOOL=OFF"  # Not packaged
-  "-DCP2K_USE_DEEPMD:BOOL=OFF"
-  "-DCP2K_USE_DFTD4:BOOL=OFF"
-  "-DCP2K_USE_DLAF:BOOL=OFF"
-  "-DCP2K_USE_ELPA:BOOL=OFF"
   "-DCP2K_USE_FFTW3:BOOL=ON"
-  "-DCP2K_USE_GREENX:BOOL=OFF"
-  "-DCP2K_USE_GRPP:BOOL=OFF"
-  "-DCP2K_USE_HDF5:BOOL=OFF"
-  "-DCP2K_USE_LIBINT2:BOOL=OFF"  # Detection is broken
-  "-DCP2K_USE_LIBSMEAGOL:BOOL=OFF"
-  "-DCP2K_USE_LIBTORCH:BOOL=OFF"
+  "-DCP2K_USE_LIBINT2:BOOL=OFF" # Package has no Fortran interface
   "-DCP2K_USE_LIBXC:BOOL=ON"
-  "-DCP2K_USE_LIBXSMM:BOOL=%{?with_libxsmm:ON}%{?without_libxsmm:OFF}"
-  "-DCP2K_USE_PLUMED:BOOL=OFF"
-  "-DCP2K_USE_SIRIUS:BOOL=OFF"
   "-DCP2K_USE_SPGLIB:BOOL=ON"
-  "-DCP2K_USE_SPLA:BOOL=OFF"
-  "-DCP2K_USE_TREXIO:BOOL=OFF"
-  "-DCP2K_USE_VORI:BOOL=OFF"
 )
 for mpi in '' mpich openmpi; do
   if [ -n "$mpi" ]; then
@@ -165,15 +150,13 @@ for mpi in '' mpich openmpi; do
     cmake_mpi_args=(
       "-DCMAKE_INSTALL_PREFIX:PATH=${MPI_HOME}"
       "-DCMAKE_INSTALL_Fortran_MODULES:PATH=${MPI_FORTRAN_MOD_DIR}/cp2k"
-      "-DCMAKE_INSTALL_LIBDIR:PATH=lib"
-      "-DCP2K_CMAKE_SUFFIX:STRING=${MPI_SUFFIX}"
       "-DCP2K_DATA_DIR:PATH=%{_datadir}/cp2k/data"
-      "-DCP2K_USE_MPI_F08:BOOL=ON"
+      "-DCP2K_USE_MPI:BOOL=ON"
     )
   else
     cmake_mpi_args=(
-      "-DCP2K_USE_MPI:BOOL=OFF"
       "-DCMAKE_INSTALL_Fortran_MODULES:PATH=%{_fmoddir}/cp2k"
+      "-DCP2K_USE_MPI:BOOL=OFF"
     )
   fi
 
@@ -202,25 +185,28 @@ rm -f %{_buildrootdir}/**/%{_libdir}/mpich/bin/*_unittest.*
 export CP2K_DATA_DIR=%{buildroot}%{_datadir}/cp2k/data
 # See %%_openmpi_load
 export PRTE_MCA_rmaps_default_mapping_policy=:oversubscribe
-test_common_args=(
-  "--skip_regtests"
-  "--ompthreads 2"
-)
 for mpi in '' mpich openmpi ; do
   if [ -n "$mpi" ]; then
     # Another module load is done inside the do_regtest.sh. will use that instead
     module load mpi/${mpi}-%{_arch}
     bindir=${MPI_BIN}
     libdir=${MPI_LIB}
+    test_common_args=(
+      "--skip_regtests"
+      "--ompthreads 2"
+      "--mpiranks 2")
     # Note, final position arguments are also here
-    test_mpi_args=(
-      "--mpiranks 2"
+    final_args=(
       "psmp"
     )
   else
     bindir=%{_bindir}
     libdir=%{_libdir}
-    test_mpi_args=(
+    test_common_args=(
+      "--skip_regtests"
+      "--ompthreads 2"
+    )
+    final_args=(
       "ssmp"
     )
   fi
@@ -229,7 +215,7 @@ for mpi in '' mpich openmpi ; do
   # so the binary folder should point to the build directory
   env PATH=%{buildroot}${bindir}:${PATH} \
     LD_LIBRARY_PATH=%{buildroot}${libdir} \
-    tests/do_regtest.py ${test_common_args[@]} %{_vpath_builddir}/bin ${test_mpi_args[@]}
+    tests/do_regtest.py ${test_common_args[@]} %{_vpath_builddir}/bin ${final_args[@]}
   [ -n "$mpi" ] && module unload mpi/${mpi}-%{_arch}
 done
 
@@ -245,7 +231,7 @@ done
 %{_bindir}/graph.ssmp
 %{_bindir}/grid_miniapp.ssmp
 %{_bindir}/xyz2dcd.ssmp
-%{_libdir}/libcp2k.so.*
+%{_libdir}/libcp2k.so*
 
 %files devel
 %{_fmoddir}/cp2k/
@@ -261,14 +247,14 @@ done
 %{_libdir}/openmpi/bin/graph.psmp
 %{_libdir}/openmpi/bin/grid_miniapp.psmp
 %{_libdir}/openmpi/bin/xyz2dcd.psmp
-%{_libdir}/openmpi/lib/libcp2k.so.*
+%{_libdir}/openmpi/%{_lib}/libcp2k.so*
 
 %files openmpi-devel
 %{_fmoddir}/openmpi/cp2k/
 %{_libdir}/openmpi/include/cp2k/
-%{_libdir}/openmpi/lib/cmake/cp2k/
-%{_libdir}/openmpi/lib/libcp2k.so
-%{_libdir}/openmpi/lib/pkgconfig/libcp2k.pc
+%{_libdir}/openmpi/%{_lib}/cmake/cp2k/
+%{_libdir}/openmpi/%{_lib}/libcp2k.so
+%{_libdir}/openmpi/%{_lib}/pkgconfig/libcp2k.pc
 
 %files mpich
 %{_libdir}/mpich/bin/cp2k.psmp
@@ -277,14 +263,14 @@ done
 %{_libdir}/mpich/bin/graph.psmp
 %{_libdir}/mpich/bin/grid_miniapp.psmp
 %{_libdir}/mpich/bin/xyz2dcd.psmp
-%{_libdir}/mpich/lib/libcp2k.so.*
+%{_libdir}/mpich/%{_lib}/libcp2k.so*
 
 %files mpich-devel
 %{_fmoddir}/mpich/cp2k/
 %{_libdir}/mpich/include/cp2k/
-%{_libdir}/mpich/lib/cmake/cp2k/
-%{_libdir}/mpich/lib/libcp2k.so
-%{_libdir}/mpich/lib/pkgconfig/libcp2k.pc
+%{_libdir}/mpich/%{_lib}/cmake/cp2k/
+%{_libdir}/mpich/%{_lib}/libcp2k.so
+%{_libdir}/mpich/%{_lib}/pkgconfig/libcp2k.pc
 
 %changelog
 %autochangelog

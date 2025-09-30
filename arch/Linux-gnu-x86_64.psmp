@@ -2,14 +2,14 @@
 #
 # CP2K (GNU x86_64) arch file for Linux clusters
 #
-# Tested with: GNU 14.2.0, MPICH 4.2.3 and OpenMPI 5.0.6 on the Merlin cluster (PSI)
+# Tested with: GNU 14.2.0, MPICH 4.3.0 and OpenMPI 5.0.7 on the Merlin cluster (PSI)
 #
 # Usage: Source this arch file and then run make as instructed.
 #        A full toolchain installation is performed as default.
 #        Optionally, GNU compiler and MPI implementation can be specified as arguments.
 #        Replace or adapt the "module add" commands below if needed.
 #
-# Last update: 25.03.2025
+# Last update: 12.06.2025
 #
 # \
    if [[ "${0}" == "${BASH_SOURCE}" ]]; then \
@@ -29,13 +29,13 @@
       if [[ -n "${2}" ]]; then \
          module add ${2}; \
          module list; \
-         ./install_cp2k_toolchain.sh --install-all -j${maxtasks} --no-arch-files --target-cpu=${target_cpu} --with-gcc=system --with-${mpi_implementation}=system --with-deepmd=no; \
+         ./install_cp2k_toolchain.sh --install-all -j${maxtasks} --no-arch-files --target-cpu=${target_cpu} --with-gcc=system --with-${mpi_implementation}=system; \
       else \
          module list; \
-         ./install_cp2k_toolchain.sh --install-all -j${maxtasks} --no-arch-files --target-cpu=${target_cpu} --with-gcc=system --with-${mpi_implementation} --with-deepmd=no; \
+         ./install_cp2k_toolchain.sh --install-all -j${maxtasks} --no-arch-files --target-cpu=${target_cpu} --with-gcc=system --with-${mpi_implementation}; \
       fi; \
    else \
-      ./install_cp2k_toolchain.sh --install-all -j${maxtasks} --no-arch-files --target-cpu=${target_cpu} --with-gcc --with-${mpi_implementation} --with-deepmd=no; \
+      ./install_cp2k_toolchain.sh --install-all -j${maxtasks} --no-arch-files --target-cpu=${target_cpu} --with-gcc --with-${mpi_implementation}; \
    fi; \
    source ./install/setup; \
    cd ../..; \
@@ -64,13 +64,15 @@ TARGET_CPU     := native
 
 # Retrieve package versions
 GNU_VER        := $(shell gcc -dumpfullversion)
+USE_ACE        := $(ACE_VER)
 USE_COSMA      := $(COSMA_VER)
-#USE_DEEPMD     := $(DEEPMD_VER)
+USE_DEEPMD     := $(DEEPMD_VER)
 USE_DFTD4      := $(DFTD4_VER)
 USE_ELPA       := $(ELPA_VER)
 USE_FFTW       := $(FFTW_VER)
+USE_GREENX     := $(GREENX_VER)
 USE_HDF5       := $(HDF5_VER)
-USE_LIBGRPP    := $(LIBGRPP_VER)
+USE_LIBGRPP    := install
 USE_LIBINT     := $(LIBINT_VER)
 USE_LIBSMEAGOL := $(LIBSMEAGOL_VER)
 USE_LIBTORCH   := $(LIBTORCH_VER)
@@ -78,14 +80,13 @@ USE_LIBVORI    := $(LIBVORI_VER)
 USE_LIBXC      := $(LIBXC_VER)
 USE_LIBXSMM    := $(LIBXSMM_VER)
 USE_OPENBLAS   := $(OPENBLAS_VER)
-USE_PEXSI      := $(PEXSI_VER)
 USE_PLUMED     := $(PLUMED_VER)
-USE_QUIP       := $(QUIP_VER)
 USE_SCALAPACK  := $(SCALAPACK_VER)
 USE_SIRIUS     := $(SIRIUS_VER)
 USE_SPFFT      := $(SPFFT_VER)
 USE_SPGLIB     := $(SPGLIB_VER)
 USE_SPLA       := $(SPLA_VER)
+USE_TBLITE     := $(TBLITE_VER)
 USE_TREXIO     := $(TREXIO_VER)
 
 LMAX           := 5
@@ -172,39 +173,6 @@ ifneq ($(USE_ELPA),)
    endif
 endif
 
-ifneq ($(USE_QUIP),)
-   USE_QUIP       := $(strip $(USE_QUIP))
-   QUIP_INC       := $(INSTALL_PATH)/quip-$(USE_QUIP)/include
-   QUIP_LIB       := $(INSTALL_PATH)/quip-$(USE_QUIP)/lib
-   CFLAGS         += -I$(QUIP_INC)
-   DFLAGS         += -D__QUIP
-   LIBS           += $(QUIP_LIB)/libquip_core.a
-   LIBS           += $(QUIP_LIB)/libatoms.a
-   LIBS           += $(QUIP_LIB)/libFoX_sax.a
-   LIBS           += $(QUIP_LIB)/libFoX_common.a
-   LIBS           += $(QUIP_LIB)/libFoX_utils.a
-   LIBS           += $(QUIP_LIB)/libFoX_fsys.a
-endif
-
-ifneq ($(USE_PEXSI),)
-   USE_PEXSI      := $(strip $(USE_PEXSI))
-   PEXSI_INC      := $(INSTALL_PATH)/pexsi-$(USE_PEXSI)/include
-   PEXSI_LIB      := $(INSTALL_PATH)/pexsi-$(USE_PEXSI)/lib
-   SCOTCH_INC     := $(INSTALL_PATH)/scotch-$(SCOTCH_VER)/include
-   SCOTCH_LIB     := $(INSTALL_PATH)/scotch-$(SCOTCH_VER)/lib
-   SUPERLU_INC    := $(INSTALL_PATH)/superlu_dist-$(SUPERLU_VER)/include
-   SUPERLU_LIB    := $(INSTALL_PATH)/superlu_dist-$(SUPERLU_VER)/lib
-   CFLAGS         += -I$(PEXSI_INC) -I$(SCOTCH_INC) -I$(SUPERLU_INC)
-   DFLAGS         += -D__LIBPEXSI
-   LIBS           += $(PEXSI_LIB)/libpexsi.a
-   LIBS           += $(SUPERLU_LIB)/libsuperlu_dist.a
-   LIBS           += $(SCOTCH_LIB)/libptscotchparmetis.a
-   LIBS           += $(SCOTCH_LIB)/libptscotch.a
-   LIBS           += $(SCOTCH_LIB)/libptscotcherr.a
-   LIBS           += $(SCOTCH_LIB)/libscotchmetis.a
-   LIBS           += $(SCOTCH_LIB)/libscotch.a
-endif
-
 ifneq ($(USE_LIBVORI),)
    USE_LIBVORI    := $(strip $(USE_LIBVORI))
    LIBVORI_LIB    := $(INSTALL_PATH)/libvori-$(USE_LIBVORI)/lib
@@ -230,20 +198,22 @@ ifneq ($(USE_LIBXC),)
    endif
 endif
 
-ifneq ($(USE_DFTD4),)
-   USE_DFTD4      := $(strip $(USE_DFTD4))
-   DFTD4_INC      := $(INSTALL_PATH)/dftd4-$(USE_DFTD4)/include
-   DFTD4_LIB      := $(INSTALL_PATH)/dftd4-$(USE_DFTD4)/lib
-   CFLAGS         += -I$(DFTD4_INC)/dftd4/GNU-$(GNU_VER)
-   DFLAGS         += -D__DFTD4
-   ifeq ($(SHARED), yes)
-      LIBS           += -Wl,-rpath=$(DFTD4_LIB) -L$(DFTD4_LIB) -ldftd4 -lmstore -lmulticharge -lmctc-lib
-   else
-      LIBS           += $(DFTD4_LIB)/libdftd4.a
-      LIBS           += $(DFTD4_LIB)/libmstore.a
-      LIBS           += $(DFTD4_LIB)/libmulticharge.a
-      LIBS           += $(DFTD4_LIB)/libmctc-lib.a
-   endif
+ifeq ($(USE_TBLITE),)
+  ifneq ($(USE_DFTD4),)
+     USE_DFTD4      := $(strip $(USE_DFTD4))
+     DFTD4_INC      := $(INSTALL_PATH)/dftd4-$(USE_DFTD4)/include
+     DFTD4_LIB      := $(INSTALL_PATH)/dftd4-$(USE_DFTD4)/lib
+     CFLAGS         += -I$(DFTD4_INC)/dftd4/GNU-$(GNU_VER)
+     DFLAGS         += -D__DFTD4
+     ifeq ($(SHARED), yes)
+        LIBS           += -Wl,-rpath=$(DFTD4_LIB) -L$(DFTD4_LIB) -ldftd4 -lmstore -lmulticharge -lmctc-lib
+     else
+        LIBS           += $(DFTD4_LIB)/libdftd4.a
+        LIBS           += $(DFTD4_LIB)/libmstore.a
+        LIBS           += $(DFTD4_LIB)/libmulticharge.a
+        LIBS           += $(DFTD4_LIB)/libmctc-lib.a
+     endif
+  endif
 endif
 
 ifneq ($(USE_LIBGRPP),)
@@ -291,6 +261,26 @@ ifneq ($(USE_LIBXSMM),)
       LIBS           += $(LIBXSMM_LIB)/libxsmmext.a
       LIBS           += $(LIBXSMM_LIB)/libxsmm.a
    endif
+endif
+
+ifneq ($(USE_ACE),)
+   USE_ACE        := $(strip $(USE_ACE))
+   ACE_INC        := $(INSTALL_PATH)/lammps-user-pace-$(USE_ACE)/include
+   ACE_LIB        := $(INSTALL_PATH)/lammps-user-pace-$(USE_ACE)/lib
+   CFLAGS         += -I$(ACE_INC)
+   DFLAGS         += -D__ACE
+   LIBS           += $(ACE_LIB)/libpace.a
+   LIBS           += $(ACE_LIB)/libyaml-cpp-pace.a
+   LIBS           += $(ACE_LIB)/libcnpy.a
+endif
+
+ifneq ($(USE_GREENX),)
+   USE_GREENX     := $(strip $(USE_GREENX))
+   GREENX_INC     := $(INSTALL_PATH)/greenX-$(USE_GREENX)/include/modules
+   GREENX_LIB     := $(INSTALL_PATH)/greenX-$(USE_GREENX)/lib
+   CFLAGS         += -I$(GREENX_INC)
+   DFLAGS         += -D__GREENX
+   LIBS           += -Wl,-rpath,$(GREENX_LIB) -L$(GREENX_LIB) -lGXCommon -lgx_ac -lgx_minimax
 endif
 
 ifneq ($(USE_SIRIUS),)
@@ -363,6 +353,25 @@ ifneq ($(USE_TREXIO),)
    else
       LIBS           += $(TREXIO_LIB)/libtrexio.a
    endif
+endif
+
+ifneq ($(USE_TBLITE),)
+   USE_TBLITE     := $(strip $(USE_TBLITE))
+   TBLITE_INC     := $(INSTALL_PATH)/tblite-$(USE_TBLITE)/include
+   TBLITE_LIB     := $(INSTALL_PATH)/tblite-$(USE_TBLITE)/lib
+   CFLAGS         += -I$(TBLITE_INC)/toml-f/modules
+   CFLAGS         += -I$(TBLITE_INC)/mctc-lib/modules
+   CFLAGS         += -I$(TBLITE_INC)/s-dftd3/GNU-$(GNU_VER)
+   CFLAGS         += -I$(TBLITE_INC)/dftd4/GNU-$(GNU_VER)
+   CFLAGS         += -I$(TBLITE_INC)/tblite/GNU-$(GNU_VER)
+   DFLAGS         += -D__TBLITE
+   DFLAGS         += -D__DFTD4
+   LIBS           += $(TBLITE_LIB)/libtblite.a
+   LIBS           += $(TBLITE_LIB)/libdftd4.a
+   LIBS           += $(TBLITE_LIB)/libs-dftd3.a
+   LIBS           += $(TBLITE_LIB)/libmulticharge.a
+   LIBS           += $(TBLITE_LIB)/libmctc-lib.a
+   LIBS           += $(TBLITE_LIB)/libtoml-f.a
 endif
 
 ifneq ($(USE_DEEPMD),)
@@ -471,7 +480,7 @@ endif
 
 CFLAGS         += $(DFLAGS) $(CFLAGS_DEBUG)
 
-CXXFLAGS       := $(CFLAGS) --std=c++14
+CXXFLAGS       := $(CFLAGS)
 
 FCFLAGS        := $(CFLAGS) $(FCFLAGS_DEBUG) $(WFLAGS)
 ifeq ($(shell [ $(shell gcc -dumpversion | cut -d. -f1) -gt 9 ] && echo yes), yes)
@@ -482,6 +491,9 @@ FCFLAGS        += -ffree-form
 FCFLAGS        += -ffree-line-length-none
 FCFLAGS        += -fno-omit-frame-pointer
 FCFLAGS        += -std=f2008
+
+CFLAGS         += -std=c17
+CXXFLAGS       += -std=c++17
 
 LDFLAGS        += $(FCFLAGS)
 

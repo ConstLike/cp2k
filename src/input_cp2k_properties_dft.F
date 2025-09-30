@@ -19,7 +19,8 @@ MODULE input_cp2k_properties_dft
                            Putrino2000, &
                            Putrino2002, &
                            Sebastiani2001, &
-                           Weber2009
+                           Weber2009, &
+                           VazdaCruz2021
    USE cp_output_handling, ONLY: add_last_numeric, &
                                  cp_print_key_section_create, &
                                  debug_print_level, &
@@ -61,6 +62,7 @@ MODULE input_cp2k_properties_dft
                               lchar_t, &
                               logical_t, &
                               real_t
+   USE input_cp2k_xas, ONLY: create_xas_tdp_section
    USE kinds, ONLY: dp
    USE string_utilities, ONLY: s2a
 #include "./base/base_uses.f90"
@@ -129,6 +131,10 @@ CONTAINS
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
 
+      CALL create_rixs_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
       CALL create_bandstructure_section(subsection)
       CALL section_add_subsection(section, subsection)
       CALL section_release(subsection)
@@ -138,6 +144,49 @@ CONTAINS
       CALL section_release(subsection)
 
    END SUBROUTINE create_properties_section
+
+! **************************************************************************************************
+!> \brief creates the input structure used to activate
+!>      a resonant inelastic xray scattering (RIXS) calculation
+! **************************************************************************************************
+
+   SUBROUTINE create_rixs_section(section)
+      TYPE(section_type), POINTER                        :: section
+      TYPE(section_type), POINTER                        :: subsection, print_key
+      TYPE(keyword_type), POINTER                        :: keyword
+
+      CPASSERT(.NOT. ASSOCIATED(section))
+
+      NULLIFY (keyword, subsection, print_key)
+
+      CALL section_create(section, __LOCATION__, name="RIXS", &
+                          description="Resonant Inelastic Xray Scattering using XAS_TDP and TDDFPT.", &
+                          n_keywords=1, n_subsections=3, repeats=.FALSE., &
+                          citations=(/VazdaCruz2021/))
+
+      CALL create_tddfpt2_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
+      CALL create_xas_tdp_section(subsection)
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
+      CALL section_create(subsection, __LOCATION__, "PRINT", "Controls the printing of information "// &
+                          "during RIXS calculations", repeats=.FALSE.)
+
+      CALL cp_print_key_section_create(print_key, __LOCATION__, name="SPECTRUM", &
+                                       description="Controles the printing of the RIXS spectrum "// &
+                                       "in output files", &
+                                       print_level=low_print_level, filename="", &
+                                       common_iter_levels=3)
+      CALL section_add_subsection(subsection, print_key)
+      CALL section_release(print_key)
+
+      CALL section_add_subsection(section, subsection)
+      CALL section_release(subsection)
+
+   END SUBROUTINE create_rixs_section
 
 ! **************************************************************************************************
 !> \brief creates the input structure used to activate
@@ -158,6 +207,8 @@ CONTAINS
       TYPE(keyword_type), POINTER                        :: keyword
       TYPE(section_type), POINTER                        :: print_key, subsection
 
+      CHARACTER(len=256)                      :: desc
+
       NULLIFY (keyword, print_key)
 
       IF (PRESENT(default_set_tdlr)) THEN
@@ -166,19 +217,19 @@ CONTAINS
          def_eps_filter = 1.0e-15_dp
          def_max_iter = 100
          def_precond = ot_precond_full_single_inverse
+         desc = "Controls the parameters of the LINRES force calculations for excited states."
       ELSE
          def_egap = 0.2_dp
          def_eps = 1.e-6_dp
          def_eps_filter = 0.0_dp
          def_max_iter = 50
          def_precond = ot_precond_none
+         desc = "The linear response is used to calculate one of the following properties: nmr, epr, raman, ..."
       END IF
 
       CPASSERT(.NOT. ASSOCIATED(section))
       CALL section_create(section, __LOCATION__, name="linres", &
-                          description="The linear response is used to calculate one of the "// &
-                          "following properties: nmr, epr, raman, ... ", &
-                          n_keywords=5, n_subsections=2, repeats=.FALSE., &
+                          description=desc, n_keywords=5, n_subsections=2, repeats=.FALSE., &
                           citations=(/Putrino2000/))
 
       CALL keyword_create(keyword, __LOCATION__, name="EPS", &
@@ -411,6 +462,39 @@ CONTAINS
                              description="Use Z_matrix method to solve the response equation", &
                              usage="Z_MATRIX_METHOD T", &
                              default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+         CALL section_add_keyword(section, keyword)
+         CALL keyword_release(keyword)
+
+         CALL keyword_create(keyword, __LOCATION__, name="APT_FD", &
+                             description="Use numerical differentiation to compute the APT, "// &
+                             "switches off the calculation of dcdr analytical derivatives. "// &
+                             "Requires RUN_TYPE = ENERGY_FORCE or MD.", &
+                             usage="APT_FD T", &
+                             default_l_val=.FALSE., lone_keyword_l_val=.TRUE.)
+         CALL section_add_keyword(section, keyword)
+         CALL keyword_release(keyword)
+
+         CALL keyword_create(keyword, __LOCATION__, name="APT_FD_DE", &
+                             description="Electric field strength (atomic units) to use for finite differences", &
+                             repeats=.FALSE., &
+                             n_var=1, &
+                             type_of_var=real_t, &
+                             default_r_val=0.0003_dp, &
+                             usage="APT_FD_DE 1.0E-4")
+         CALL section_add_keyword(section, keyword)
+         CALL keyword_release(keyword)
+
+         CALL keyword_create(keyword, __LOCATION__, name="APT_FD_METHOD", &
+                             description="Numerical differentiation method", &
+                             usage="APT_FD_METHOD FD", &
+                             default_i_val=1, &
+                             !enum_c_vals=s2a("FD", "2PNT"), &
+                             enum_c_vals=s2a("2PNT"), &
+                             !enum_desc=s2a("Forward differences.", &
+                             !              "Symmetric two-point differences."), &
+                             enum_desc=s2a("Symmetric two-point differences."), &
+                             !enum_i_vals=(/0, 1/))
+                             enum_i_vals=(/1/))
          CALL section_add_keyword(section, keyword)
          CALL keyword_release(keyword)
 
@@ -2164,6 +2248,14 @@ CONTAINS
                           "higher numerical precision, but higher computational cost.)", &
                           usage="EPS_FILTER 1.0E-6", &
                           default_r_val=1.0E-8_dp)
+      CALL section_add_keyword(section, keyword)
+      CALL keyword_release(keyword)
+
+      CALL keyword_create(keyword, __LOCATION__, name="REGULARIZATION_MINIMAX", &
+                          description="Parameter to regularize the Fourier transformation with minimax grids. "// &
+                          "In case the parameter 0.0 is chosen, no regularization is performed.", &
+                          usage="REGULARIZATION_MINIMAX 1.0E-4", &
+                          default_r_val=-1.0_dp)
       CALL section_add_keyword(section, keyword)
       CALL keyword_release(keyword)
 

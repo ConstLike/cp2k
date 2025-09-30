@@ -45,8 +45,8 @@ CFLAGS += -fopenmp -Wno-vla-parameter
 CC := $(if $(filter-out 0,$(MPI)),mpicc,gcc)
 else
 MKL_FCRTL := intel
-LIBS += $(if $(OMPRT),-l$(OMPRT),-qopenmp)
-CFLAGS += -qopenmp
+LIBS += $(if $(OMPRT),-fopenmp -Wno-recommended-option,-qopenmp)
+CFLAGS += $(if $(OMPRT),-fopenmp -Wno-recommended-option,-qopenmp)
 CC := $(if $(filter-out 0,$(MPI)),mpiicx,icx)
 endif
 
@@ -57,13 +57,17 @@ CC := $(MPICC)
 endif
 endif
 
+ifeq ($(filter-out 0,$(OPENCL)),)
 NVCC := $(shell which nvcc 2>/dev/null)
 NVARCH := sm_70
 NVFLAGS := -g $(OPTFLAG) -lineinfo -arch $(NVARCH) -Wno-deprecated-gpu-targets -Xcompiler "$(CFLAGS)" -D__OFFLOAD_CUDA
 
 HIPCC := $(shell which hipcc 2>/dev/null)
 HIPARCH := gfx90a
+ROCM_PATH_ENV := $(shell echo "$${ROCM_PATH}")
+ROCM_PATH := $(if $(ROCM_PATH_ENV),$(ROCM_PATH_ENV),/opt/rocm)
 HIPFLAGS := -fPIE -g $(OPTFLAG) --offload-arch=$(HIPARCH) -Wall -Wextra -Werror -I${ROCM_PATH}/include -D__OFFLOAD_HIP -D__HIP_PLATFORM_AMD__ -D__HIP_PLATFORM_AMD__
+endif
 
 # prefer NVCC or HIPCC over OpenCL
 ifneq ($(NVCC)$(HIPCC),)
@@ -93,6 +97,8 @@ LIBS += -L$(MKLROOT)/lib/intel64 \
         -lmkl_core \
         -lmkl_sequential \
         -Wl,--end-group
+else ifneq ($(OPENBLAS),0)
+LIBS += -lopenblas
 else
 LIBS += -lblas
 endif
@@ -144,11 +150,12 @@ endif
 LIBS += -L$(OPENCL_ROOT)/$(if $(wildcard $(OPENCL_ROOT)/lib64),lib64,lib)
 else ifneq (,$(ICX))
 OPENCL_ROOT := $(abspath $(dir $(ICX))/..)
-ifneq (,$(wildcard $(OPENCL_ROOT)/include/sycl/CL/cl.h))
+CLINC := $(wildcard $(OPENCL_ROOT)/include/sycl/CL/cl.h $(OPENCL_ROOT)/include/CL/cl.h)
+ifneq (,$(CLINC))
 LIBS += -L$(OPENCL_ROOT)/$(if $(wildcard $(OPENCL_ROOT)/lib64),lib64,lib)
 LIBS += -L$(OPENCL_ROOT)/compiler/lib/intel64 -lintlc
 ifeq (,$(wildcard $(OPENCL_INC)))
-CFLAGS += -I$(OPENCL_ROOT)/include/sycl
+CFLAGS += -I$(abspath $(dir $(firstword $(CLINC)))/..)
 endif
 endif
 endif
@@ -206,6 +213,6 @@ endif
 	cd $(dir $<); $(CC) -c -std=c11 $(CFLAGS) $(notdir $<)
 
 dbm_miniapp.x: dbm_miniapp.o $(ALL_OBJECTS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
+	$(CC) -o $@ $^ $(LIBS)
 
 #EOF

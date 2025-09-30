@@ -38,8 +38,8 @@ MODULE qs_tddfpt2_utils
                                               cp_logger_get_default_io_unit,&
                                               cp_logger_type
    USE input_constants,                 ONLY: &
-        cholesky_dbcsr, cholesky_inverse, cholesky_off, cholesky_restore, oe_gllb, oe_lb, oe_none, &
-        oe_saop, oe_shift, no_sf_tddfpt,tddfpt_sf_col,tddfpt_sf_noncol
+        cholesky_dbcsr, cholesky_inverse, cholesky_off, cholesky_restore, no_sf_tddfpt, oe_gllb, &
+        oe_lb, oe_none, oe_saop, oe_shift
    USE input_section_types,             ONLY: section_vals_create,&
                                               section_vals_get,&
                                               section_vals_get_subs_vals,&
@@ -752,6 +752,7 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Compute the number of possible singly excited states (occ -> virt)
+!> \param tddfpt_control ...
 !> \param gs_mos          occupied and virtual molecular orbitals optimised for the ground state
 !> \return the number of possible single excitations
 !> \par History
@@ -769,13 +770,13 @@ CONTAINS
       nspins = SIZE(gs_mos)
 
       ! Total number of possible excitations for spin-conserving TDDFT
-      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN 
+      IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
          DO ispin = 1, nspins
             nstates_total = nstates_total + &
                             SIZE(gs_mos(ispin)%evals_occ, kind=int_8)* &
                             SIZE(gs_mos(ispin)%evals_virt, kind=int_8)
          END DO
-      ! Total number of possible excitations for spin-flip TDDFT
+         ! Total number of possible excitations for spin-flip TDDFT
       ELSE
          nstates_total = SIZE(gs_mos(1)%evals_occ, kind=int_8)* &
                          SIZE(gs_mos(2)%evals_virt, kind=int_8)
@@ -943,6 +944,8 @@ CONTAINS
 
 ! **************************************************************************************************
 !> \brief Generate missed guess vectors.
+!> \param tddfpt_control ...
+!> \param nspins ...
 !> \param evects   guess vectors distributed across all processors (initialised on exit)
 !> \param evals    guessed transition energies (initialised on exit)
 !> \param gs_mos   occupied and virtual molecular orbitals optimised for the ground state
@@ -966,17 +969,17 @@ CONTAINS
       INTEGER                                            :: nspins
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(inout)   :: evects
       REAL(kind=dp), DIMENSION(:), INTENT(inout)         :: evals
-      TYPE(tddfpt_ground_state_mos), &
-         DIMENSION(nspins), INTENT(in)          :: gs_mos
+      TYPE(tddfpt_ground_state_mos), DIMENSION(nspins), &
+         INTENT(in)                                      :: gs_mos
       INTEGER, INTENT(in)                                :: log_unit
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_guess_vectors'
 
       CHARACTER(len=5)                                   :: spin_label1, spin_label2
       INTEGER                                            :: handle, imo_occ, imo_virt, ind, ispin, &
-                                                            istate, jspin, spin1, spin2, nstates, &
+                                                            istate, jspin, nstates, &
                                                             nstates_occ_virt_alpha, &
-                                                            nstates_selected
+                                                            nstates_selected, spin1, spin2
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: inds
       INTEGER, DIMENSION(maxspins)                       :: nmo_occ_avail, nmo_occ_selected, &
                                                             nmo_virt_selected
@@ -1054,7 +1057,7 @@ CONTAINS
          spin2 = spin1
          spin_label1 = '     '
          spin_label2 = spin_label1
-      ! Labels and spin component for spin-flip excitations
+         ! Labels and spin component for spin-flip excitations
       ELSE IF (tddfpt_control%spinflip .NE. no_sf_tddfpt) THEN
          spin1 = 1
          spin2 = 2
@@ -1063,11 +1066,11 @@ CONTAINS
       END IF
 
       IF (tddfpt_control%spinflip == no_sf_tddfpt) THEN
-      ! Calculate maximum number of alpha excitations
-        nstates_occ_virt_alpha = nmo_occ_selected(1)*nmo_virt_selected(1)
+         ! Calculate maximum number of alpha excitations
+         nstates_occ_virt_alpha = nmo_occ_selected(1)*nmo_virt_selected(1)
       ELSE
-      ! Calculate maximum number of spin-flip excitations
-        nstates_occ_virt_alpha = nmo_occ_selected(1)*nmo_virt_selected(2)
+         ! Calculate maximum number of spin-flip excitations
+         nstates_occ_virt_alpha = nmo_occ_selected(1)*nmo_virt_selected(2)
       END IF
       IF (log_unit > 0) THEN
          WRITE (log_unit, "(1X,A)") "", &
@@ -1085,13 +1088,13 @@ CONTAINS
             IF (log_unit > 0) &
                WRITE (log_unit, '(T7,I8,T28,A19,T60,F14.5)') &
                istate, "***  restarted  ***", evals(istate)*evolt
-         ! New initial guess vector
+            ! New initial guess vector
          ELSE
             ! Index of excited state - 1
             ind = inds(istate) - 1
 
             ! Labels and spin component for open-shell spin-conserving excitations
-            IF ((nspins > 1).AND.(tddfpt_control%spinflip == no_sf_tddfpt)) THEN
+            IF ((nspins > 1) .AND. (tddfpt_control%spinflip == no_sf_tddfpt)) THEN
                IF (ind < nstates_occ_virt_alpha) THEN
                   spin1 = 1
                   spin2 = 1
@@ -1106,7 +1109,7 @@ CONTAINS
                END IF
             END IF
 
-            ! Recover index of occupied MO (imo_occ) and unoccupied MO (imo_virt) 
+            ! Recover index of occupied MO (imo_occ) and unoccupied MO (imo_virt)
             ! associated to the excited state index (ind+1)
             imo_occ = nmo_occ_avail(spin1) - ind/nmo_virt_selected(spin2)
             imo_virt = MOD(ind, nmo_virt_selected(spin2)) + 1
@@ -1117,14 +1120,14 @@ CONTAINS
                WRITE (log_unit, '(T7,I8,T24,I8,T37,A5,T45,I8,T54,A5,T60,F14.5)') &
                istate, imo_occ, spin_label1, nmo_occ_avail(spin2) + imo_virt, spin_label2, e_virt_minus_occ(istate)*evolt
 
-            DO jspin = 1, SIZE(evects,1)
+            DO jspin = 1, SIZE(evects, 1)
                ! .NOT. ASSOCIATED(evects(jspin, istate)%matrix_struct))
                CALL cp_fm_create(evects(jspin, istate), fm_struct_evects(jspin)%struct)
                CALL cp_fm_set_all(evects(jspin, istate), 0.0_dp)
 
                IF (jspin == spin1) &
-               ! Half transform excitation vector to ao space:
-               ! evects_mi = c_ma*X_ai
+                  ! Half transform excitation vector to ao space:
+                  ! evects_mi = c_ma*X_ai
                   CALL cp_fm_to_fm(gs_mos(spin2)%mos_virt, evects(spin1, istate), &
                                    ncol=1, source_start=imo_virt, target_start=imo_occ)
             END DO
@@ -1132,7 +1135,7 @@ CONTAINS
       END DO
 
       IF (log_unit > 0) THEN
-         WRITE (log_unit, '(/,T7,A,T50,I24)') 'Number of active states:', tddfpt_total_number_of_states(tddfpt_control,gs_mos)
+         WRITE (log_unit, '(/,T7,A,T50,I24)') 'Number of active states:', tddfpt_total_number_of_states(tddfpt_control, gs_mos)
          WRITE (log_unit, "(1X,A)") &
             "-------------------------------------------------------------------------------"
       END IF

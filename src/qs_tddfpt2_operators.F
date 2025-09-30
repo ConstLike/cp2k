@@ -15,6 +15,7 @@ MODULE qs_tddfpt2_operators
    USE cp_control_types,                ONLY: tddfpt2_control_type
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
+   USE cp_control_types,                ONLY: tddfpt2_control_type
    USE cp_dbcsr_api,                    ONLY: &
         dbcsr_create, dbcsr_filter, dbcsr_iterator_blocks_left, dbcsr_iterator_next_block, &
         dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_p_type, &
@@ -37,6 +38,8 @@ MODULE qs_tddfpt2_operators
    USE hartree_local_types,             ONLY: hartree_local_type
    USE hfx_admm_utils,                  ONLY: tddft_hfx_matrix
    USE hfx_types,                       ONLY: hfx_type
+   USE input_constants,                 ONLY: no_sf_tddfpt,&
+                                              tddfpt_sf_noncol
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type
@@ -137,6 +140,7 @@ CONTAINS
 !> \param gs_mos      molecular orbitals optimised for the ground state (only occupied orbital
 !>                    energies [component %evals_occ] are needed)
 !> \param matrix_ks   Kohn-Sham matrix
+!> \param tddfpt_control ...
 !> \par History
 !>    * 05.2016 initialise all matrix elements in one go [Sergey Chulkov]
 !>    * 03.2017 renamed from tddfpt_init_energy_diff(), altered prototype [Sergey Chulkov]
@@ -150,6 +154,7 @@ CONTAINS
          INTENT(in)                                      :: gs_mos
       TYPE(tddfpt2_control_type), POINTER, INTENT(in)    :: tddfpt_control
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(in)       :: matrix_ks
+      TYPE(tddfpt2_control_type), INTENT(in), POINTER    :: tddfpt_control
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_apply_energy_diff'
 
@@ -267,6 +272,9 @@ CONTAINS
       IF (gapw) THEN
          CPASSERT(ASSOCIATED(local_rho_set))
          CALL pw_axpy(local_rho_set%rho0_mpole%rho0_s_gs, rho_ia_g)
+         IF (ASSOCIATED(local_rho_set%rho0_mpole%rhoz_cneo_s_gs)) THEN
+            CALL pw_axpy(local_rho_set%rho0_mpole%rhoz_cneo_s_gs, rho_ia_g)
+         END IF
       END IF
 
       CALL pw_poisson_solve(poisson_env, rho_ia_g, pair_energy, work_v_gspace)
@@ -313,6 +321,7 @@ CONTAINS
 !> \param work_v_xc        work real-space grid to store the gradient of the exchange-correlation
 !>                         potential with respect to the response density (modified on exit)
 !> \param work_v_xc_tau ...
+!> \param spinflip ...
 ! **************************************************************************************************
    SUBROUTINE tddfpt_apply_xc(A_ia_rspace, kernel_env, rho_ia_struct, is_rks_triplets, &
                               pw_env, work_v_xc, work_v_xc_tau, spinflip)
@@ -325,7 +334,7 @@ CONTAINS
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc, work_v_xc_tau
       INTEGER, INTENT(in), OPTIONAL                      :: spinflip
 
-      INTEGER                                            :: ispin, nspins, my_spinflip
+      INTEGER                                            :: ispin, my_spinflip, nspins
 
       nspins = SIZE(A_ia_rspace)
       my_spinflip = 0
@@ -392,6 +401,7 @@ CONTAINS
 !> \param rho_ia_struct    response density for the given trial vector
 !> \param is_rks_triplets  indicates that the triplet excited states calculation using
 !>                         spin-unpolarised molecular orbitals has been requested
+!> \param spinflip ...
 !> \param nspins ...
 !> \param pw_env           plain wave environment
 !> \param work_v_xc        work real-space grid to store the gradient of the exchange-correlation
@@ -411,14 +421,14 @@ CONTAINS
       TYPE(full_kernel_env_type), INTENT(in)             :: kernel_env
       TYPE(qs_rho_type), POINTER                         :: rho_ia_struct
       LOGICAL, INTENT(in)                                :: is_rks_triplets
-      INTEGER, INTENT(in)                                :: spinflip
-      INTEGER, INTENT(in)                                :: nspins
+      INTEGER, INTENT(in)                                :: spinflip, nspins
       TYPE(pw_env_type), POINTER                         :: pw_env
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: work_v_xc, work_v_xc_tau
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_apply_xc_analytic'
 
       INTEGER                                            :: handle, ispin
+      LOGICAL                                            :: do_spinflip
       TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_ia_g, rho_ia_g2
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_ia_r, rho_ia_r2, tau_ia_r, tau_ia_r2
@@ -434,7 +444,7 @@ CONTAINS
          CPASSERT(SIZE(rho_ia_r) == nspins)
          CPASSERT((.NOT. ASSOCIATED(tau_ia_r)) .OR. SIZE(tau_ia_r) == nspins)
          CPASSERT((.NOT. is_rks_triplets) .OR. nspins == 1)
-         CPASSERT((spinflip.NE.no_sf_tddfpt).EQV.(nspins == 2))
+         CPASSERT((spinflip .NE. no_sf_tddfpt) .EQV. (nspins == 2))
       END IF
 
       IF (spinflip == tddfpt_sf_noncol) THEN

@@ -5,9 +5,6 @@
 # shellcheck disable=SC1091
 source /opt/cp2k-toolchain/install/setup
 
-# Compile CP2K.
-./build_cp2k_cmake.sh "toolchain" "ssmp" || exit 0
-
 echo -e "\n========== Installing Dependencies =========="
 apt-get update -qq
 apt-get install -qq --no-install-recommends \
