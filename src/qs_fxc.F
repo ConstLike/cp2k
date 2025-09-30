@@ -474,7 +474,6 @@ CONTAINS
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho1_r, tau1_r, v_tau_rspace, vxc00, &
                                                             vxc00b
       TYPE(qs_rho_type), POINTER                         :: rhoin
-      LOGICAL                                            :: do_sf
 
       CALL timeset(routineN, handle)
 

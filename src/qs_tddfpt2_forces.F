@@ -421,7 +421,6 @@ CONTAINS
       LOGICAL                                            :: do_sf
       INTEGER                                            :: handle, iounit, ispin, natom, norb, &
                                                             nspins, spin
-      LOGICAL                                            :: do_sf
       REAL(KIND=dp)                                      :: evalue
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: ftot1, ftot2
       REAL(KIND=dp), DIMENSION(3)                        :: fodeb

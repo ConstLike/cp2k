@@ -154,7 +154,6 @@ CONTAINS
          INTENT(in)                                      :: gs_mos
       TYPE(tddfpt2_control_type), POINTER, INTENT(in)    :: tddfpt_control
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(in)       :: matrix_ks
-      TYPE(tddfpt2_control_type), INTENT(in), POINTER    :: tddfpt_control
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_apply_energy_diff'
 
@@ -432,7 +431,6 @@ CONTAINS
       TYPE(pw_c1d_gs_type), DIMENSION(:), POINTER        :: rho_ia_g, rho_ia_g2
       TYPE(pw_pool_type), POINTER                        :: auxbas_pw_pool
       TYPE(pw_r3d_rs_type), DIMENSION(:), POINTER        :: rho_ia_r, rho_ia_r2, tau_ia_r, tau_ia_r2
-      LOGICAL                                               do_spinflip
 
       CALL timeset(routineN, handle)
 

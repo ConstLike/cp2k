@@ -1322,7 +1322,6 @@ CONTAINS
       LOGICAL                                            :: do_sf
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: evals_mult, ostrength_mult
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :)     :: evects_mult
-      LOGICAL                                               do_sf
 
       CALL timeset(routineN, handle)
 

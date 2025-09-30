@@ -178,7 +178,7 @@ CONTAINS
       CHARACTER(LEN=default_string_length)               :: basis_type
       INTEGER                                            :: handle, iounit, ispin, spin, mspin, myfun, &
                                                             n_rep_hf, nao, nao_aux, natom, nkind, &
-                                                            norb(2), nspins, order, spin
+                                                            norb(2), nspins, order
       LOGICAL :: distribute_fock_matrix, do_admm, do_analytic, do_hfx, do_hfxlr, do_hfxsr, &
          do_numeric, do_sf, gapw, gapw_xc, hfx_treat_lsd_in_core, is_rks_triplets, &
          s_mstruct_changed, use_virial
@@ -192,8 +192,7 @@ CONTAINS
       TYPE(cp_fm_type), DIMENSION(:), POINTER            :: cpmos, evect
       TYPE(cp_fm_type), POINTER                          :: mos, mos2
       TYPE(cp_logger_type), POINTER                      :: logger
-      TYPE(cp_fm_type), DIMENSION(:), POINTER            :: cpmos, evect
-      TYPE(cp_fm_type), POINTER                          :: mos, mos2
+      
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER :: matrix_fx, matrix_gx, matrix_hfx, &
          matrix_hfx_admm, matrix_hfx_admm_asymm, matrix_hfx_asymm, matrix_hx, matrix_p, &
          matrix_p_admm, matrix_px1, matrix_px1_admm, matrix_px1_admm_asymm, matrix_px1_asymm, &
