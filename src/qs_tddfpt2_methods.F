@@ -1218,7 +1218,7 @@ CONTAINS
       END IF
       ALLOCATE (ostrength(nstates))
       ostrength = 0.0_dp
-      CALL tddfpt_print_summary(qs_env,log_unit, &
+      CALL tddfpt_print_summary(log_unit, &
                                 evects, &
                                 evals, &
                                 ostrength, &

@@ -68,8 +68,7 @@ MODULE qs_tddfpt2_fhxc_forces
                                               xc_kernel_method_analytic,&
                                               xc_kernel_method_best,&
                                               xc_kernel_method_numeric,&
-                                              xc_none,&
-                                              no_sf_tddfpt, tddfpt_sf_col
+                                              xc_none
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type,&
@@ -100,8 +99,7 @@ MODULE qs_tddfpt2_fhxc_forces
    USE qs_fxc,                          ONLY: qs_fgxc_analytic,&
                                               qs_fgxc_create,&
                                               qs_fgxc_gdiff,&
-                                              qs_fgxc_release, &
-                                              qs_fgxc_analytic
+                                              qs_fgxc_release
    USE qs_gapw_densities,               ONLY: prepare_gapw_den
    USE qs_integrate_potential,          ONLY: integrate_v_rspace
    USE qs_kernel_types,                 ONLY: full_kernel_env_type
@@ -176,9 +174,9 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'fhxc_force'
 
       CHARACTER(LEN=default_string_length)               :: basis_type
-      INTEGER                                            :: handle, iounit, ispin, spin, mspin, myfun, &
+      INTEGER                                            :: handle, iounit, ispin, mspin, myfun, &
                                                             n_rep_hf, nao, nao_aux, natom, nkind, &
-                                                            norb(2), nspins, order
+                                                            norb(2), nspins, order, spin
       LOGICAL :: distribute_fock_matrix, do_admm, do_analytic, do_hfx, do_hfxlr, do_hfxsr, &
          do_numeric, do_sf, gapw, gapw_xc, hfx_treat_lsd_in_core, is_rks_triplets, &
          s_mstruct_changed, use_virial
@@ -192,7 +190,6 @@ CONTAINS
       TYPE(cp_fm_type), DIMENSION(:), POINTER            :: cpmos, evect
       TYPE(cp_fm_type), POINTER                          :: mos, mos2
       TYPE(cp_logger_type), POINTER                      :: logger
-      
       TYPE(dbcsr_p_type), DIMENSION(:), POINTER :: matrix_fx, matrix_gx, matrix_hfx, &
          matrix_hfx_admm, matrix_hfx_admm_asymm, matrix_hfx_asymm, matrix_hx, matrix_p, &
          matrix_p_admm, matrix_px1, matrix_px1_admm, matrix_px1_admm_asymm, matrix_px1_asymm, &

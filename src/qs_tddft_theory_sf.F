@@ -453,16 +453,16 @@ CONTAINS
                               t_firstrow=1, t_firstcol=1)
 
       ! Create energy-ordered excitation list
-      nStates_selected = gs_mos(1)%homo*(SIZE(gs_mos(2)%evals_full) - gs_mos(2)%homo)
+      nStates_selected = tddft_env%nocca*(SIZE(gs_mos(2)%evals_full) - tddft_env%noccb)
 
       ALLOCATE (inds(nStates_selected))
       ALLOCATE (e_virt_m_occ(nStates_selected))
 
       ! Compute alpha_occ tp beta_virt excitation energies
       istate = 0
-      DO imo_virt = gs_mos(2)%homo + 1, SIZE(gs_mos(2)%evals_full)
-         DO imo_occ = 1, gs_mos(1)%homo
-            istate = (imo_virt - gs_mos(2)%homo - 1)*gs_mos(1)%homo + imo_occ
+      DO imo_virt = tddft_env%noccb + 1, SIZE(gs_mos(2)%evals_full)
+         DO imo_occ = 1, tddft_env%nocca
+            istate = (imo_virt - tddft_env%noccb - 1)*tddft_env%nocca + imo_occ
             tddft_env%e_virt_minus_occ(istate) = gs_mos(2)%evals_full(imo_virt) - gs_mos(1)%evals_full(imo_occ)
          END DO
       END DO
@@ -486,13 +486,13 @@ CONTAINS
       DO istate = 1, tddft_env%nVec
          tddft_env%evals(istate) = e_virt_m_occ(istate)
          istate_orig = inds(istate)
-         imo_occ = MOD(istate_orig - 1, gs_mos(1)%homo) + 1
-         imo_virt = (istate_orig - 1)/gs_mos(1)%homo + 1
+         imo_occ = MOD(istate_orig - 1, tddft_env%nocca) + 1
+         imo_virt = (istate_orig - 1)/tddft_env%nocca + 1
          CALL cp_fm_set_element(tddft_env%evects_mo(istate), imo_occ, imo_virt, 1.0_dp)
          IF (istate > tddft_env%nStates) CYCLE
          IF (log_unit > 0) &
             WRITE (log_unit, '(T7,I8,T24,I8,T37,A5,T45,I8,T54,A5,T60,F14.5)') &
-            istate, imo_occ, '(alp)', gs_mos(2)%homo + imo_virt, '(bet)', e_virt_m_occ(istate)*evolt
+            istate, imo_occ, '(alp)', tddft_env%noccb + imo_virt, '(bet)', e_virt_m_occ(istate)*evolt
       END DO
 
       IF (log_unit > 0) THEN

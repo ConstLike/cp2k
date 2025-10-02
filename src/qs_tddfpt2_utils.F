@@ -83,7 +83,7 @@ MODULE qs_tddfpt2_utils
    INTEGER, PARAMETER, PRIVATE          :: maxspins = 2
 
    PUBLIC :: tddfpt_init_ground_state_mos, tddfpt_release_ground_state_mos
-   PUBLIC :: tddfpt_guess_vectors, tddfpt_init_mos, tddfpt_oecorr
+   PUBLIC :: tddfpt_guess_vectors, tddfpt_init_mos, tddft_init_mos, tddfpt_oecorr
    PUBLIC :: tddfpt_total_number_of_states
 
 ! **************************************************************************************************
@@ -106,7 +106,7 @@ CONTAINS
 
       INTEGER                                            :: handle, ispin, nmo_avail, nmo_occ, &
                                                             nmo_virt, nspins
-      INTEGER, DIMENSION(2, 2)                           :: moc, mvt, mfl
+      INTEGER, DIMENSION(2, 2)                           :: moc, mvt
       LOGICAL                                            :: print_virtuals_newtonx
       REAL(kind=dp), DIMENSION(:), POINTER               :: evals_virt_spin
       TYPE(cell_type), POINTER                           :: cell
@@ -181,26 +181,20 @@ CONTAINS
                                            matrix_ks=matrix_ks(ispin)%matrix, matrix_s=matrix_s(1)%matrix, &
                                            mos_virt=mos_virt_spin, evals_virt=evals_virt_spin, &
                                            qs_env=qs_env)
-         ! Get information about the MO set
-         CALL get_mo_set(mos(ispin), homo=nmo_occ)
-         ! Set the HOMO index
-         gs_mos(ispin)%homo = nmo_occ
       END DO
 
       moc = 0
       mvt = 0
-      mfl = 0
       DO ispin = 1, nspins
          CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, nrow_global=moc(1, ispin), ncol_global=moc(2, ispin))
          CALL cp_fm_get_info(gs_mos(ispin)%mos_virt, nrow_global=mvt(1, ispin), ncol_global=mvt(2, ispin))
-         CALL cp_fm_get_info(gs_mos(ispin)%mos_full, nrow_global=mfl(1, ispin), ncol_global=mfl(2, ispin))
       END DO
       IF (iounit > 0) THEN
          WRITE (iounit, "(T2,A,T36,A)") "TDDFPT| Molecular Orbitals:", &
-            " Spin       AOs       Occ      Virt     Total"
+            " Spin       AOs       Occ      Virt"
          DO ispin = 1, nspins
-            WRITE (iounit, "(T2,A,T37,I4,4I10)") "TDDFPT| ", ispin, moc(1, ispin), moc(2, ispin), &
-               mvt(2, ispin), moc(2, ispin) + mvt(2, ispin)
+            WRITE (iounit, "(T2,A,T37,I4,3I10)") "TDDFPT| ", ispin, moc(1, ispin), moc(2, ispin), &
+               mvt(2, ispin)
          END DO
       END IF
 
@@ -216,6 +210,75 @@ CONTAINS
       CALL timestop(handle)
 
    END SUBROUTINE tddfpt_init_mos
+
+! **************************************************************************************************
+!> \brief Initialize full set of molecular orbitals for TDDFT calculations
+!> \param qs_env  Quickstep environment
+!> \param gs_mos  Ground state MOs structure (already initialized with occ and virt)
+!> \par History
+!>    * 09.2025 created [Konstantin Komarov]
+! **************************************************************************************************
+   SUBROUTINE tddft_init_mos(qs_env, gs_mos)
+      TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
+         POINTER                                         :: gs_mos
+
+      CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddft_init_mos'
+
+      INTEGER                                            :: handle, ispin, nao, nmo_occ, &
+                                                            nmo_scf, nmo_virt, nspins
+      LOGICAL                                            :: print_phases
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      TYPE(cp_fm_struct_type), POINTER                   :: ao_ao_fm_struct
+      TYPE(cp_fm_type), POINTER                          :: mo_coeff_scf
+      TYPE(dft_control_type), POINTER                    :: dft_control
+      TYPE(mo_set_type), DIMENSION(:), POINTER           :: mos
+      TYPE(section_vals_type), POINTER                   :: print_section
+      REAL(kind=dp), DIMENSION(:), POINTER               :: mo_evals_scf
+
+      CALL timeset(routineN, handle)
+
+      CALL get_qs_env(qs_env, blacs_env=blacs_env, dft_control=dft_control, mos=mos)
+      nspins = dft_control%nspins
+
+      print_section => section_vals_get_subs_vals(qs_env%input, "PROPERTIES%TDDFPT%PRINT")
+      CALL section_vals_val_get(print_section, "NAMD_PRINT%PRINT_PHASES", l_val=print_phases)
+
+      DO ispin = 1, nspins
+         CALL get_mo_set(mos(ispin), nao=nao, nmo=nmo_scf, homo=nmo_occ, &
+                         mo_coeff=mo_coeff_scf, eigenvalues=mo_evals_scf)
+
+         ! Get number of virtual MOs from gs_mos
+         CALL cp_fm_get_info(gs_mos(ispin)%mos_virt, ncol_global=nmo_virt)
+
+         ! Allocate storage for full MOs and eigenvalues
+         NULLIFY (ao_ao_fm_struct)
+         CALL cp_fm_struct_create(ao_ao_fm_struct, nrow_global=nao, ncol_global=nao, context=blacs_env)
+
+         ALLOCATE (gs_mos(ispin)%mos_full)
+         CALL cp_fm_create(gs_mos(ispin)%mos_full, ao_ao_fm_struct)
+         CALL cp_fm_struct_release(ao_ao_fm_struct)
+
+         ALLOCATE (gs_mos(ispin)%evals_full(nao))
+         ALLOCATE (gs_mos(ispin)%phases_full(nao))
+
+         ! Copy SCF MO coefficients to full MO matrix
+         CALL cp_fm_to_fm(mo_coeff_scf, gs_mos(ispin)%mos_full, ncol=nmo_scf, source_start=1, target_start=1)
+
+         ! Copy eigenvalues
+         gs_mos(ispin)%evals_full(1:nmo_occ) = gs_mos(ispin)%evals_occ(1:nmo_occ)
+         gs_mos(ispin)%evals_full(nmo_occ + 1:nmo_occ + nmo_virt) = gs_mos(ispin)%evals_virt(1:nmo_virt)
+
+         ! Copy phases if needed
+         IF (print_phases) THEN
+            gs_mos(ispin)%phases_full(1:nmo_occ) = gs_mos(ispin)%phases_occ(1:nmo_occ)
+            gs_mos(ispin)%phases_full(nmo_occ + 1:nmo_occ + nmo_virt) = gs_mos(ispin)%phases_virt(1:nmo_virt)
+         END IF
+      END DO
+
+      CALL timestop(handle)
+
+   END SUBROUTINE tddft_init_mos
 
 ! **************************************************************************************************
 !> \brief Generate all virtual molecular orbitals for a given spin by diagonalising
@@ -311,22 +374,18 @@ CONTAINS
       CALL cp_fm_struct_create(ao_mo_virt_fm_struct, nrow_global=nao, ncol_global=nmo_virt, context=blacs_env)
 
       NULLIFY (gs_mos%mos_occ, gs_mos%mos_virt, gs_mos%evals_occ_matrix, gs_mos%mos_full)
-      ALLOCATE (gs_mos%mos_occ, gs_mos%mos_virt, gs_mos%mos_full)
+      ALLOCATE (gs_mos%mos_occ, gs_mos%mos_virt)
       CALL cp_fm_create(gs_mos%mos_occ, ao_mo_occ_fm_struct)
       CALL cp_fm_create(gs_mos%mos_virt, ao_mo_virt_fm_struct)
 
       ALLOCATE (gs_mos%evals_occ(nmo_occ))
       ALLOCATE (gs_mos%evals_virt(nmo_virt))
-      ALLOCATE (gs_mos%evals_full(nao))
       ALLOCATE (gs_mos%phases_occ(nmo_occ))
       ALLOCATE (gs_mos%phases_virt(nmo_virt))
-      ALLOCATE (gs_mos%phases_full(nao))
 
       ! ++ nullify pointers
-      NULLIFY (ao_ao_fm_struct, wfn_fm_struct)
+      NULLIFY (wfn_fm_struct)
       NULLIFY (mos_extended, mo_coeff_extended, mo_evals_extended, mo_occ_extended)
-      CALL cp_fm_struct_create(ao_ao_fm_struct, nrow_global=nao, ncol_global=nao, context=blacs_env)
-      CALL cp_fm_create(gs_mos%mos_full, ao_ao_fm_struct)
 
       IF (do_eigen) THEN
          ! ++ set of molecular orbitals
@@ -449,7 +508,6 @@ CONTAINS
             END IF
          END IF
       END DO
-      gs_mos%phases_full(1:nmo_occ) = gs_mos%phases_occ(1:nmo_occ)
 
       DEALLOCATE (minrow_neg_array, minrow_pos_array, sum_sign_array)
 
@@ -462,16 +520,12 @@ CONTAINS
                           source_start=nmo_occ + 1, target_start=1)
          CALL cp_fm_to_fm(mos_virt, gs_mos%mos_virt, ncol=nmo_virt - (nmo_scf - nmo_occ), &
                           source_start=1, target_start=nmo_scf - nmo_occ + 1)
-         CALL cp_fm_to_fm(mo_coeff_extended, gs_mos%mos_full, ncol=nmo_scf, source_start=1, target_start=1)
          gs_mos%evals_virt(1:nmo_scf - nmo_occ) = evals_virt(nmo_occ + 1:nmo_occ + nmo_scf)
          gs_mos%evals_virt(nmo_scf - nmo_occ + 1:nmo_virt) = evals_virt(1:nmo_virt - (nmo_scf - nmo_occ))
       ELSE
          CALL cp_fm_to_fm(mo_coeff_extended, gs_mos%mos_virt, ncol=nmo_virt, source_start=nmo_occ + 1, target_start=1)
-         CALL cp_fm_to_fm(mo_coeff_extended, gs_mos%mos_full, ncol=nmo_scf, source_start=1, target_start=1)
          gs_mos%evals_virt(1:nmo_virt) = mo_evals_extended(nmo_occ + 1:nmo_occ + nmo_virt)
       END IF
-      gs_mos%evals_full(1:nmo_occ) = gs_mos%evals_occ(1:nmo_occ)
-      gs_mos%evals_full(nmo_occ+1:nmo_occ+nmo_virt) = gs_mos%evals_virt(1:nmo_virt)
 
       IF (print_phases) THEN
          ! compute the phase of molecular orbitals;
@@ -535,7 +589,6 @@ CONTAINS
                END IF
             END IF
          END DO
-         gs_mos%phases_full(nmo_occ+1:nmo_occ+nmo_virt) = gs_mos%phases_virt(1:nmo_virt)
          DEALLOCATE (minrow_neg_array, minrow_pos_array, sum_sign_array)
          CALL cp_fm_release(work_fm_virt)
       END IF !print_phases

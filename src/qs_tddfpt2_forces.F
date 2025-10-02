@@ -53,8 +53,7 @@ MODULE qs_tddfpt2_forces
                                               oe_shift,&
                                               tddfpt_kernel_full,&
                                               tddfpt_kernel_none,&
-                                              tddfpt_kernel_stda,&
-                                              no_sf_tddfpt
+                                              tddfpt_kernel_stda
    USE input_section_types,             ONLY: section_get_lval,&
                                               section_vals_get,&
                                               section_vals_get_subs_vals,&
@@ -418,9 +417,9 @@ CONTAINS
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_force_direct'
 
-      LOGICAL                                            :: do_sf
       INTEGER                                            :: handle, iounit, ispin, natom, norb, &
                                                             nspins, spin
+      LOGICAL                                            :: do_sf
       REAL(KIND=dp)                                      :: evalue
       REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :)        :: ftot1, ftot2
       REAL(KIND=dp), DIMENSION(3)                        :: fodeb

@@ -79,7 +79,8 @@ MODULE qs_tddft_methods
    USE qs_tddfpt2_properties,           ONLY: tddfpt_dipole_operator
    USE qs_tddfpt2_smearing_methods,     ONLY: tddfpt_smeared_occupation
    USE qs_tddfpt2_types,                ONLY: tddfpt_ground_state_mos
-   USE qs_tddfpt2_utils,                ONLY: tddfpt_init_mos, &
+   USE qs_tddfpt2_utils,                ONLY: tddft_init_mos, &
+                                              tddfpt_init_mos, &
                                               tddfpt_oecorr, &
                                               tddfpt_release_ground_state_mos
    USE qs_tddft_theory,                 ONLY: tddft_theory_type
@@ -195,6 +196,7 @@ CONTAINS
       ! Initialize ground-state molecular orbitals
       NULLIFY (gs_mos)
       CALL tddfpt_init_mos(qs_env, gs_mos, log_unit)
+      CALL tddft_init_mos(qs_env, gs_mos)
 
       ! Apply smeared occupation numbers if requested
       IF (tddfpt_control%do_smearing) THEN

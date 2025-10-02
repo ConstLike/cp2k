@@ -1510,7 +1510,7 @@ CONTAINS
                           "Density Functional Perturbation Theory. "// &
                           "Current implementation works for hybrid functionals. "// &
                           "Can be used with Gaussian and Plane Waves (GPW) method only.", &
-                          n_keywords=16, n_subsections=4, repeats=.FALSE., &
+                          n_keywords=17, n_subsections=4, repeats=.FALSE., &
                           citations=(/Iannuzzi2005/))
 
       NULLIFY (keyword, print_key, subsection)

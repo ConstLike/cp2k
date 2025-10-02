@@ -123,19 +123,10 @@ MODULE qs_tddfpt2_types
       !> pool of dense [nao x nmo_occ(spin)] matrices;
       !> used mainly to dynamically expand the list of trial vectors
       TYPE(cp_fm_pool_p_type), ALLOCATABLE, DIMENSION(:) :: fm_pool_ao_mo_occ
-      !> pool of dense [nao x nmo_full(spin)] matrices;
-      !> used mainly for operations with full orbital set
-      TYPE(cp_fm_pool_p_type), ALLOCATABLE, DIMENSION(:) :: fm_pool_ao_mo
       !> S * mos_occ(spin)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: S_C0
-      !> S * mos_full(spin)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: S_C0_full
       !> S * \rho_0(spin)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: S_C0_C0T
-      !> S * \rho_full(spin)
-      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: S_C0_C0T_full
-
-      TYPE(cp_fm_type), POINTER  :: check_xc
       !
       ! *** dense matrices distributed across parallel (sub)groups ***
       !
@@ -253,7 +244,7 @@ CONTAINS
       INTEGER                                            :: evecs_dim, handle, igroup, ispin, &
                                                             istate, nao, nao_aux, natom, ngroups, &
                                                             nspins
-      INTEGER, DIMENSION(maxspins)                       :: nmo_occ, nmo_virt, nmo_full
+      INTEGER, DIMENSION(maxspins)                       :: nmo_occ, nmo_virt
       TYPE(admm_type), POINTER                           :: admm_env
       TYPE(atomic_kind_type), DIMENSION(:), POINTER      :: atomic_kind_set
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
@@ -302,11 +293,6 @@ CONTAINS
       DO ispin = 1, nspins
          nmo_occ(ispin) = SIZE(gs_mos(ispin)%evals_occ)
          nmo_virt(ispin) = SIZE(gs_mos(ispin)%evals_virt)
-         IF (ALLOCATED(gs_mos(ispin)%evals_full)) THEN
-            nmo_full(ispin) = SIZE(gs_mos(ispin)%evals_full)
-         ELSE
-            nmo_full(ispin) = nmo_occ(ispin) + nmo_virt(ispin)
-         END IF
       END DO
 
       IF (do_admm) THEN
@@ -326,27 +312,14 @@ CONTAINS
          CALL cp_fm_struct_release(fm_struct)
       END DO
 
-      ! Create pools for full orbitals
-      ALLOCATE (work_matrices%fm_pool_ao_mo(nspins))
-      DO ispin = 1, nspins
-         NULLIFY (work_matrices%fm_pool_ao_mo(ispin)%pool)
-         CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nmo_full(ispin), context=blacs_env)
-         CALL fm_pool_create(work_matrices%fm_pool_ao_mo(ispin)%pool, fm_struct)
-         CALL cp_fm_struct_release(fm_struct)
-      END DO
       ALLOCATE (work_matrices%S_C0_C0T(nspins))
-      ALLOCATE (work_matrices%S_C0_C0T_full(nspins))
-      ALLOCATE (work_matrices%check_xc)
       CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nao, context=blacs_env)
       DO ispin = 1, nspins
          CALL cp_fm_create(work_matrices%S_C0_C0T(ispin), fm_struct)
-         CALL cp_fm_create(work_matrices%S_C0_C0T_full(ispin), fm_struct)
       END DO
-      CALL cp_fm_create(work_matrices%check_xc, fm_struct)
       CALL cp_fm_struct_release(fm_struct)
 
       ALLOCATE (work_matrices%S_C0(nspins))
-      ALLOCATE (work_matrices%S_C0_full(nspins))
       DO ispin = 1, nspins
          ! For occupied orbitals
          CALL fm_pool_create_fm(work_matrices%fm_pool_ao_mo_occ(ispin)%pool, work_matrices%S_C0(ispin))
@@ -355,13 +328,6 @@ CONTAINS
                                       ncol=nmo_occ(ispin), alpha=1.0_dp, beta=0.0_dp)
          CALL parallel_gemm('N', 'T', nao, nao, nmo_occ(ispin), 1.0_dp, work_matrices%S_C0(ispin), &
                             gs_mos(ispin)%mos_occ, 0.0_dp, work_matrices%S_C0_C0T(ispin))
-         ! For full set of orbitals
-         CALL fm_pool_create_fm(work_matrices%fm_pool_ao_mo(ispin)%pool, work_matrices%S_C0_full(ispin))
-         CALL cp_dbcsr_sm_fm_multiply(matrix_s(1)%matrix, gs_mos(ispin)%mos_full, work_matrices%S_C0_full(ispin), &
-                                      ncol=nmo_full(ispin), alpha=1.0_dp, beta=0.0_dp)
-         CALL parallel_gemm('N', 'T', nao, nao, nmo_full(ispin), 1.0_dp, work_matrices%S_C0_full(ispin), &
-                           gs_mos(ispin)%mos_full, 0.0_dp, work_matrices%S_C0_C0T_full(ispin))
-
       END DO
 
       IF (sub_env%is_split) THEN
@@ -948,23 +914,13 @@ CONTAINS
 
       CALL cp_fm_release(work_matrices%S_C0)
       IF (ALLOCATED(work_matrices%S_C0)) DEALLOCATE(work_matrices%S_C0)
-      CALL cp_fm_release(work_matrices%S_C0_full)
-      IF (ALLOCATED(work_matrices%S_C0_full)) DEALLOCATE(work_matrices%S_C0_full)
       CALL cp_fm_release(work_matrices%S_C0_C0T)
       IF (ALLOCATED(work_matrices%S_C0_C0T)) DEALLOCATE(work_matrices%S_C0_C0T)
-      CALL cp_fm_release(work_matrices%S_C0_C0T_full)
-      IF (ALLOCATED(work_matrices%S_C0_C0T_full)) DEALLOCATE(work_matrices%S_C0_C0T_full)
-      CALL cp_fm_release(work_matrices%check_xc)
-      IF (ASSOCIATED(work_matrices%check_xc)) DEALLOCATE(work_matrices%check_xc)
 
       DO ispin = SIZE(work_matrices%fm_pool_ao_mo_occ), 1, -1
          CALL fm_pool_release(work_matrices%fm_pool_ao_mo_occ(ispin)%pool)
       END DO
       DEALLOCATE (work_matrices%fm_pool_ao_mo_occ)
-      DO ispin = SIZE(work_matrices%fm_pool_ao_mo), 1, -1
-         CALL fm_pool_release(work_matrices%fm_pool_ao_mo(ispin)%pool)
-      END DO
-      DEALLOCATE(work_matrices%fm_pool_ao_mo)
 
       ! sTDA
       IF (ASSOCIATED(work_matrices%gamma_exchange)) THEN

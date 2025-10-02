@@ -6,7 +6,6 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddfpt2_properties
-   USE qs_energy_types,                 ONLY: qs_energy_type
    USE atomic_kind_types,               ONLY: atomic_kind_type
    USE bibliography,                    ONLY: Martin2003,&
                                               cite_reference
@@ -61,8 +60,7 @@ MODULE qs_tddfpt2_properties
    USE input_constants,                 ONLY: no_sf_tddfpt,&
                                               tddfpt_dipole_berry,&
                                               tddfpt_dipole_length,&
-                                              tddfpt_dipole_velocity, &
-                                              no_sf_tddfpt
+                                              tddfpt_dipole_velocity
    USE input_section_types,             ONLY: section_vals_get_subs_vals,&
                                               section_vals_type,&
                                               section_vals_val_get
@@ -534,9 +532,8 @@ CONTAINS
 !>       \f[ t_d(spin) = Tr[evects^T dipole\_op\_mos\_occ(d, spin)] .\f]
 !>       \endparblock
 ! **************************************************************************************************
-   SUBROUTINE tddfpt_print_summary(qs_env,log_unit, evects, evals, ostrength, mult, &
+   SUBROUTINE tddfpt_print_summary(log_unit, evects, evals, ostrength, mult, &
                                    dipole_op_mos_occ, dipole_form)
-      TYPE(qs_environment_type), POINTER                 :: qs_env
       INTEGER, INTENT(in)                                :: log_unit
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(in)      :: evects
       REAL(kind=dp), DIMENSION(:), INTENT(in)            :: evals
@@ -548,11 +545,10 @@ CONTAINS
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_print_summary'
 
       CHARACTER(len=1)                                   :: lsd_str
-      TYPE(qs_energy_type), POINTER                      :: energy
       CHARACTER(len=20)                                  :: mult_str
       INTEGER                                            :: handle, ideriv, ispin, istate, nspins, &
                                                             nstates
-      REAL(kind=dp)                                      :: osc_strength, gs_energy
+      REAL(kind=dp)                                      :: osc_strength
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: trans_dipoles
 
       CALL timeset(routineN, handle)
@@ -565,10 +561,6 @@ CONTAINS
       ELSE
          lsd_str = 'R'
       END IF
-
-      CALL get_qs_env(qs_env=qs_env, &
-                      energy=energy)
-      gs_energy = energy%total
 
       ! *** summary header ***
       IF (log_unit > 0) THEN
@@ -587,7 +579,7 @@ CONTAINS
 
          WRITE (log_unit, '(T10,A,T19,A,T37,A,T69,A)') "State", "Excitation", &
             "Transition dipole (a.u.)", "Oscillator"
-         WRITE (log_unit, '(T3,A,T10,A,T37,A,T49,A,T61,A,T67,A)') "number", "energy (a.u.)", &
+         WRITE (log_unit, '(T10,A,T19,A,T37,A,T49,A,T61,A,T67,A)') "number", "energy (eV)", &
             "x", "y", "z", "strength (a.u.)"
          WRITE (log_unit, '(T10,72("-"))')
       END IF
@@ -618,8 +610,8 @@ CONTAINS
                         accurate_dot_product(trans_dipoles(istate, :, 1), trans_dipoles(istate, :, 1))
          ostrength(istate) = osc_strength
          IF (log_unit > 0) THEN
-            WRITE (log_unit, '(1X,A,T5,I4,T10,F22.14,T31,3(1X,ES11.4E2),T69,ES12.5E2)') &
-               "TDDFPT|", istate, gs_energy+evals(istate), trans_dipoles(istate, 1:nderivs, 1), osc_strength
+            WRITE (log_unit, '(1X,A,T9,I7,T19,F11.5,T31,3(1X,ES11.4E2),T69,ES12.5E2)') &
+               "TDDFPT|", istate, evals(istate)*evolt, trans_dipoles(istate, 1:nderivs, 1), osc_strength
          END IF
       END DO
 
@@ -873,7 +865,7 @@ CONTAINS
                weights_neg_abs_recv(:) = -ABS(weights_recv)
                CALL sort(weights_neg_abs_recv, INT(nexcs), inds)
 
-               WRITE (log_unit, '(T7,I8,F10.5,A)') istate, (evals(istate)-evals(1))*evolt, " eV"
+               WRITE (log_unit, '(T7,I8,F10.5,A)') istate, evals(istate)*evolt, " eV"
 
                ! This reinitialization is needed to prevent the intel fortran compiler from introduce
                ! a bug when using optimization level 3 flag

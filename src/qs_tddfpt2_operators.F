@@ -6,13 +6,7 @@
 !--------------------------------------------------------------------------------------------------!
 
 MODULE qs_tddfpt2_operators
-   USE machine,                         ONLY: m_flush
-   USE cp_log_handling,                 ONLY: cp_get_default_logger,&
-                                              cp_logger_get_default_io_unit,&
-                                              cp_logger_type,&
-                                              cp_to_string
    USE admm_types,                      ONLY: admm_type
-   USE cp_control_types,                ONLY: tddfpt2_control_type
    USE cell_types,                      ONLY: cell_type,&
                                               pbc
    USE cp_control_types,                ONLY: tddfpt2_control_type
@@ -21,7 +15,6 @@ MODULE qs_tddfpt2_operators
         dbcsr_iterator_start, dbcsr_iterator_stop, dbcsr_iterator_type, dbcsr_p_type, &
         dbcsr_release, dbcsr_set, dbcsr_type, dbcsr_type_no_symmetry
    USE cp_dbcsr_operations,             ONLY: copy_fm_to_dbcsr,&
-                                              copy_dbcsr_to_fm,&
                                               cp_dbcsr_plus_fm_fm_t,&
                                               cp_dbcsr_sm_fm_multiply
    USE cp_fm_basic_linalg,              ONLY: cp_fm_column_scale,&
@@ -31,9 +24,7 @@ MODULE qs_tddfpt2_operators
                                               cp_fm_get_info,&
                                               cp_fm_release,&
                                               cp_fm_to_fm,&
-                                              cp_fm_type,&
-                                              cp_fm_get_submatrix,&
-                                              cp_fm_set_all
+                                              cp_fm_type
    USE hartree_local_methods,           ONLY: Vh_1c_gg_integrals
    USE hartree_local_types,             ONLY: hartree_local_type
    USE hfx_admm_utils,                  ONLY: tddft_hfx_matrix
@@ -43,8 +34,6 @@ MODULE qs_tddfpt2_operators
    USE input_section_types,             ONLY: section_vals_get,&
                                               section_vals_get_subs_vals,&
                                               section_vals_type
-   USE input_constants,                 ONLY: no_sf_tddfpt, &
-                                              tddfpt_sf_noncol
    USE kinds,                           ONLY: dp
    USE message_passing,                 ONLY: mp_para_env_type
    USE parallel_gemm_api,               ONLY: parallel_gemm
@@ -98,37 +87,6 @@ MODULE qs_tddfpt2_operators
 ! **************************************************************************************************
 
 CONTAINS
-   SUBROUTINE print_mat_ao_ao(mat, mat_name, logger, iter)
-      TYPE(cp_fm_type), INTENT(IN) :: mat
-      TYPE(cp_logger_type), POINTER      :: logger
-      INTEGER                             :: iter
-
-      CHARACTER(LEN=*), PARAMETER :: routineN = 'print_hmat_ao_ao'
-      CHARACTER(LEN=*) :: mat_name
-      INTEGER :: handle, i, j, unit_nr
-      REAL(KIND=dp), DIMENSION(5,5) :: submatrix
-
-      CALL timeset(routineN, handle)
-
-      unit_nr = cp_logger_get_default_io_unit(logger)
-
-      CALL cp_fm_get_submatrix(mat, submatrix, &
-                               start_row=1, start_col=1, &
-                               n_rows=5, n_cols=5)
-
-      IF (.FALSE.) THEN
-      IF (unit_nr > 0) THEN
-         WRITE(unit_nr, '(A,A,A,I0,A)') "First 5x5 elements of ",TRIM(mat_name)," at iter ",iter,":"
-         DO i = 1, 5
-            WRITE(unit_nr, '(5F12.6)') (submatrix(i,j), j=1,5)
-         END DO
-         WRITE(unit_nr, '(A)') ""
-         CALL m_flush(unit_nr)
-      END IF
-      END IF
-
-      CALL timestop(handle)
-   END SUBROUTINE print_mat_ao_ao
 
 ! **************************************************************************************************
 !> \brief Apply orbital energy difference term:
@@ -152,8 +110,8 @@ CONTAINS
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(IN)      :: evects, S_evects
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          INTENT(in)                                      :: gs_mos
-      TYPE(tddfpt2_control_type), POINTER, INTENT(in)    :: tddfpt_control
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(in)       :: matrix_ks
+      TYPE(tddfpt2_control_type), INTENT(in), POINTER    :: tddfpt_control
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_apply_energy_diff'
 
@@ -585,7 +543,7 @@ CONTAINS
 ! **************************************************************************************************
    SUBROUTINE tddfpt_apply_hfx(Aop_evects, evects, gs_mos, do_admm, qs_env, &
                                work_rho_ia_ao_symm, work_hmat_symm, work_rho_ia_ao_asymm, &
-                               work_hmat_asymm, wfm_rho_orb, logger)
+                               work_hmat_asymm, wfm_rho_orb)
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(INOUT)   :: Aop_evects
       TYPE(cp_fm_type), DIMENSION(:, :), INTENT(IN)      :: evects
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
@@ -598,8 +556,7 @@ CONTAINS
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(INOUT)    :: work_rho_ia_ao_asymm
       TYPE(dbcsr_p_type), DIMENSION(:), INTENT(INOUT), &
          TARGET                                          :: work_hmat_asymm
-      TYPE(cp_fm_type), INTENT(INOUT)                    :: wfm_rho_orb
-      TYPE(cp_logger_type), POINTER                      :: logger
+      TYPE(cp_fm_type), INTENT(IN)                       :: wfm_rho_orb
 
       CHARACTER(LEN=*), PARAMETER                        :: routineN = 'tddfpt_apply_hfx'
 
@@ -654,62 +611,38 @@ CONTAINS
                CALL parallel_gemm('N', 'T', nao, nao, nactive(ispin), 0.5_dp, gs_mos(ispin)%mos_occ, &
                                   evects(ispin, ivect), 1.0_dp, wfm_rho_orb)
 
-!              print *, "KKK| iver=",ivect, "ispin=", ispin
-!              CALL print_mat_ao_ao(wfm_rho_orb, 'SYM: X_ao_ao', logger, ivect)
-
                CALL dbcsr_set(work_hmat_symm(ispin)%matrix, 0.0_dp)
-               !==================================================================
                IF (do_admm) THEN
-                  CALL parallel_gemm('N', 'N', nao_aux, nao, nao, &
-                                     1.0_dp, admm_env%A, &
-                                             wfm_rho_orb, &
-                                     0.0_dp, admm_env%work_aux_orb)
-                  CALL parallel_gemm('N', 'T', nao_aux, nao_aux, nao, &
-                                     1.0_dp, admm_env%work_aux_orb, &
-                                             admm_env%A, &
+                  CALL parallel_gemm('N', 'N', nao_aux, nao, nao, 1.0_dp, admm_env%A, &
+                                     wfm_rho_orb, 0.0_dp, admm_env%work_aux_orb)
+                  CALL parallel_gemm('N', 'T', nao_aux, nao_aux, nao, 1.0_dp, admm_env%work_aux_orb, admm_env%A, &
                                      0.0_dp, admm_env%work_aux_aux)
-
-!                 print *, "KKK| iver=",ivect, "ispin=", ispin
-!                 CALL print_mat_ao_ao(admm_env%work_aux_aux, 'SYM: X_ao_ao_aux', logger, ivect)
                   CALL copy_fm_to_dbcsr(admm_env%work_aux_aux, work_rho_ia_ao_symm(ispin)%matrix, keep_sparsity=.TRUE.)
                ELSE
                   CALL copy_fm_to_dbcsr(wfm_rho_orb, work_rho_ia_ao_symm(ispin)%matrix, keep_sparsity=.TRUE.)
                END IF
-               !==================================================================
             END DO
 
             CALL tddft_hfx_matrix(work_hmat_symm, work_rho_ia_ao_symm, qs_env)
 
             IF (do_admm) THEN
                DO ispin = 1, nspins
-               !==================================================================
                   CALL cp_dbcsr_sm_fm_multiply(work_hmat_symm(ispin)%matrix, admm_env%A, admm_env%work_aux_orb, &
                                                ncol=nao, alpha=1.0_dp, beta=0.0_dp)
 
                   CALL parallel_gemm('T', 'N', nao, nao, nao_aux, 1.0_dp, admm_env%A, &
                                      admm_env%work_aux_orb, 0.0_dp, wfm_rho_orb)
 
-!                 print *, "KKK After| iver=",ivect, "ispin=", ispin
-!                 CALL print_mat_ao_ao(wfm_rho_orb, 'SYM: X_ao_ao*ERI AUX', logger, ivect)
-
                   CALL parallel_gemm('N', 'N', nao, nactive(ispin), nao, alpha, wfm_rho_orb, &
                                      gs_mos(ispin)%mos_occ, 1.0_dp, Aop_evects(ispin, ivect))
-               !==================================================================
                END DO
             ELSE
                DO ispin = 1, nspins
-                  CALL cp_fm_set_all(matrix=wfm_rho_orb, alpha=0.0_dp)
-                  CALL copy_dbcsr_to_fm(matrix=work_hmat_symm(ispin)%matrix, &
-                                        fm=wfm_rho_orb)
-!                 print *, "KKK After| iver=",ivect, "ispin=", ispin
-!                 CALL print_mat_ao_ao(wfm_rho_orb, 'SYM: X_ao_ao*ERI', logger, ivect)
-
                   CALL cp_dbcsr_sm_fm_multiply(work_hmat_symm(ispin)%matrix, gs_mos(ispin)%mos_occ, &
                                                Aop_evects(ispin, ivect), ncol=nactive(ispin), &
                                                alpha=alpha, beta=1.0_dp)
                END DO
             END IF
-            logger = logger
 
             !The anti-symmetric density matrix
             DO ispin = 1, nspins
@@ -720,17 +653,12 @@ CONTAINS
                CALL parallel_gemm('N', 'T', nao, nao, nactive(ispin), -0.5_dp, gs_mos(ispin)%mos_occ, &
                                   evects(ispin, ivect), 1.0_dp, wfm_rho_orb)
 
-!              print *, "KKK| iver=",ivect, "ispin=", ispin
-!              CALL print_mat_ao_ao(wfm_rho_orb, 'A-SYM: X_ao_ao', logger, ivect)
-
                CALL dbcsr_set(work_hmat_asymm(ispin)%matrix, 0.0_dp)
                IF (do_admm) THEN
                   CALL parallel_gemm('N', 'N', nao_aux, nao, nao, 1.0_dp, admm_env%A, &
                                      wfm_rho_orb, 0.0_dp, admm_env%work_aux_orb)
                   CALL parallel_gemm('N', 'T', nao_aux, nao_aux, nao, 1.0_dp, admm_env%work_aux_orb, admm_env%A, &
                                      0.0_dp, admm_env%work_aux_aux)
-!                 print *, "KKK| iver=",ivect, "ispin=", ispin
-!                 CALL print_mat_ao_ao(admm_env%work_aux_aux, 'A-SYM: X_ao_ao_aux', logger, ivect)
                   CALL copy_fm_to_dbcsr(admm_env%work_aux_aux, work_rho_ia_ao_asymm(ispin)%matrix, keep_sparsity=.TRUE.)
                ELSE
                   CALL copy_fm_to_dbcsr(wfm_rho_orb, work_rho_ia_ao_asymm(ispin)%matrix, keep_sparsity=.TRUE.)
@@ -746,20 +674,12 @@ CONTAINS
 
                   CALL parallel_gemm('T', 'N', nao, nao, nao_aux, 1.0_dp, admm_env%A, &
                                      admm_env%work_aux_orb, 0.0_dp, wfm_rho_orb)
-!                 print *, "KKK After| iver=",ivect, "ispin=", ispin
-!                 CALL print_mat_ao_ao(wfm_rho_orb, 'A-SYM: X_ao_ao*ERI AUX', logger, ivect)
 
                   CALL parallel_gemm('N', 'N', nao, nactive(ispin), nao, alpha, wfm_rho_orb, &
                                      gs_mos(ispin)%mos_occ, 1.0_dp, Aop_evects(ispin, ivect))
                END DO
             ELSE
                DO ispin = 1, nspins
-                  CALL cp_fm_set_all(matrix=wfm_rho_orb, alpha=0.0_dp)
-                  CALL copy_dbcsr_to_fm(matrix=work_hmat_asymm(ispin)%matrix, &
-                                        fm=wfm_rho_orb)
-!                 print *, "KKK After| iver=",ivect, "ispin=", ispin
-!                 CALL print_mat_ao_ao(wfm_rho_orb, 'A-SYM: X_ao_ao*ERI', logger, ivect)
-
                   CALL cp_dbcsr_sm_fm_multiply(work_hmat_asymm(ispin)%matrix, gs_mos(ispin)%mos_occ, &
                                                Aop_evects(ispin, ivect), ncol=nactive(ispin), &
                                                alpha=alpha, beta=1.0_dp)
