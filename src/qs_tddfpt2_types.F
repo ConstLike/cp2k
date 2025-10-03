@@ -82,7 +82,7 @@ MODULE qs_tddfpt2_types
 !> \brief Ground state molecular orbitals.
 !> \par History
 !>   * 06.2016 created [Sergey Chulkov]
-!>   * 04.2025 added storage for the full set of MOs for TDDFT (not TDDFPT) [Konstantin Komarov]
+!>   * 04.2025 added storage for the full set of MOs for TDDFT [Konstantin Komarov]
 ! **************************************************************************************************
    TYPE tddfpt_ground_state_mos
       !> occupied MOs stored in a matrix form [nao x nmo_occ]
@@ -106,9 +106,6 @@ MODULE qs_tddfpt2_types
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: phases_occ
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: phases_virt
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: phases_full
-
-      !> Index of HOMO (highest occupied molecular orbital)
-      INTEGER                                            :: homo
    END TYPE tddfpt_ground_state_mos
 
 ! **************************************************************************************************

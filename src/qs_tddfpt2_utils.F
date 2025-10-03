@@ -191,10 +191,10 @@ CONTAINS
       END DO
       IF (iounit > 0) THEN
          WRITE (iounit, "(T2,A,T36,A)") "TDDFPT| Molecular Orbitals:", &
-            " Spin       AOs       Occ      Virt"
+            " Spin       AOs       Occ      Virt     Total"
          DO ispin = 1, nspins
-            WRITE (iounit, "(T2,A,T37,I4,3I10)") "TDDFPT| ", ispin, moc(1, ispin), moc(2, ispin), &
-               mvt(2, ispin)
+            WRITE (iounit, "(T2,A,T37,I4,4I10)") "TDDFPT| ", ispin, moc(1, ispin), moc(2, ispin), &
+               mvt(2, ispin), moc(2, ispin) + mvt(2, ispin)
          END DO
       END IF
 
