@@ -45,9 +45,11 @@ MODULE qs_tddft_theory_mrsf
                                               cp_fm_scale_and_add,&
                                               cp_fm_trace,&
                                               cp_fm_transpose
-   USE cp_fm_types,                     ONLY: cp_fm_get_element,&
+   USE cp_fm_types,                     ONLY: cp_fm_create, &
+                                              cp_fm_get_element,&
                                               cp_fm_get_info,&
                                               cp_fm_get_submatrix,&
+                                              cp_fm_release, &
                                               cp_fm_set_all,&
                                               cp_fm_set_element,&
                                               cp_fm_to_fm,&
@@ -1705,6 +1707,11 @@ CONTAINS
       REAL(kind=dp)                                      :: osc_strength, val, f, energ, gs_energy
       INTEGER                                            :: handle, ideriv, istate, jstate, ispin, &
          n_amplitudes, max_amplitudes, i, a, idx, lr1, lr2, nbf, nocca, noccb, nvira, nvirb, shift
+      ! Transition density matrices
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :)     :: trden
+      TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
+      REAL(kind=dp)                                      :: scalar, sqrt12, sqrt2
+      INTEGER                                            :: ist, jst, i_lr1, a_lr1, i_lr2, a_lr2, i_g, a_g, i_d, a_d
 
       CALL timeset(routineN, handle)
 
@@ -1726,6 +1733,24 @@ CONTAINS
       lr1 = nocca - 1
       lr2 = nocca
       shift = nocca - noccb
+
+      ! Initialize constants for MRSF transition density calculation
+      sqrt12 = 1.0_dp/SQRT(2.0_dp)
+      sqrt2 =SQRT(2.0_dp)
+
+      ! Compute (i,a) indices for special positions (MRSF active orbitals)
+      ! These correspond to the ijlr1, ijlr2, ijg, ijd from OpenQP
+      i_lr1 = nocca - 1
+      a_lr1 = nocca - noccb - 1
+
+      i_lr2 = nocca
+      a_lr2 = nocca - noccb
+
+      i_g = nocca
+      a_g = nocca - noccb - 1
+
+      i_d = nocca - 1
+      a_d = nocca - noccb
 
       ! *** summary header ***
       CALL integer_to_string(3, mult_str)
@@ -1757,6 +1782,142 @@ CONTAINS
       DO ispin = 1, tddft_env%nSpins
          CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, &
                              ncol_global=nmo_occ(ispin))
+      END DO
+
+      ! Allocate transition density matrices [nbf, nbf] for all state pairs
+      CALL get_qs_env(qs_env=qs_env, blacs_env=blacs_env)
+      ALLOCATE (trden(tddft_env%nStates, tddft_env%nStates))
+      DO ist = 1, tddft_env%nStates
+         DO jst = 1, tddft_env%nStates
+            CALL cp_fm_create(matrix=trden(ist, jst), &
+                              matrix_struct=this%work1_nao_nao%matrix_struct)
+            CALL cp_fm_set_all(matrix=trden(ist, jst), alpha=0.0_dp)
+         END DO
+      END DO
+
+      ! Compute transition densities for all state pairs
+      DO ist = 1, tddft_env%nStates
+         DO jst = ist, tddft_env%nStates
+
+            ! Copy amplitudes for state ist to work_noc_vir (xv12i in OpenQP)
+            CALL cp_fm_set_all(matrix=this%work_noc_vir, alpha=0.0_dp)
+            CALL cp_fm_to_fm(source=tddft_env%evects_mo(ist), &
+                             destination=this%work_noc_vir)
+
+            ! Copy amplitudes for state jst to work2_noc_vir (xv12j in OpenQP)
+            CALL cp_fm_set_all(matrix=this%work2_noc_vir, alpha=0.0_dp)
+            CALL cp_fm_to_fm(source=tddft_env%evects_mo(jst), &
+                             destination=this%work2_noc_vir)
+
+            ! Apply multiplicity-specific MRSF corrections to amplitudes
+            ! These rearrange selected active orbital amplitudes for correct MRSF spin-mapping
+            SELECT CASE (tddft_env%response_type)
+            CASE (2) ! MRSF-S (Singlet)
+               ! Correction for (i_lr1, a_lr1): scale by sqrt12
+               CALL cp_fm_get_element(tddft_env%evects_mo(ist), i_lr1, a_lr1, val)
+               CALL cp_fm_set_element(this%work_noc_vir, i_lr1, a_lr1, val*sqrt12)
+
+               CALL cp_fm_get_element(tddft_env%evects_mo(jst), i_lr1, a_lr1, val)
+               CALL cp_fm_set_element(this%work2_noc_vir, i_lr1, a_lr1, val*sqrt12)
+
+               ! Correction for (i_lr2, a_lr2): scale by -sqrt12 (for ist) and sqrt12 (for jst)
+               CALL cp_fm_get_element(tddft_env%evects_mo(ist), i_lr1, a_lr1, val)
+               CALL cp_fm_set_element(this%work_noc_vir, i_lr2, a_lr2, -val*sqrt12)
+
+               CALL cp_fm_get_element(tddft_env%evects_mo(jst), i_lr1, a_lr1, val)
+               CALL cp_fm_set_element(this%work2_noc_vir, i_lr2, a_lr2, -val*sqrt12)
+
+            CASE (3) ! MRSF-T (Triplet)
+               ! Correction for (i_lr1, a_lr1): scale by sqrt12
+               CALL cp_fm_get_element(tddft_env%evects_mo(ist), i_lr1, a_lr1, val)
+               CALL cp_fm_set_element(this%work_noc_vir, i_lr1, a_lr1, val*sqrt12)
+
+               CALL cp_fm_get_element(tddft_env%evects_mo(jst), i_lr1, a_lr1, val)
+               CALL cp_fm_set_element(this%work2_noc_vir, i_lr1, a_lr1, val*sqrt12)
+
+               ! Correction for (i_lr2, a_lr2): scale by sqrt12 (same sign for triplet)
+               CALL cp_fm_get_element(tddft_env%evects_mo(ist), i_lr1, a_lr1, val)
+               CALL cp_fm_set_element(this%work_noc_vir, i_lr2, a_lr2, val*sqrt12)
+
+               CALL cp_fm_get_element(tddft_env%evects_mo(jst), i_lr1, a_lr1, val)
+               CALL cp_fm_set_element(this%work2_noc_vir, i_lr2, a_lr2, val*sqrt12)
+
+               ! Set (i_g, a_g) to zero
+               CALL cp_fm_set_element(this%work_noc_vir, i_g, a_g, 0.0_dp)
+               CALL cp_fm_set_element(this%work2_noc_vir, i_g, a_g, 0.0_dp)
+
+               ! Set (i_d, a_d) to zero
+               CALL cp_fm_set_element(this%work_noc_vir, i_d, a_d, 0.0_dp)
+               CALL cp_fm_set_element(this%work2_noc_vir, i_d, a_d, 0.0_dp)
+
+            END SELECT
+
+            ! Compute transition density matrix
+            ! NOTE: parallel_gemm slicing parameters (x_first_row/x_first_col):
+            ! - Specify starting position in the ORIGINAL matrix (before any transpose)
+            ! - In Fortran: first index = row, second index = col
+            ! - Dimensions (m,n,k) specify the size of data to extract from that position
+            ! - Example: A[noca,nvirb] with a_first_row=i0, a_first_col=j0 and transa='T'
+            !   extracts A(i0:i0+k-1, j0:j0+m-1) then transposes to A^T[m,k]
+
+            ! Revised trden(vir/vir)
+            ! C[noccb+1:nbf, noccb+1:nbf] = 1.0_dp*(A[1:nocca, 1:nvirb])^T*B[1:nocca, 1:nvirb] + 0.0_dp*C
+            CALL parallel_gemm('T', 'N', nvirb, nvirb, nocca, &
+                               1.0_dp, this%work2_noc_vir, &   ! xv12j [nocca, nvirb]
+                                       this%work_noc_vir, &    ! xv12i [nocca, nvirb]
+                               0.0_dp, trden(ist, jst), &      ! output to trden[nbf, nbf]
+                               c_first_row=noccb + 1, c_first_col=noccb + 1)
+
+            ! Correction Case 1: i in {1,2}, k in {noca-1,noca}, j NOT in {1,2}
+            ! C[noccb+1:noccb+2, noccb+3:nbf] = scalar*(A[nocca-1:nocca, 1:2])^T*B[nocca-1:nocca, 3:nvirb] + 1.0_dp*C
+            scalar = sqrt2 - 1.0_dp
+            CALL parallel_gemm('T', 'N', 2, nvirb - 2, 2, &
+                               scalar, this%work2_noc_vir, &   ! xv12j
+                                       this%work_noc_vir, &    ! xv12i
+                               1.0_dp, trden(ist, jst), &
+                               a_first_row=nocca - 1, a_first_col=1, &
+                               b_first_row=nocca - 1, b_first_col=3, &
+                               c_first_row=noccb + 1, c_first_col=noccb + 3)
+
+            ! Correction Case 2: j in {1,2}, k in {noca-1,noca}, i NOT in {1,2}
+            ! C[noccb+3:nbf, noccb+1:noccb+2] = scalar*(A[nocca-1:nocca, 3:nvirb])^T*B[nocca-1:nocca, 1:2] + 1.0_dp*C
+            CALL parallel_gemm('T', 'N', nvirb - 2, 2, 2, &
+                               scalar, this%work2_noc_vir, &   ! xv12j
+                                       this%work_noc_vir, &    ! xv12i
+                               1.0_dp, trden(ist, jst), &
+                               a_first_row=nocca - 1, a_first_col=3, &
+                               b_first_row=nocca - 1, b_first_col=1, &
+                               c_first_row=noccb + 3, c_first_col=noccb + 1)
+
+            ! Revised trden(occ/occ)
+            ! C[1:nocca, 1:nocca] = -1.0_dp*A[1:nocca, 1:nvirb]*(B[1:nocca, 1:nvirb])^T + 1.0_dp*C
+            CALL parallel_gemm('N', 'T', nocca, nocca, nvirb, &
+                               -1.0_dp, this%work_noc_vir, &   ! xv12i
+                                        this%work2_noc_vir, &  ! xv12j
+                               1.0_dp, trden(ist, jst))        ! output to trden[nbf, nbf]
+
+            ! Correction Case 1: i in {noca-1,noca}, k in {1,2}, j NOT in {noca-1,noca}
+            ! C[nocca-1:nocca, 1:nocca-2] = scalar*A[nocca-1:nocca, 1:2]*(B[1:nocca-2, 1:2])^T + 1.0_dp*C
+            scalar = -(sqrt2 - 1.0_dp)
+            CALL parallel_gemm('N', 'T', 2, nocca - 2, 2, &
+                               scalar, this%work_noc_vir, &    ! xv12i
+                                       this%work2_noc_vir, &   ! xv12j
+                               1.0_dp, trden(ist, jst), &
+                               a_first_row=nocca - 1, a_first_col=1, &
+                               b_first_row=1, b_first_col=1, &
+                               c_first_row=nocca - 1, c_first_col=1)
+
+            ! Correction Case 2: j in {noca-1,noca}, k in {1,2}, i NOT in {noca-1,noca}
+            ! C[1:nocca-2, nocca-1:nocca] = scalar*A[1:nocca-2, 1:2]*(B[nocca-1:nocca, 1:2])^T + 1.0_dp*C
+            CALL parallel_gemm('N', 'T', nocca - 2, 2, 2, &
+                               scalar, this%work_noc_vir, &    ! xv12i
+                                       this%work2_noc_vir, &   ! xv12j
+                               1.0_dp, trden(ist, jst), &
+                               a_first_row=1, a_first_col=1, &
+                               b_first_row=nocca - 1, b_first_col=1, &
+                               c_first_row=1, c_first_col=nocca - 1)
+
+         END DO
       END DO
 
       ! Transform AO-MO dipoles to fully MO-based dipoles
@@ -1799,6 +1960,9 @@ CONTAINS
             CALL cp_fm_set_element(this%work_noc_vir, lr1, 2, 0.0_dp)
          END SELECT
 
+      END DO
+
+      DO istate = 1, tddft_env%nStates
          !--------------------------------------------------------------
          ! Compute transition dipoles for state istate
          !--------------------------------------------------------------
@@ -1807,7 +1971,6 @@ CONTAINS
                              this%dipoles_mo(ideriv), &
                              trans_dipoles(1, istate, ideriv))
          END DO
-
       END DO
 
       ! s2_mat
@@ -1942,6 +2105,14 @@ CONTAINS
                                      gs_mos, &
                                      matrix_s(1)%matrix, &
                                      tddfpt_print_section, suffix)
+
+      ! Deallocate transition density matrices
+      DO ist = 1, tddft_env%nStates
+         DO jst = 1, tddft_env%nStates
+            CALL cp_fm_release(trden(ist, jst))
+         END DO
+      END DO
+      DEALLOCATE (trden)
 
       CALL timestop(handle)
 
