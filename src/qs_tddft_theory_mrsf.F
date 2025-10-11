@@ -41,7 +41,8 @@ MODULE qs_tddft_theory_mrsf
    USE cp_dbcsr_operations,             ONLY: copy_dbcsr_to_fm,&
                                               copy_fm_to_dbcsr,&
                                               dbcsr_allocate_matrix_set
-   USE cp_fm_basic_linalg,              ONLY: cp_fm_norm,&
+   USE cp_fm_basic_linalg,              ONLY: cp_fm_frobenius_norm,&
+                                              cp_fm_norm,&
                                               cp_fm_scale_and_add,&
                                               cp_fm_trace,&
                                               cp_fm_transpose
@@ -49,6 +50,7 @@ MODULE qs_tddft_theory_mrsf
                                               cp_fm_get_element,&
                                               cp_fm_get_info,&
                                               cp_fm_get_submatrix,&
+                                              cp_fm_maxabsval,&
                                               cp_fm_release, &
                                               cp_fm_set_all,&
                                               cp_fm_set_element,&
@@ -1698,7 +1700,6 @@ CONTAINS
       TYPE(section_vals_type), POINTER                   :: tddfpt_section
       TYPE(section_vals_type), POINTER                   :: tddfpt_print_section
       CHARACTER(LEN=default_path_length)                 :: suffix
-      REAL(kind=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: trans_dipoles
       REAL(kind=dp), ALLOCATABLE, DIMENSION(:)           :: s2_mat, amplitudes
       INTEGER, ALLOCATABLE, DIMENSION(:)                 :: indices, i_indices, a_indices
       INTEGER, DIMENSION(2)                              :: nmo_occ
@@ -1707,6 +1708,10 @@ CONTAINS
       REAL(kind=dp)                                      :: osc_strength, val, f, energ, gs_energy
       INTEGER                                            :: handle, ideriv, istate, jstate, ispin, &
          n_amplitudes, max_amplitudes, i, a, idx, lr1, lr2, nbf, nocca, noccb, nvira, nvirb, shift
+      ! DEBUG variables
+      REAL(kind=dp)                                      :: dipole_norm_x, dipole_norm_y, dipole_norm_z
+      REAL(kind=dp)                                      :: dipole_max_x, dipole_max_y, dipole_max_z
+      REAL(kind=dp)                                      :: sample_val, trden_norm, trden_max
       ! Transition density matrices
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :)     :: trden
       TYPE(cp_blacs_env_type), POINTER                   :: blacs_env
@@ -1752,28 +1757,6 @@ CONTAINS
       i_d = nocca - 1
       a_d = nocca - noccb
 
-      ! *** summary header ***
-      CALL integer_to_string(3, mult_str)
-      IF (log_unit > 0) THEN
-         WRITE (log_unit, '(/,1X,A2,A,1X,A)') lsd_str, "-MRSF-TDDFT states of multiplicity", TRIM(mult_str)
-         SELECT CASE (tddfpt_control%dipole_form)
-         CASE (tddfpt_dipole_berry)
-            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using Berry operator formulation"
-         CASE (tddfpt_dipole_length)
-            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using length formulation"
-         CASE (tddfpt_dipole_velocity)
-            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using velocity formulation"
-         CASE DEFAULT
-            CPABORT("Unimplemented form of the dipole operator")
-         END SELECT
-
-         WRITE (log_unit, '(T3,A,T15,A,T37,A,T69,A)') "State", "Excitation     S^2", &
-            "Transition dipole (a.u.)", "Oscillator"
-         WRITE (log_unit, '(T3,A,T14,A,T37,A,T49,A,T61,A,T67,A)') "number", "energy (a.u.)", &
-            "x", "y", "z", "strength (a.u.)"
-         WRITE (log_unit, '(T3,79("-"))')
-      END IF
-
       CALL get_qs_env(qs_env=qs_env, &
                       matrix_s=matrix_s, &
                       energy=energy)
@@ -1783,6 +1766,60 @@ CONTAINS
          CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, &
                              ncol_global=nmo_occ(ispin))
       END DO
+
+      ! *** DEBUG: Print dipole integral norms ***
+      IF (log_unit > 0) THEN
+         dipole_norm_x = cp_fm_frobenius_norm(tddft_env%dipole_ao_fm(1))
+         dipole_norm_y = cp_fm_frobenius_norm(tddft_env%dipole_ao_fm(2))
+         dipole_norm_z = cp_fm_frobenius_norm(tddft_env%dipole_ao_fm(3))
+         CALL cp_fm_maxabsval(tddft_env%dipole_ao_fm(1), dipole_max_x)
+         CALL cp_fm_maxabsval(tddft_env%dipole_ao_fm(2), dipole_max_y)
+         CALL cp_fm_maxabsval(tddft_env%dipole_ao_fm(3), dipole_max_z)
+
+         WRITE (log_unit, '(/,A)') "=== DEBUG: Dipole Integrals in AO Basis ==="
+         WRITE (log_unit, '(A,3ES14.6)') "  Frobenius norms (x,y,z): ", dipole_norm_x, dipole_norm_y, dipole_norm_z
+         WRITE (log_unit, '(A,3ES14.6)') "  Max abs values (x,y,z):  ", dipole_max_x, dipole_max_y, dipole_max_z
+
+         ! Sample element (1,1) from each component
+         CALL cp_fm_get_element(tddft_env%dipole_ao_fm(1), 1, 1, sample_val)
+         WRITE (log_unit, '(A,ES14.6)') "  dipole_x(1,1): ", sample_val
+         CALL cp_fm_get_element(tddft_env%dipole_ao_fm(2), 1, 1, sample_val)
+         WRITE (log_unit, '(A,ES14.6)') "  dipole_y(1,1): ", sample_val
+         CALL cp_fm_get_element(tddft_env%dipole_ao_fm(3), 1, 1, sample_val)
+         WRITE (log_unit, '(A,ES14.6,/)') "  dipole_z(1,1): ", sample_val
+      END IF
+
+      !-----------------------------------------------------------------------------------
+      ! THEORY: Transition Density Matrix and Transition Dipole Moments in MRSF-TDA
+      !-----------------------------------------------------------------------------------
+      ! In MRSF-TDDFT with Tamm-Dancoff Approximation (TDA), we compute the UNRELAXED
+      ! transition density matrix between excited states i and j.
+      !
+      ! 1. UNRELAXED vs RELAXED Transition Density:
+      !    - UNRELAXED: Calculated directly from TDA response amplitudes (X vector only)
+      !      This represents the "bare" excitation without orbital relaxation effects.
+      !      Computationally less expensive and standard for transition dipole moments.
+      !    - RELAXED: Includes orbital relaxation contributions from solving Z-vector
+      !      equations. More accurate for excited state properties like dipole moments,
+      !      but requires additional SCF-like procedure (not implemented here).
+      !
+      ! 2. MRSF-TDA Transition Density Formula:
+      !    For MRSF theory with pure spin states, the transition density in MO basis is:
+      !        P_ij^MO = P_ij^vir/vir + P_ij^occ/occ
+      !    where:
+      !    - P_ij^vir/vir: virtual-virtual block contribution from X_i^T * X_j
+      !    - P_ij^occ/occ: occupied-occupied block contribution from -X_i * X_j^T
+      !
+      ! 3. Transition Dipole Moment:
+      !    The transition dipole moment between states i and j is computed as:
+      !        mu_ij = Tr[P_ij^AO * mu_AO]
+      !    where mu_AO is the dipole integral matrix in AO basis.
+      !    For oscillator strength: f_ij = (2/3) * Delta_E_ij * |mu_ij|^2
+      !
+      ! 4. MO to AO Transformation:
+      !    P_ij^AO = C_alpha * P_ij^MO * C_beta^T
+      !    where C_alpha and C_beta are MO coefficient matrices for alpha and beta spins.
+      !-----------------------------------------------------------------------------------
 
       ! Allocate transition density matrices [nbf, nbf] for all state pairs
       CALL get_qs_env(qs_env=qs_env, blacs_env=blacs_env)
@@ -1808,6 +1845,20 @@ CONTAINS
             CALL cp_fm_set_all(matrix=this%work2_noc_vir, alpha=0.0_dp)
             CALL cp_fm_to_fm(source=tddft_env%evects_mo(jst), &
                              destination=this%work2_noc_vir)
+
+            ! *** DEBUG: Print excitation vector norms for first transition ***
+            IF (log_unit > 0 .AND. ist == 1 .AND. jst == 2) THEN
+               dipole_norm_x = cp_fm_frobenius_norm(tddft_env%evects_mo(ist))
+               dipole_norm_y = cp_fm_frobenius_norm(tddft_env%evects_mo(jst))
+               WRITE (log_unit, '(/,A,I0,A,I0,A)') "=== DEBUG: Excitation Vectors for transition ", ist, " -> ", jst, " ==="
+               WRITE (log_unit, '(A,I0,A,ES14.6)') "  Norm of evects_mo(", ist, "): ", dipole_norm_x
+               WRITE (log_unit, '(A,I0,A,ES14.6)') "  Norm of evects_mo(", jst, "): ", dipole_norm_y
+               ! Sample amplitude (1,1)
+               CALL cp_fm_get_element(tddft_env%evects_mo(ist), 1, 1, sample_val)
+               WRITE (log_unit, '(A,I0,A,ES14.6)') "  evects_mo(", ist, ")(1,1): ", sample_val
+               CALL cp_fm_get_element(tddft_env%evects_mo(jst), 1, 1, sample_val)
+               WRITE (log_unit, '(A,I0,A,ES14.6,/)') "  evects_mo(", jst, ")(1,1): ", sample_val
+            END IF
 
             ! Apply multiplicity-specific MRSF corrections to amplitudes
             ! These rearrange selected active orbital amplitudes for correct MRSF spin-mapping
@@ -1917,60 +1968,94 @@ CONTAINS
                                b_first_row=nocca - 1, b_first_col=1, &
                                c_first_row=1, c_first_col=nocca - 1)
 
+            ! MO to AO transformation: P_ij^AO = C_alpha * P_ij^MO * C_beta^T
+            ! C[1:nbf,1:nbf] = 1.0*A[1:nbf,1:nbf]*B[1:nbf,1:nbf] + 0.0*C
+            CALL parallel_gemm('N', 'N', nbf, nbf, nbf, &
+                               1.0_dp, gs_mos(1)%mos_full, &
+                                       trden(ist, jst), &
+                               0.0_dp, this%work2_nao_nao)
+            ! C[1:nbf,1:nbf] = 1.0*A[1:nbf,1:nbf]*(B[1:nbf,1:nbf])^T + 0.0*C
+            CALL parallel_gemm('N', 'T', nbf, nbf, nbf, &
+                               1.0_dp, this%work2_nao_nao, &
+                                       gs_mos(2)%mos_full, &
+                               0.0_dp, this%work1_nao_nao)
+
+            ! *** DEBUG: Print transition density norms ***
+            IF (log_unit > 0 .AND. ist == 1 .AND. jst == 2) THEN
+               trden_norm = cp_fm_frobenius_norm(trden(ist, jst))
+               CALL cp_fm_maxabsval(trden(ist, jst), trden_max)
+               WRITE (log_unit, '(/,A)') "=== DEBUG: Transition Density in MO Basis ==="
+               WRITE (log_unit, '(A,ES14.6)') "  Frobenius norm: ", trden_norm
+               WRITE (log_unit, '(A,ES14.6)') "  Max abs value:  ", trden_max
+               CALL cp_fm_get_element(trden(ist, jst), 1, 1, sample_val)
+               WRITE (log_unit, '(A,ES14.6,/)') "  trden_MO(1,1):  ", sample_val
+
+               trden_norm = cp_fm_frobenius_norm(this%work1_nao_nao)
+               CALL cp_fm_maxabsval(this%work1_nao_nao, trden_max)
+               WRITE (log_unit, '(A)') "=== DEBUG: Transition Density in AO Basis (before symmetrization) ==="
+               WRITE (log_unit, '(A,ES14.6)') "  Frobenius norm: ", trden_norm
+               WRITE (log_unit, '(A,ES14.6)') "  Max abs value:  ", trden_max
+               CALL cp_fm_get_element(this%work1_nao_nao, 1, 1, sample_val)
+               WRITE (log_unit, '(A,ES14.6,/)') "  trden_AO(1,1):  ", sample_val
+            END IF
+
+            ! Symmetrize transition density: P_sym = P + P^T (matches OpenQP)
+            ! This matches OpenQP's symmetrize_matrix which does A = A + A^T
+            ! Combined with -0.5 factor in trace: mu = -0.5*Tr[(P+P^T)*d] = -Tr[P*d]
+            ! work2 = P_AO
+            CALL cp_fm_scale_and_add( &
+               alpha=0.0_dp, matrix_a=this%work2_nao_nao, &
+               beta=1.0_dp, matrix_b=this%work1_nao_nao)
+            ! evects_nao_nao(1) = P_AO^T (used as tmp matrix for transpose)
+            CALL cp_fm_transpose(this%work1_nao_nao, this%evects_nao_nao(1))
+            ! work2 += P_AO^T => work2 = P_AO + P_AO^T
+            CALL cp_fm_scale_and_add( &
+               alpha=1.0_dp, matrix_a=this%work2_nao_nao, &
+               beta=1.0_dp, matrix_b=this%evects_nao_nao(1))
+            ! Copy symmetrized result back to work1
+            CALL cp_fm_to_fm(this%work2_nao_nao, this%work1_nao_nao)
+
+            ! *** DEBUG: Print transition density after symmetrization ***
+            IF (log_unit > 0 .AND. ist == 1 .AND. jst == 2) THEN
+               trden_norm = cp_fm_frobenius_norm(this%work1_nao_nao)
+               CALL cp_fm_maxabsval(this%work1_nao_nao, trden_max)
+               WRITE (log_unit, '(A)') "=== DEBUG: Transition Density in AO Basis (after symmetrization) ==="
+               WRITE (log_unit, '(A,ES14.6)') "  Frobenius norm: ", trden_norm
+               WRITE (log_unit, '(A,ES14.6)') "  Max abs value:  ", trden_max
+               CALL cp_fm_get_element(this%work1_nao_nao, 1, 1, sample_val)
+               WRITE (log_unit, '(A,ES14.6,/)') "  trden_AO_sym(1,1): ", sample_val
+            END IF
+
+            ! Compute transition dipole moments using AO basis integrals
+            ! For MRSF: mu_ij = -0.5 * Tr[P_ij^AO * mu_AO] where P_ij^AO is the transition density
+            ! and mu_AO are the dipole integrals in AO basis
+            ! Factor -0.5 matches OpenQP's implementation
+            DO ideriv = 1, 3
+               ! Compute mu_ij^xyz = -0.5 * Tr[trden(ist,jst) * dipole_ao_fm(ideriv)]
+               CALL cp_fm_trace(this%work1_nao_nao, &
+                                tddft_env%dipole_ao_fm(ideriv), &
+                                tddft_env%trans_dipoles_mo(ist, jst, ideriv))
+               tddft_env%trans_dipoles_mo(ist, jst, ideriv) = &
+                  -0.5_dp*tddft_env%trans_dipoles_mo(ist, jst, ideriv)
+
+               ! *** DEBUG: Print trace values ***
+               IF (log_unit > 0 .AND. ist == 1 .AND. jst == 2) THEN
+                  IF (ideriv == 1) WRITE (log_unit, '(A)') "=== DEBUG: Transition Dipole Trace Calculation ==="
+                  WRITE (log_unit, '(A,I0,A,ES14.6)') "  Trace[P_AO * dipole_", ideriv, "]: ", &
+                     tddft_env%trans_dipoles_mo(ist, jst, ideriv)/(-0.5_dp)
+                  WRITE (log_unit, '(A,I0,A,ES14.6)') "  trans_dipole_", ideriv, " (with -0.5 factor): ", &
+                     tddft_env%trans_dipoles_mo(ist, jst, ideriv)
+                  IF (ideriv == 3) WRITE (log_unit, '(/)')
+               END IF
+            END DO
          END DO
       END DO
 
-      ! Transform AO-MO dipoles to fully MO-based dipoles
-      DO ideriv = 1, 3
-         CALL parallel_gemm('T', 'N', tddft_env%nocca, tddft_env%nvirb, tddft_env%nbf, &
-                            1.0_dp, tddft_env%dipole_op_mos_occ(ideriv, 1), &
-                                    gs_mos(2)%mos_virt, &
-                            0.0_dp, this%dipoles_mo(ideriv)) ![nocca, nvirb]
-      END DO
-
-      ! transition dipole moment
-      ALLOCATE (trans_dipoles(tddft_env%nstates, tddft_env%nstates, 3), source=0.0_dp)
-
-      DO istate = 1, tddft_env%nStates
-         CALL cp_fm_set_all(matrix=this%work_noc_vir, alpha=0.0_dp)
-         CALL cp_fm_to_fm(source=tddft_env%evects_mo(istate), &
-                          destination=this%work_noc_vir)
-         ! -- Apply multiplicity-specific transformation of excitation amplitudes
-         ! These rearrange selected active orbital amplitudes for correct MRSF spin-mapping
-         SELECT CASE (tddft_env%response_type)
-         CASE (2) ! MRSF-S
-            CALL cp_fm_get_element(tddft_env%evects_mo(istate), lr1, 1, val)
-            val = val*1.0_dp*sqrt12
-            CALL cp_fm_set_element(this%work_noc_vir, lr1, 1, val)
-
-            CALL cp_fm_get_element(tddft_env%evects_mo(istate), lr1, 1, val)
-            val = -val*1.0_dp*sqrt12
-            CALL cp_fm_set_element(this%work_noc_vir, lr2, 2, val)
-         CASE (3) ! MRSF-S
-            CALL cp_fm_get_element(tddft_env%evects_mo(istate), lr1, 1, val)
-            val = val*1.0_dp*sqrt12
-            CALL cp_fm_set_element(this%work_noc_vir, lr1, 1, val)
-
-            CALL cp_fm_get_element(tddft_env%evects_mo(istate), lr1, 1, val)
-            val = val*1.0_dp*sqrt12
-            CALL cp_fm_set_element(this%work_noc_vir, lr2, 2, val)
-
-            CALL cp_fm_set_element(this%work_noc_vir, lr2, 1, 0.0_dp)
-
-            CALL cp_fm_set_element(this%work_noc_vir, lr1, 2, 0.0_dp)
-         END SELECT
-
-      END DO
-
-      DO istate = 1, tddft_env%nStates
-         !--------------------------------------------------------------
-         ! Compute transition dipoles for state istate
-         !--------------------------------------------------------------
-         DO ideriv = 1, 3
-            CALL cp_fm_trace(this%work_noc_vir, &
-                             this%dipoles_mo(ideriv), &
-                             trans_dipoles(1, istate, ideriv))
-         END DO
+      ! Set diagonal elements to zero (i=j are not transition dipoles)
+      ! For transition dipole moments, we only consider transitions between different states
+      ! Diagonal elements (i=i) would give permanent dipole moments, not transitions
+      DO ist = 1, tddft_env%nstates
+         tddft_env%trans_dipoles_mo(ist, ist, 1:3) = 0.0_dp
       END DO
 
       ! s2_mat
@@ -1982,16 +2067,39 @@ CONTAINS
          s2_mat(1:tddft_env%nStates) = 2.0_dp
       END SELECT
 
+      ! *** summary header ***
+      CALL integer_to_string(3, mult_str)
+      IF (log_unit > 0) THEN
+         WRITE (log_unit, '(/,1X,A2,A,1X,A)') lsd_str, "-MRSF-TDDFT states of multiplicity", TRIM(mult_str)
+         SELECT CASE (tddfpt_control%dipole_form)
+         CASE (tddfpt_dipole_berry)
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using Berry operator formulation"
+         CASE (tddfpt_dipole_length)
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using length formulation"
+         CASE (tddfpt_dipole_velocity)
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using velocity formulation"
+         CASE DEFAULT
+            CPABORT("Unimplemented form of the dipole operator")
+         END SELECT
+
+         WRITE (log_unit, '(T3,A,T15,A,T37,A,T69,A)') "State", "Excitation     S^2", &
+            "Transition dipole (a.u.)", "Oscillator"
+         WRITE (log_unit, '(T3,A,T14,A,T37,A,T49,A,T61,A,T67,A)') "number", "energy (a.u.)", &
+            "x", "y", "z", "strength (a.u.)"
+         WRITE (log_unit, '(T3,79("-"))')
+      END IF
+
+
       ! *** summary information ***
       DO istate = 1, tddft_env%nstates
          osc_strength = 2.0_dp/3.0_dp*tddft_env%evals(istate)* &
-                        accurate_dot_product(trans_dipoles(1, istate, 1:3), &
-                                             trans_dipoles(1, istate, 1:3))
+                        accurate_dot_product(tddft_env%trans_dipoles_mo(1, istate, 1:3), &
+                                             tddft_env%trans_dipoles_mo(1, istate, 1:3))
          ostrength(istate) = osc_strength
          IF (log_unit > 0) THEN
             WRITE (log_unit, '(1X,I4,1X,F22.14,T30,F4.2,T34,3(1X,ES11.4E2),T70,ES12.4E2)') &
                istate, gs_energy + tddft_env%evals(istate), s2_mat(istate), &
-               trans_dipoles(1, istate, 1:3), osc_strength
+               tddft_env%trans_dipoles_mo(1, istate, 1:3), osc_strength
          END IF
       END DO
       DEALLOCATE (s2_mat)
@@ -2069,16 +2177,14 @@ CONTAINS
          DO istate = 1, tddft_env%nstates
             DO jstate = istate + 1, tddft_env%nstates
                energ = tddft_env%evals(jstate) - tddft_env%evals(istate)
-               f = 2.0_dp/3.0_dp*energ*SUM(trans_dipoles(istate, jstate, :)**2)
+               f = 2.0_dp/3.0_dp*energ*SUM(tddft_env%trans_dipoles_mo(istate, jstate, :)**2)
                WRITE (log_unit, '(3X,I0,1X,"->",1X,I0,T11,F11.5,3X,3(1X,ES11.4E2),2X,ES12.4E2)') &
-                  istate, jstate, energ*evolt, trans_dipoles(istate, jstate, 1:3), f
+                  istate, jstate, energ*evolt, tddft_env%trans_dipoles_mo(istate, jstate, 1:3), f
             END DO
          END DO
          WRITE (log_unit, "(1X,A)") &
             "-------------------------------------------------------------------------------"
       END IF
-
-      DEALLOCATE (trans_dipoles)
 
       DO istate = 1, tddft_env%nStates
          CALL cp_fm_set_all(matrix=this%work_noc_vir, alpha=0.0_dp)

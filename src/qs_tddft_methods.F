@@ -501,11 +501,25 @@ CONTAINS
       ALLOCATE (ostrength(tddft_env%nstates), source=0.0_dp)
 
       ! Compute transition dipole operators
-      ! TODO: Need to validate it
-      CALL tddfpt_dipole_operator(tddft_env%dipole_op_mos_occ, &
-                                  tddfpt_control, &
-                                  gs_mos, &
-                                  qs_env)
+      ! For MRSF (response_type 2 or 3), compute AO basis dipole integrals
+      ! For standard TDDFT (response_type 1), compute semi-transformed MO integrals
+      IF (tddft_env%response_type == 2 .OR. tddft_env%response_type == 3) THEN
+         ! MRSF mode: compute full AO basis dipole integrals
+         CALL tddfpt_dipole_operator(tddft_env%dipole_op_mos_occ, &
+                                     tddfpt_control, &
+                                     gs_mos, &
+                                     qs_env, &
+                                     dipole_ao_fm=tddft_env%dipole_ao_fm)
+
+         ! Allocate transition dipole moments array for persistent storage
+         ALLOCATE (tddft_env%trans_dipoles_mo(tddft_env%nstates, tddft_env%nstates, 3), source=0.0_dp)
+      ELSE
+         ! Standard TDDFT mode: compute semi-transformed dipole integrals
+         CALL tddfpt_dipole_operator(tddft_env%dipole_op_mos_occ, &
+                                     tddfpt_control, &
+                                     gs_mos, &
+                                     qs_env)
+      END IF
 
       ! Theory-specific analysis and printing
       CALL theory_env%print(qs_env, tddft_env, ostrength, gs_mos, tddfpt_control, log_unit)

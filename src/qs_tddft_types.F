@@ -150,6 +150,22 @@ MODULE qs_tddft_types
       !> Used for oscillator strength and transition moment calculations
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :)     :: dipole_op_mos_occ
 
+      !> Dipole integrals in full AO basis [3]
+      !> Index: x, y, z components
+      !> Contains μ_μν = <χ_μ|r|χ_ν> in AO representation
+      !> Used for MRSF transition density contraction: Tr[P_ij^AO * μ_AO]
+      !> Only allocated when response_type = 2 (MRSF-S) or 3 (MRSF-T)
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:)        :: dipole_ao_fm
+
+      !> Transition dipole moments between all state pairs [nstates, nstates, 3]
+      !> Index 1: initial state i
+      !> Index 2: final state j
+      !> Index 3: x, y, z components
+      !> Contains μ_ij = Tr[P_ij^AO * μ_AO] where P_ij is transition density
+      !> Diagonal elements (i=i) are set to zero (permanent dipoles, not transitions)
+      !> Only allocated when response_type = 2 (MRSF-S) or 3 (MRSF-T)
+      REAL(KIND=dp), ALLOCATABLE, DIMENSION(:, :, :)     :: trans_dipoles_mo
+
       !----------------------------------------------------------------------
       ! Davidson solver parameters and dimensions
       !----------------------------------------------------------------------
@@ -601,6 +617,19 @@ CONTAINS
             END DO
          END DO
          DEALLOCATE (tddft_env%dipole_op_mos_occ)
+      END IF
+
+      ! MRSF dipole integrals in AO basis
+      IF (ALLOCATED(tddft_env%dipole_ao_fm)) THEN
+         DO ivec = 1, SIZE(tddft_env%dipole_ao_fm)
+            CALL cp_fm_release(tddft_env%dipole_ao_fm(ivec))
+         END DO
+         DEALLOCATE (tddft_env%dipole_ao_fm)
+      END IF
+
+      ! MRSF transition dipole moments
+      IF (ALLOCATED(tddft_env%trans_dipoles_mo)) THEN
+         DEALLOCATE (tddft_env%trans_dipoles_mo)
       END IF
 
       CALL timestop(handle)
