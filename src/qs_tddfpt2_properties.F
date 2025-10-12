@@ -133,6 +133,9 @@ CONTAINS
 !> \param tddfpt_control     TDDFPT control parameters
 !> \param gs_mos             molecular orbitals optimised for the ground state
 !> \param qs_env             Quickstep environment
+!> \param dipole_ao_fm       (optional) 1-D array [x,y,z] for dipole integrals in full AO basis
+!>                           for MRSF-TDDFT. If present, compute and store AO integrals instead
+!>                           of semi-transformed MO integrals
 !> \par History
 !>    * 05.2016 created as 'tddfpt_print_summary' [Sergey Chulkov]
 !>    * 06.2018 dipole operator based on the Berry-phase formula [Sergey Chulkov]
@@ -149,13 +152,15 @@ CONTAINS
 !>       \f[\vec{r}\hat{H} - \hat{H}\vec{r} = [\vec{r},\hat{H}] = [\vec{r},-1/2 \nabla^2] = \nabla\f] .
 !>       \endparblock
 ! **************************************************************************************************
-   SUBROUTINE tddfpt_dipole_operator(dipole_op_mos_occ, tddfpt_control, gs_mos, qs_env)
+   SUBROUTINE tddfpt_dipole_operator(dipole_op_mos_occ, tddfpt_control, gs_mos, qs_env, dipole_ao_fm)
       TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:, :), &
          INTENT(inout)                                   :: dipole_op_mos_occ
       TYPE(tddfpt2_control_type), POINTER                :: tddfpt_control
       TYPE(tddfpt_ground_state_mos), DIMENSION(:), &
          INTENT(in)                                      :: gs_mos
       TYPE(qs_environment_type), POINTER                 :: qs_env
+      TYPE(cp_fm_type), ALLOCATABLE, DIMENSION(:), &
+         OPTIONAL, INTENT(inout)                         :: dipole_ao_fm
 
       CHARACTER(LEN=*), PARAMETER :: routineN = 'tddfpt_dipole_operator'
 
@@ -196,15 +201,27 @@ CONTAINS
          nmo_virt(ispin) = SIZE(gs_mos(ispin)%evals_virt)
       END DO
 
-      ! +++ allocate dipole operator matrices (must be deallocated elsewhere)
-      ALLOCATE (dipole_op_mos_occ(nderivs, nspins))
-      DO ispin = 1, nspins
-         CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, matrix_struct=fm_struct)
-
+      ! +++ allocate dipole operator matrices
+      IF (PRESENT(dipole_ao_fm)) THEN
+         ! MRSF mode: allocate AO basis dipole integrals [nao, nao]
+         ALLOCATE (dipole_ao_fm(nderivs))
+         NULLIFY (fm_struct)
+         CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nao, context=blacs_env)
          DO ideriv = 1, nderivs
-            CALL cp_fm_create(dipole_op_mos_occ(ideriv, ispin), fm_struct)
+            CALL cp_fm_create(dipole_ao_fm(ideriv), fm_struct)
          END DO
-      END DO
+         CALL cp_fm_struct_release(fm_struct)
+      ELSE
+         ! Standard TDDFT mode: allocate semi-transformed dipole operator matrices (must be deallocated elsewhere)
+         ALLOCATE (dipole_op_mos_occ(nderivs, nspins))
+         DO ispin = 1, nspins
+            CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, matrix_struct=fm_struct)
+
+            DO ideriv = 1, nderivs
+               CALL cp_fm_create(dipole_op_mos_occ(ideriv, ispin), fm_struct)
+            END DO
+         END DO
+      END IF
 
       ! +++ allocate work matrices
       ALLOCATE (S_mos_virt(nspins))
@@ -237,10 +254,21 @@ CONTAINS
 
       SELECT CASE (tddfpt_control%dipole_form)
       CASE (tddfpt_dipole_berry)
+
          IF (ndim_periodic /= 3) THEN
             CALL cp_warn(__LOCATION__, &
                          "Fully periodic Poisson solver (PERIODIC xyz) is needed "// &
                          "for oscillator strengths based on the Berry phase formula")
+         END IF
+         IF (PRESENT(dipole_ao_fm)) THEN
+            ALLOCATE (dipole_op_mos_occ(nderivs, nspins))
+            DO ispin = 1, nspins
+               CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, matrix_struct=fm_struct)
+
+               DO ideriv = 1, nderivs
+                  CALL cp_fm_create(dipole_op_mos_occ(ideriv, ispin), fm_struct)
+               END DO
+            END DO
          END IF
 
          NULLIFY (berry_cossin_xyz)
@@ -346,34 +374,75 @@ CONTAINS
          DEALLOCATE (gamma_00, gamma_inv_00)
          CALL dbcsr_deallocate_matrix_set(berry_cossin_xyz)
 
-         NULLIFY (fm_struct)
-         CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nao, context=blacs_env)
-         CALL cp_fm_create(wfm_ao_ao, fm_struct)
-         CALL cp_fm_struct_release(fm_struct)
+         ! MRSF mode: compute full AO Berry integrals
+         IF (PRESENT(dipole_ao_fm)) THEN
+            ! For MRSF, construct full AO Berry phase dipole integrals
+            ! dipole_ao_fm[nbf, nbf] = (S × C_virt × C_virt^T) × dBerry_mos_occ × C_occ^T / (2π)
 
-         ! trans_dipole = 2|e|/|G_mu| * Tr Imag(evects^T * (gamma_real - i gamma_imag) * C_0 * gamma_inv_00) +
-         !                2|e|/|G_mu| * Tr Imag(C_0^T * (gamma_real - i gamma_imag) * evects * gamma_inv_00) ,
-         !
-         ! Taking into account the symmetry of the matrices 'gamma_real' and 'gamma_imag' and the fact
-         ! that the response wave-function is a real-valued function, the above expression can be simplified as
-         ! trans_dipole = 4|e|/|G_mu| * Tr Imag(evects^T * (gamma_real - i gamma_imag) * C_0 * gamma_inv_00)
-         !
-         ! 1/|G_mu| = |lattice_vector_mu| / (2*pi) .
-         DO ispin = 1, nspins
-            ! wfm_ao_ao = S * mos_virt * mos_virt^T
+            NULLIFY (fm_struct)
+            CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nao, context=blacs_env)
+            CALL cp_fm_create(wfm_ao_ao, fm_struct)
+            CALL cp_fm_struct_release(fm_struct)
+
+            ! Assume single spin for MRSF (nspins=1)
+            ispin = 1
+            ! wfm_ao_ao = S * mos_virt * mos_virt^T / (2*pi)
             CALL parallel_gemm('N', 'T', nao, nao, nmo_virt(ispin), &
                                1.0_dp/twopi, S_mos_virt(ispin), gs_mos(ispin)%mos_virt, &
                                0.0_dp, wfm_ao_ao)
 
+            ! Temporary matrix for intermediate result [nao, nmo_occ]
+            NULLIFY (fm_struct)
+            CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, matrix_struct=fm_struct)
+            CALL cp_fm_create(rRc_mos_occ, fm_struct)
+
             DO ideriv = 1, nderivs
+               ! Step 1: rRc_mos_occ[nao, nmo_occ] = wfm_ao_ao[nao, nao] × dBerry_mos_occ[nao, nmo_occ]
                CALL parallel_gemm('N', 'N', nao, nmo_occ(ispin), nao, &
                                   1.0_dp, wfm_ao_ao, dBerry_mos_occ(ideriv, ispin), &
-                                  0.0_dp, dipole_op_mos_occ(ideriv, ispin))
-            END DO
-         END DO
+                                  0.0_dp, rRc_mos_occ)
 
-         CALL cp_fm_release(wfm_ao_ao)
-         CALL cp_fm_release(dBerry_mos_occ)
+               ! Step 2: dipole_ao_fm[nao, nao] = rRc_mos_occ[nao, nmo_occ] × C_occ^T[nmo_occ, nao]
+               CALL parallel_gemm('N', 'T', nao, nao, nmo_occ(ispin), &
+                                  1.0_dp, rRc_mos_occ, gs_mos(ispin)%mos_occ, &
+                                  0.0_dp, dipole_ao_fm(ideriv))
+            END DO
+
+            CALL cp_fm_release(rRc_mos_occ)
+            CALL cp_fm_release(wfm_ao_ao)
+            CALL cp_fm_release(dBerry_mos_occ)
+            CALL cp_fm_release(dipole_op_mos_occ)
+         ELSE
+            ! Standard TDDFT mode: compute semi-transformed dipole integrals
+            NULLIFY (fm_struct)
+            CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nao, context=blacs_env)
+            CALL cp_fm_create(wfm_ao_ao, fm_struct)
+            CALL cp_fm_struct_release(fm_struct)
+
+            ! trans_dipole = 2|e|/|G_mu| * Tr Imag(evects^T * (gamma_real - i gamma_imag) * C_0 * gamma_inv_00) +
+            !                2|e|/|G_mu| * Tr Imag(C_0^T * (gamma_real - i gamma_imag) * evects * gamma_inv_00) ,
+            !
+            ! Taking into account the symmetry of the matrices 'gamma_real' and 'gamma_imag' and the fact
+            ! that the response wave-function is a real-valued function, the above expression can be simplified as
+            ! trans_dipole = 4|e|/|G_mu| * Tr Imag(evects^T * (gamma_real - i gamma_imag) * C_0 * gamma_inv_00)
+            !
+            ! 1/|G_mu| = |lattice_vector_mu| / (2*pi) .
+            DO ispin = 1, nspins
+               ! wfm_ao_ao = S * mos_virt * mos_virt^T
+               CALL parallel_gemm('N', 'T', nao, nao, nmo_virt(ispin), &
+                                  1.0_dp/twopi, S_mos_virt(ispin), gs_mos(ispin)%mos_virt, &
+                                  0.0_dp, wfm_ao_ao)
+
+               DO ideriv = 1, nderivs
+                  CALL parallel_gemm('N', 'N', nao, nmo_occ(ispin), nao, &
+                                     1.0_dp, wfm_ao_ao, dBerry_mos_occ(ideriv, ispin), &
+                                     0.0_dp, dipole_op_mos_occ(ideriv, ispin))
+               END DO
+            END DO
+
+            CALL cp_fm_release(wfm_ao_ao)
+            CALL cp_fm_release(dBerry_mos_occ)
+         END IF
 
       CASE (tddfpt_dipole_length)
          IF (ndim_periodic /= 0) THEN
@@ -398,36 +467,45 @@ CONTAINS
          CALL rRc_xyz_ao(op=rRc_xyz, qs_env=qs_env, rc=reference_point, order=1, &
                          minimum_image=.FALSE., soft=.FALSE.)
 
-         NULLIFY (fm_struct)
-         CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nao, context=blacs_env)
-         CALL cp_fm_create(wfm_ao_ao, fm_struct)
-         CALL cp_fm_struct_release(fm_struct)
-
-         DO ispin = 1, nspins
-            CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, matrix_struct=fm_struct)
-            CALL cp_fm_create(rRc_mos_occ, fm_struct)
-
-            ! wfm_ao_ao = S * mos_virt * mos_virt^T
-            CALL parallel_gemm('N', 'T', nao, nao, nmo_virt(ispin), &
-                               1.0_dp, S_mos_virt(ispin), gs_mos(ispin)%mos_virt, &
-                               0.0_dp, wfm_ao_ao)
-
+         ! MRSF mode: copy AO integrals directly to dipole_ao_fm
+         IF (PRESENT(dipole_ao_fm)) THEN
             DO ideriv = 1, nderivs
-               CALL cp_dbcsr_sm_fm_multiply(rRc_xyz(ideriv)%matrix, &
-                                            gs_mos(ispin)%mos_occ, &
-                                            rRc_mos_occ, &
-                                            ncol=nmo_occ(ispin), alpha=1.0_dp, beta=0.0_dp)
+               CALL copy_dbcsr_to_fm(rRc_xyz(ideriv)%matrix, dipole_ao_fm(ideriv))
+            END DO
+            CALL dbcsr_deallocate_matrix_set(rRc_xyz)
+         ELSE
+            ! Standard TDDFT mode: proceed with semi-transformation
+            NULLIFY (fm_struct)
+            CALL cp_fm_struct_create(fm_struct, nrow_global=nao, ncol_global=nao, context=blacs_env)
+            CALL cp_fm_create(wfm_ao_ao, fm_struct)
+            CALL cp_fm_struct_release(fm_struct)
 
-               CALL parallel_gemm('N', 'N', nao, nmo_occ(ispin), nao, &
-                                  1.0_dp, wfm_ao_ao, rRc_mos_occ, &
-                                  0.0_dp, dipole_op_mos_occ(ideriv, ispin))
+            DO ispin = 1, nspins
+               CALL cp_fm_get_info(gs_mos(ispin)%mos_occ, matrix_struct=fm_struct)
+               CALL cp_fm_create(rRc_mos_occ, fm_struct)
+
+               ! wfm_ao_ao = S * mos_virt * mos_virt^T
+               CALL parallel_gemm('N', 'T', nao, nao, nmo_virt(ispin), &
+                                  1.0_dp, S_mos_virt(ispin), gs_mos(ispin)%mos_virt, &
+                                  0.0_dp, wfm_ao_ao)
+
+               DO ideriv = 1, nderivs
+                  CALL cp_dbcsr_sm_fm_multiply(rRc_xyz(ideriv)%matrix, &
+                                               gs_mos(ispin)%mos_occ, &
+                                               rRc_mos_occ, &
+                                               ncol=nmo_occ(ispin), alpha=1.0_dp, beta=0.0_dp)
+
+                  CALL parallel_gemm('N', 'N', nao, nmo_occ(ispin), nao, &
+                                     1.0_dp, wfm_ao_ao, rRc_mos_occ, &
+                                     0.0_dp, dipole_op_mos_occ(ideriv, ispin))
+               END DO
+
+               CALL cp_fm_release(rRc_mos_occ)
             END DO
 
-            CALL cp_fm_release(rRc_mos_occ)
-         END DO
-
-         CALL cp_fm_release(wfm_ao_ao)
-         CALL dbcsr_deallocate_matrix_set(rRc_xyz)
+            CALL cp_fm_release(wfm_ao_ao)
+            CALL dbcsr_deallocate_matrix_set(rRc_xyz)
+         END IF
 
       CASE (tddfpt_dipole_velocity)
          ! generate overlap derivatives
@@ -437,7 +515,16 @@ CONTAINS
                                    basis_type_a="ORB", basis_type_b="ORB", &
                                    sab_nl=sab_orb)
 
-         DO ispin = 1, nspins
+         ! MRSF mode: copy AO integrals directly to dipole_ao_fm
+         IF (PRESENT(dipole_ao_fm)) THEN
+            DO ideriv = 1, nderivs
+               ! scrm(1) is overlap matrix S, scrm(2:4) are dS/dx, dS/dy, dS/dz
+               CALL copy_dbcsr_to_fm(scrm(ideriv + 1)%matrix, dipole_ao_fm(ideriv))
+            END DO
+            CALL dbcsr_deallocate_matrix_set(scrm)
+         ELSE
+            ! Standard TDDFT mode: proceed with energy-normalized transformation
+            DO ispin = 1, nspins
             NULLIFY (fm_struct)
             CALL cp_fm_struct_create(fm_struct, nrow_global=nmo_virt(ispin), &
                                      ncol_global=nmo_occ(ispin), context=blacs_env)
@@ -497,6 +584,7 @@ CONTAINS
             CALL cp_fm_release(ediff_inv)
          END DO
          CALL dbcsr_deallocate_matrix_set(scrm)
+         END IF
 
       CASE DEFAULT
          CPABORT("Unimplemented form of the dipole operator")

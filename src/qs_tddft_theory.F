@@ -351,7 +351,7 @@ MODULE qs_tddft_theory
 !>
 !> \par Output Requirements
 !>      - Must store result in tddft_env%sigma_vecs(ivec)[nocca,nvirtb]
-!>      - Result must be properly normalized and orthogonal to ground state
+!>      - Result must be normalized and orthogonal to ground state
 !>      - Should preserve all relevant quantum numbers (spin, symmetry)
 !>
 !> \author  Konstantin Komarov
@@ -427,7 +427,7 @@ MODULE qs_tddft_theory
 !>      - Theory-specific parameter arrays
 !>
 !> \par Memory Management
-!>      Proper cleanup is essential for:
+!>      Complete cleanup is essential for:
 !>      - Preventing memory leaks in long calculations
 !>      - Allowing multiple theory runs in sequence
 !>      - Clean program termination

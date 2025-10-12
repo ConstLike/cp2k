@@ -122,7 +122,7 @@ MODULE qs_tddft_theory_mrsf
 !> \brief MRSF-TDDFT derived type implementing the abstract theory interface
 !> \details Contains all working arrays and procedures specific to mixed reference spin-flip
 !>          TDDFT calculations. The implementation handles complex multi-reference transformations
-!>          with proper spin-pair coupling parameters.
+!>          with spin-pair coupling parameters.
 ! **************************************************************************************************
    TYPE, EXTENDS(tddft_theory_type) :: tddft_mrsf_type
 
@@ -1744,7 +1744,6 @@ CONTAINS
       sqrt2 =SQRT(2.0_dp)
 
       ! Compute (i,a) indices for special positions (MRSF active orbitals)
-      ! These correspond to the ijlr1, ijlr2, ijg, ijd from OpenQP
       i_lr1 = nocca - 1
       a_lr1 = nocca - noccb - 1
 
@@ -1797,11 +1796,9 @@ CONTAINS
       !
       ! 1. UNRELAXED vs RELAXED Transition Density:
       !    - UNRELAXED: Calculated directly from TDA response amplitudes (X vector only)
-      !      This represents the "bare" excitation without orbital relaxation effects.
-      !      Computationally less expensive and standard for transition dipole moments.
+      !      without orbital relaxation effects.
       !    - RELAXED: Includes orbital relaxation contributions from solving Z-vector
-      !      equations. More accurate for excited state properties like dipole moments,
-      !      but requires additional SCF-like procedure (not implemented here).
+      !      equations. Requires additional SCF-like procedure (not implemented here).
       !
       ! 2. MRSF-TDA Transition Density Formula:
       !    For MRSF theory with pure spin states, the transition density in MO basis is:
@@ -1836,12 +1833,12 @@ CONTAINS
       DO ist = 1, tddft_env%nStates
          DO jst = ist, tddft_env%nStates
 
-            ! Copy amplitudes for state ist to work_noc_vir (xv12i in OpenQP)
+            ! Copy amplitudes for state ist to work_noc_vir
             CALL cp_fm_set_all(matrix=this%work_noc_vir, alpha=0.0_dp)
             CALL cp_fm_to_fm(source=tddft_env%evects_mo(ist), &
                              destination=this%work_noc_vir)
 
-            ! Copy amplitudes for state jst to work2_noc_vir (xv12j in OpenQP)
+            ! Copy amplitudes for state jst to work2_noc_vir
             CALL cp_fm_set_all(matrix=this%work2_noc_vir, alpha=0.0_dp)
             CALL cp_fm_to_fm(source=tddft_env%evects_mo(jst), &
                              destination=this%work2_noc_vir)
@@ -1861,7 +1858,7 @@ CONTAINS
             END IF
 
             ! Apply multiplicity-specific MRSF corrections to amplitudes
-            ! These rearrange selected active orbital amplitudes for correct MRSF spin-mapping
+            ! These rearrange selected active orbital amplitudes for MRSF spin-mapping
             SELECT CASE (tddft_env%response_type)
             CASE (2) ! MRSF-S (Singlet)
                ! Correction for (i_lr1, a_lr1): scale by sqrt12
@@ -1999,9 +1996,7 @@ CONTAINS
                WRITE (log_unit, '(A,ES14.6,/)') "  trden_AO(1,1):  ", sample_val
             END IF
 
-            ! Symmetrize transition density: P_sym = P + P^T (matches OpenQP)
-            ! This matches OpenQP's symmetrize_matrix which does A = A + A^T
-            ! Combined with -0.5 factor in trace: mu = -0.5*Tr[(P+P^T)*d] = -Tr[P*d]
+            ! Symmetrize transition density: P_sym = P + P^T
             ! work2 = P_AO
             CALL cp_fm_scale_and_add( &
                alpha=0.0_dp, matrix_a=this%work2_nao_nao, &
@@ -2027,9 +2022,8 @@ CONTAINS
             END IF
 
             ! Compute transition dipole moments using AO basis integrals
-            ! For MRSF: mu_ij = -0.5 * Tr[P_ij^AO * mu_AO] where P_ij^AO is the transition density
-            ! and mu_AO are the dipole integrals in AO basis
-            ! Factor -0.5 matches OpenQP's implementation
+            ! mu_ij = -0.5 * Tr[P_ij^AO * mu_AO]
+            ! For VELOCITY form: mu_velocity = Tr[P_AO * dS/dx] / (E_j - E_i)
             DO ideriv = 1, 3
                ! Compute mu_ij^xyz = -0.5 * Tr[trden(ist,jst) * dipole_ao_fm(ideriv)]
                CALL cp_fm_trace(this%work1_nao_nao, &
@@ -2037,6 +2031,22 @@ CONTAINS
                                 tddft_env%trans_dipoles_mo(ist, jst, ideriv))
                tddft_env%trans_dipoles_mo(ist, jst, ideriv) = &
                   -0.5_dp*tddft_env%trans_dipoles_mo(ist, jst, ideriv)
+
+               ! Apply energy normalization for VELOCITY form
+               IF (tddfpt_control%dipole_form == tddfpt_dipole_velocity) THEN
+                  IF (ist /= jst) THEN
+                     ! Energy difference for excited state transitions
+                     energ = tddft_env%evals(jst) - tddft_env%evals(ist)
+                     IF (ABS(energ) > 1.0E-10_dp) THEN
+                        tddft_env%trans_dipoles_mo(ist, jst, ideriv) = &
+                           tddft_env%trans_dipoles_mo(ist, jst, ideriv)/energ
+                     END IF
+                  ELSE
+                     ! Diagonal elements (ist == jst) correspond to permanent dipoles
+                     ! For VELOCITY form, these should be zero (no excitation energy)
+                     tddft_env%trans_dipoles_mo(ist, jst, ideriv) = 0.0_dp
+                  END IF
+               END IF
 
                ! *** DEBUG: Print trace values ***
                IF (log_unit > 0 .AND. ist == 1 .AND. jst == 2) THEN
@@ -2073,11 +2083,11 @@ CONTAINS
          WRITE (log_unit, '(/,1X,A2,A,1X,A)') lsd_str, "-MRSF-TDDFT states of multiplicity", TRIM(mult_str)
          SELECT CASE (tddfpt_control%dipole_form)
          CASE (tddfpt_dipole_berry)
-            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using Berry operator formulation"
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using BERRY operator formulation"
          CASE (tddfpt_dipole_length)
-            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using length formulation"
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using LENGTH formulation"
          CASE (tddfpt_dipole_velocity)
-            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using velocity formulation"
+            WRITE (log_unit, '(1X,A,/)') "Transition dipoles calculated using VELOCITY formulation"
          CASE DEFAULT
             CPABORT("Unimplemented form of the dipole operator")
          END SELECT

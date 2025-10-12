@@ -26,8 +26,8 @@
 !>
 !> \par Memory Management
 !>      The module provides initialization and finalization routines that handle
-!>      complete lifecycle management of all data structures, ensuring proper
-!>      allocation/deallocation patterns and preventing memory leaks.
+!>      complete lifecycle management of all data structures with consistent
+!>      allocation/deallocation patterns.
 !>
 !> \par Davidson Algorithm Support
 !>      Data structures are specifically designed to support the Davidson method:
@@ -320,7 +320,7 @@ CONTAINS
 !>          - Extraction of system parameters from ground-state calculation
 !>          - Analysis of HFX functional parameters and range separation
 !>          - Determination of orbital space dimensions and subspace limits
-!>          - Allocation of all Davidson working arrays with proper sizing
+!>          - Allocation of all Davidson working arrays
 !>          - Setup of parallel matrix structures using BLACS distribution
 !>
 !> \param        qs_env     QuickStep environment containing system information
@@ -542,9 +542,9 @@ CONTAINS
 !>
 !> \par Cleanup Strategy
 !>      The routine systematically deallocates all allocated arrays in reverse
-!>      order of allocation to ensure proper cleanup. Special attention is paid to:
+!>      order of allocation:
 !>      - Conditional deallocation based on allocation status
-!>      - Proper handling of CP2K matrix types
+!>      - Release of CP2K matrix types
 !>      - Nested loop cleanup for multi-dimensional arrays
 !>      - Prevention of double deallocation errors
 !>

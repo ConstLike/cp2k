@@ -298,7 +298,7 @@ CONTAINS
 !>      Restarts are triggered when:
 !>      - Subspace dimension exceeds maximum (mxvec)
 !>      - Convergence stagnates (stall_count > 3)
-!>      The restart procedure retains the best Ritz vectors as new trial vectors.
+!>      The restart procedure retains the converged Ritz vectors as new trial vectors.
 !>
 !> \author  Konstantin Komarov
 !> \date    Aug 2025
@@ -602,8 +602,8 @@ CONTAINS
 !>                          for eigenvalues and eigenVectors
 !>
 !> \par Algorithm Details
-!>      Uses CP2K's optimal eigensolver selection based on matrix size and parallel
-!>      distribution. The eigenVectors are normalized to ensure proper construction
+!>      Uses CP2K's eigensolver selection based on matrix size and parallel
+!>      distribution. The eigenVectors are normalized for construction
 !>      of orthonormal Ritz vectors.
 !>
 !> \author  Konstantin Komarov
@@ -653,7 +653,7 @@ CONTAINS
 !>
 !> \details Constructs Ritz vectors as linear combinations of trial vectors weighted by
 !>          eigenVector coefficients: Z_k = sum_j c_jk X_j. The Ritz vectors represent
-!>          the best current approximations to true eigenVectors within the subspace.
+!>          the current approximations to true eigenVectors within the subspace.
 !>
 !> \param[inout] tddft_env  TDDFT environment containing trial vectors and eigenVector
 !>                          coefficients from subspace diagonalization
@@ -806,8 +806,8 @@ CONTAINS
 !>          1. Residual criterion: max_k ||r_k|| < threshold
 !>          2. Eigenvalue criterion: max_k |Omega_k - Omega_k^prev| < threshold/10
 !>
-!>          The dual approach ensures robust convergence by catching cases where
-!>          residual norms may be unstable but eigenvalues have converged.
+!>          The dual approach allows convergence when either
+!>          residual norms are small or eigenvalues have stabilized.
 !>
 !> \param[inout] tddft_env      TDDFT environment containing convergence data
 !> \param[in]    tddfpt_control Control parameters including convergence threshold
@@ -839,7 +839,7 @@ CONTAINS
 !>
 !> \details Copies converged Ritz vectors to trial vector storage and updates eigenvalues.
 !>          This routine is called both upon convergence and before restarts to preserve
-!>          the best current approximations.
+!>          the current approximations.
 !>
 !> \param[inout] tddft_env  TDDFT environment containing Ritz solution and working arrays
 !>
@@ -881,7 +881,7 @@ CONTAINS
 !> \par Stall Detection Logic
 !>      Stagnation is detected when both residual and eigenvalue relative changes
 !>      fall below 5% for multiple consecutive iterations. After 4 consecutive
-!>      stalled iterations, a restart is recommended.
+!>      stalled iterations, a restart is triggered.
 !>
 !> \author  Konstantin Komarov
 !> \date    Aug 2025
@@ -928,7 +928,7 @@ CONTAINS
 !>          and manage memory usage.
 !>
 !> \param[in] tddft_env  TDDFT environment containing stall and dimension information
-!> \return    res        .TRUE. if restart is recommended
+!> \return    res        .TRUE. if restart is needed
 !>
 !> \par Restart Triggers
 !>      - Persistent stagnation (stall_count > 3)
@@ -1088,7 +1088,7 @@ CONTAINS
 !> \brief Restarts Davidson iteration by reducing subspace to Ritz vectors
 !>
 !> \details Implements the Davidson restart procedure by replacing the current trial
-!>          vectors with the best Ritz vector approximations. This maintains convergence
+!>          vectors with the converged Ritz vector approximations. This maintains convergence
 !>          progress while reducing memory usage and escaping potential stagnation.
 !>
 !> \param[inout] tddft_env  TDDFT environment containing current iteration state

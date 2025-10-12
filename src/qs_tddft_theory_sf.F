@@ -853,7 +853,7 @@ CONTAINS
 !> \param[in]    gs_mos          ground state molecular orbitals
 !> \param[in]    tddfpt_control  TDDFPT control parameters
 !> \param[in]    log_unit        output unit
-!> \details Computes transition properties and performs comprehensive spin contamination analysis
+!> \details Computes transition properties and performs spin contamination analysis
 ! **************************************************************************************************
    SUBROUTINE sf_print(this, qs_env, tddft_env, ostrength, gs_mos, tddfpt_control, log_unit)
       CLASS(tddft_sf_type), INTENT(INOUT)                :: this

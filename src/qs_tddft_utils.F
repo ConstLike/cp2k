@@ -86,7 +86,7 @@ CONTAINS
 !> \brief Allocates and initializes a single CP_FM matrix
 !>
 !> \details Creates a single CP2K CP_FM matrix with specified dimensions and parallel
-!>          distribution. The matrix is automatically initialized to zero and properly
+!>          distribution. The matrix is automatically initialized to zero and
 !>          distributed across the available processors using the provided BLACS context.
 !>
 !> \param[out] matrix      Pointer to matrix to be allocated (must be NULL on entry)
@@ -135,7 +135,7 @@ CONTAINS
 !>
 !> \details Creates an array of CP2K CP_FM matrices with identical dimensions and
 !>          parallel distribution. All matrices are automatically initialized to zero
-!>          and share the same distribution pattern for optimal memory usage.
+!>          and share the same distribution pattern.
 !>
 !> \param[out] matrix      Allocatable array of matrices to be created
 !> \param[in]  nmat        Number of matrices in the array
@@ -184,7 +184,7 @@ CONTAINS
 !> \brief Deallocates a single CP_FM matrix
 !>
 !> \details Safely deallocates a CP2K CP_FM matrix and sets the pointer to NULL.
-!>          The routine includes proper error checking to prevent double deallocation
+!>          The routine includes error checking to prevent double deallocation
 !>          and handles NULL pointers gracefully.
 !>
 !> \param[inout] matrix  Pointer to matrix to be deallocated
@@ -215,7 +215,7 @@ CONTAINS
 ! **************************************************************************************************
 !> \brief Deallocates an array of CP_FM matrices
 !>
-!> \details Safely deallocates all matrices in an allocatable array and properly
+!> \details Safely deallocates all matrices in an allocatable array and
 !>          cleans up the array structure. Each matrix is individually released
 !>          before the array itself is deallocated.
 !>
@@ -293,7 +293,7 @@ CONTAINS
 !>      The routine prints a formatted 5x5 submatrix showing:
 !>      - Clear identification of matrix name and iteration
 !>      - Formatted numerical output with consistent precision
-!>      - Proper spacing for readability
+!>      - Spacing for readability
 !>      - Automatic output flushing for immediate visibility
 !>
 !> \par Usage Guidelines
@@ -303,7 +303,7 @@ CONTAINS
 !>      - Extracts elements (1:5, 1:5) from the global matrix
 !>      - Handles parallel distribution transparently
 !>      - Outputs only on master process to prevent duplicated output
-!>      - Includes proper error handling for small matrices
+!>      - Includes error handling for small matrices
 !>
 !> \author  Konstantin Komarov
 !> \date    Aug 2025
